@@ -6,6 +6,7 @@ must name the version it read, and it stores version + 1.
 import json
 import sqlite3
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,6 +24,17 @@ CREATE TABLE IF NOT EXISTS audit (
   detail TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS audit_workitem ON audit (workitem_id, seq);
+CREATE TABLE IF NOT EXISTS leases (
+  workitem_id TEXT PRIMARY KEY,
+  holder TEXT NOT NULL,
+  expires REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS workorders (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  id TEXT UNIQUE NOT NULL,
+  workitem_id TEXT NOT NULL,
+  doc TEXT NOT NULL
+);
 """
 
 
@@ -85,3 +97,31 @@ class Store:
                 "SELECT at, action, detail FROM audit WHERE workitem_id = ? ORDER BY seq",
                 (workitem_id,)).fetchall()
         return [{"at": at, "action": action, "detail": json.loads(detail)} for at, action, detail in rows]
+
+    def acquire(self, workitem_id, holder, ttl=300):
+        """Take the per-WorkItem lease. False if another holder has an unexpired one."""
+        with self._lock:
+            self._db.execute("DELETE FROM leases WHERE workitem_id = ? AND expires < ?",
+                             (workitem_id, time.time()))
+            try:
+                self._db.execute("INSERT INTO leases VALUES (?, ?, ?)",
+                                 (workitem_id, holder, time.time() + ttl))
+            except sqlite3.IntegrityError:
+                return False
+        return True
+
+    def release(self, workitem_id, holder):
+        with self._lock:
+            self._db.execute("DELETE FROM leases WHERE workitem_id = ? AND holder = ?", (workitem_id, holder))
+
+    def save_workorder(self, doc):
+        """Idempotent: the id is the idempotency key, so a replay keeps the first document."""
+        with self._lock:
+            self._db.execute("INSERT OR IGNORE INTO workorders (id, workitem_id, doc) VALUES (?, ?, ?)",
+                             (doc["id"], doc["workItemId"], json.dumps(doc, sort_keys=True)))
+
+    def workorders(self, workitem_id):
+        with self._lock:
+            rows = self._db.execute("SELECT doc FROM workorders WHERE workitem_id = ? ORDER BY seq",
+                                    (workitem_id,)).fetchall()
+        return [json.loads(row[0]) for row in rows]

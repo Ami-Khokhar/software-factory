@@ -15,6 +15,10 @@ class Config:
     port: int = 43125
     tls_cert: str = ""
     tls_key: str = ""
+    worker: str = "codex"
+    max_passes: int = 4
+    wall_ms: int = 20 * 60 * 1000
+    protected_paths: tuple = (".github/", "AGENTS.md")
 
     @classmethod
     def from_env(cls, env=None):
@@ -36,4 +40,7 @@ class Config:
             port=int(env.get("FACTORY_PORT") or defaults.port),
             tls_cert=env.get("FACTORY_TLS_CERT", ""),
             tls_key=env.get("FACTORY_TLS_KEY", ""),
+            worker=env.get("FACTORY_WORKER") or defaults.worker,
+            max_passes=int(env.get("FACTORY_MAX_PASSES") or defaults.max_passes),
+            wall_ms=int(env.get("FACTORY_WALL_MS") or defaults.wall_ms),
         )

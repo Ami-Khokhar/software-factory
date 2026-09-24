@@ -29,6 +29,7 @@ class FakeGitHub:
 
     def __init__(self):
         self.issues, self.pulls, self.issue_comments, self.runs = {}, [], {}, {}
+        self.branches, self.files = {}, {}  # (repo, branch) -> sha; (repo, sha) -> changed files
 
     def add_issue(self, repo, number, labels=("factory:ready",), body=ISSUE_BODY, state="open"):
         self.issues[(repo, number)] = {"number": number, "title": f"Goal {number}", "body": body,
@@ -65,3 +66,56 @@ class FakeGitHub:
 
     def check_runs(self, repo, sha, name="pr-gatekeeper"):
         return list(self.runs.get((repo, sha), []))
+
+    def repository(self, repo):
+        return {"full_name": repo, "default_branch": "main"}
+
+    def branch_head(self, repo, branch):
+        return self.branches.get((repo, branch), "base0" if branch == "main" else None)
+
+    def push(self, repo, branch, sha, files=(("src/app.py", 10, 2),)):
+        self.branches[(repo, branch)] = sha
+        self.files[(repo, sha)] = [{"filename": f, "status": "modified", "additions": a, "deletions": d}
+                                   for f, a, d in files]
+
+    def changed_files(self, repo, base, head):
+        return self.files[(repo, head)]
+
+    def create_pull(self, repo, head, base, title, body):
+        number = 100 + len(self.pulls)
+        self.add_pr(repo, number, head, self.branches[(repo, head)])
+        self.pulls[-1].update(title=title, body=body)
+        return self.pulls[-1]
+
+
+class FakeRelay:
+    """agent-relay's task API in memory, including requestId idempotency."""
+
+    def __init__(self):
+        self.tasks, self.by_request, self.down = {}, {}, False
+
+    def submit(self, agent_id, text, request_id, timeout_ms):
+        from factory_mcp.relay import RelayError
+        if self.down:
+            raise RelayError("relay unreachable: connection refused")
+        if request_id not in self.by_request:
+            task_id = f"task-{len(self.tasks) + 1}"
+            self.tasks[task_id] = {"id": task_id, "agentId": agent_id, "input": text, "status": "running",
+                                   "sessionId": f"s-{task_id}", "timeoutMs": timeout_ms}
+            self.by_request[request_id] = task_id
+        return self.tasks[self.by_request[request_id]]
+
+    def get(self, task_id):
+        return self.tasks.get(task_id)
+
+    def finish(self, task_id, status="completed", output="", error=None):
+        self.tasks[task_id].update(status=status, output=output, error=error)
+
+
+def result_line(order_id, sha, branch="factory/7", status="completed", exit_code=0):
+    import json
+    return "working...\n" + json.dumps({
+        "schemaVersion": "factory.result/v1", "workOrderId": order_id, "status": status,
+        "artifact": {"branch": branch, "commitSha": sha},
+        "evidence": [{"kind": "test", "command": "python3 -m unittest", "exit": exit_code, "tail": "OK"}],
+        "startedAt": "2026-09-24T00:00:00Z", "finishedAt": "2026-09-24T00:10:00Z"})

@@ -57,3 +57,23 @@ class GitHub:
 
     def check_runs(self, repo, sha, name="pr-gatekeeper"):
         return self._get_all(f"/repos/{repo}/commits/{sha}/check-runs", key="check_runs", check_name=name)
+
+    def repository(self, repo):
+        return self._request("GET", f"{self.api}/repos/{repo}")[0]
+
+    def branch_head(self, repo, branch):
+        """The commit a branch points at, or None if it does not exist."""
+        try:
+            return self._request("GET", f"{self.api}/repos/{repo}/branches/{branch}")[0]["commit"]["sha"]
+        except GitHubError as err:
+            if err.status == 404:
+                return None
+            raise
+
+    def changed_files(self, repo, base, head):
+        """[{filename, additions, deletions, status}] between base and head (three-dot)."""
+        return self._request("GET", f"{self.api}/repos/{repo}/compare/{base}...{head}")[0]["files"]
+
+    def create_pull(self, repo, head, base, title, body):
+        return self._request("POST", f"{self.api}/repos/{repo}/pulls",
+                             {"head": head, "base": base, "title": title, "body": body})[0]
