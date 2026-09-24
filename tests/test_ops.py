@@ -85,6 +85,17 @@ class ResolveHumanTest(unittest.TestCase):
 
 
 class AutonomyTest(unittest.TestCase):
+    def test_a_merge_without_the_gate_is_not_autonomous(self):
+        store = Store(":memory:")
+        for workitem_id in ("o/r#1", "o/r#2"):
+            store.log("result", {"commitSha": "c1"}, workitem_id)
+            store.log("reconcile", {"headSha": "c1", "from": "pr_open", "to": "merged"}, workitem_id)
+        workitems = [{"id": "o/r#1", "state": "merged", "terminalReason": None},
+                     {"id": "o/r#2", "state": "merged",
+                      "terminalReason": "merged without a pr-gatekeeper MERGE verdict on c1"}]
+        self.assertEqual(autonomy(workitems, store.history),
+                         {"ended": 2, "autonomous": 1, "unknown": 0, "rate": 0.5})
+
     def test_rate_from_fixture_history(self):
         fixture = json.loads((Path(__file__).parent / "fixtures" / "autonomy-history.json").read_text())
         store = Store(":memory:")

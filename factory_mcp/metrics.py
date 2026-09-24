@@ -1,6 +1,8 @@
 """Ops numbers computed from the audit history: escalation, cost ledger, autonomy rate (HANDOFF §7)."""
 import json
 
+from .workitem import UNGATED
+
 HUMAN_STATES = ("human_waiting", "blocked")
 REACHED_END = frozenset({"merged", "closed", "cancelled", "exhausted", "failed"})
 
@@ -27,7 +29,8 @@ def cost(history, passes):
 def autonomy(workitems, history_of):
     """Merged with no human state and no human commit ÷ all WorkItems that reached an end state.
 
-    A human commit is a PR head no worker Result produced. Merges by pr-gatekeeper are not touches.
+    A human commit is a PR head no worker Result produced. Merges by pr-gatekeeper are not touches;
+    a merge without its MERGE verdict is.
     A WorkItem rebuilt from GitHub lost the history that decides this, so it counts as unknown.
     """
     ended, unknown, autonomous = [], 0, 0
@@ -43,7 +46,8 @@ def autonomy(workitems, history_of):
         heads = {h["detail"]["headSha"] for h in history
                  if h["action"] == "reconcile" and h["detail"].get("headSha")}
         touched = any(h["detail"].get("to") in HUMAN_STATES for h in history)
-        if wi["state"] in ("merged", "closed") and not touched and heads <= worker_shas:
+        ungated = (wi.get("terminalReason") or "").startswith(UNGATED)
+        if wi["state"] in ("merged", "closed") and not touched and not ungated and heads <= worker_shas:
             autonomous += 1
     return {"ended": len(ended), "autonomous": autonomous, "unknown": unknown,
             "rate": round(autonomous / len(ended), 3) if ended else None}

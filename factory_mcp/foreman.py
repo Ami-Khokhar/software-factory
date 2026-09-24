@@ -213,9 +213,10 @@ class Foreman:
             return [f"{wi['branch']} is at {head}, not the reported {artifact['commitSha']}"], []
         files = self.github.changed_files(wi["repo"], self._default_branch(wi["repo"]), head)
         limits = order["constraints"]
-        errors = [f"changes protected path {f['filename']}" for f in files
-                  if any(f["filename"] == p or (p.endswith("/") and f["filename"].startswith(p))
-                         for p in limits["protectedPaths"])]
+        errors = [f"changes protected path {name}" for f in files  # a rename moves the old path too
+                  for name in (f["filename"], f.get("previous_filename")) if name
+                  and any(name == p or (p.endswith("/") and name.startswith(p))
+                          for p in limits["protectedPaths"])]
         lines = sum(f["additions"] + f["deletions"] for f in files)
         if lines > limits["maxChangedLines"] or len(files) > limits["maxChangedFiles"]:
             errors.append(f"{lines} lines in {len(files)} files exceeds the WorkOrder constraints")
