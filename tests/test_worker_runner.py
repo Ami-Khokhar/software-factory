@@ -86,6 +86,7 @@ class RunnerTest(unittest.TestCase):
 
         patches = [mock.patch.object(runner, "PI_AUTH", str(auth)),
                    mock.patch.object(runner.Sandbox, "run", local_run),
+                   mock.patch.object(runner, "ensure_docker", lambda: None),
                    mock.patch.dict(os.environ, {"FACTORY_TEST_MARKER": str(self.marker)})]
         for p in patches:
             p.start()
@@ -174,6 +175,32 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(result["status"], "completed", result.get("error"))
         self.assertIn("+fixed", result["patch"]["diff"])
         self.assertFalse(self.marker.exists(), "host git ran in a tree the harness wrote")
+
+
+class EnsureDockerTest(unittest.TestCase):
+    """After a reboot Docker is down; the pass starts OrbStack instead of failing for a person."""
+
+    def stubs(self, orb_starts):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        bin_, up = Path(tmp.name), Path(tmp.name) / "up"
+        (bin_ / "docker").write_text(f'#!/bin/sh\n[ -e "{up}" ]\n')
+        (bin_ / "orb").write_text(f'#!/bin/sh\n{"touch " + repr(str(up)) if orb_starts else "true"}\n')
+        (bin_ / "open").write_text("#!/bin/sh\ntrue\n")
+        for name in ("docker", "orb", "open"):
+            os.chmod(bin_ / name, 0o755)
+        return mock.patch.dict(os.environ, {"PATH": f"{bin_}:{os.environ['PATH']}"}), up
+
+    def test_a_stopped_docker_is_started(self):
+        env, up = self.stubs(orb_starts=True)
+        with env:
+            runner.ensure_docker(wait=5, poll=0.05)
+        self.assertTrue(up.exists())
+
+    def test_docker_that_does_not_start_fails_the_pass(self):
+        env, _ = self.stubs(orb_starts=False)
+        with env, self.assertRaisesRegex(runner.WorkerError, "docker is not available"):
+            runner.ensure_docker(wait=0.3, poll=0.05)
 
 
 if __name__ == "__main__":

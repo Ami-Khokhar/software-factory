@@ -10,6 +10,8 @@
   factory stop                            kill switch: cancel running workers, stop factory-mcp
   factory start                           start Docker, the relay and factory-mcp
   factory logs                            follow the factory-mcp log
+  factory update                          deploy this checkout's branch if its tests pass
+  factory connect-openbot                 the one-time OpenBot step: hosts name and token (asks for sudo)
   factory call <tool> [<json arguments>]  one raw factory-mcp tool call
   factory serve                           run factory-mcp in the foreground (the launchd entry)
 
@@ -20,6 +22,7 @@ import base64
 import http.client
 import json
 import os
+import re
 import socket
 import ssl
 import subprocess
@@ -237,6 +240,65 @@ def cmd_start(_):
     print("factory-mcp:", "up" if listening() else "DOWN (see: factory logs)")
 
 
+def restart_factory_mcp():
+    run("launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{LABEL}")
+
+
+def branch_merged(branch):
+    """True if the branch's PR was merged. A squash merge leaves no ancestry for git to see."""
+    done = subprocess.run(["gh", "pr", "list", "--head", branch, "--state", "merged", "--json", "number",
+                           "-q", "length"], cwd=HERE, capture_output=True, text=True)
+    return done.returncode == 0 and done.stdout.strip() not in ("", "0")
+
+
+def cmd_update(_):
+    """Deploy this checkout's branch: follow a merged branch to the default branch, fast-forward,
+    and restart factory-mcp only if the tests pass there. A failing test keeps the old commit."""
+    def git(*args):
+        return subprocess.run(["git", "-C", str(HERE), *args], capture_output=True, text=True)
+    if git("status", "--porcelain", "--untracked-files=no").stdout.strip():
+        die(f"update: {HERE} has local changes; update only a deployment checkout")
+    old, branch = git("rev-parse", "HEAD").stdout.strip(), git("branch", "--show-current").stdout.strip()
+    if git("fetch", "-q", "--prune", "origin").returncode != 0:
+        die("update: git fetch failed")
+    default = git("symbolic-ref", "--short", "refs/remotes/origin/HEAD").stdout.strip().split("/", 1)[-1] or "main"
+    if branch != default and (git("rev-parse", "-q", "--verify", "@{upstream}").returncode != 0
+                              or branch_merged(branch)):
+        if git("checkout", "-q", default).returncode != 0:
+            die(f"update: cannot switch from {branch} to {default}")
+    if git("merge", "-q", "--ff-only", "@{upstream}").returncode != 0:
+        die("update: the deployment checkout does not fast-forward")
+    new = git("rev-parse", "HEAD").stdout.strip()
+    if new == old:
+        return
+    tests = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"],
+                           cwd=HERE, capture_output=True, text=True)
+    if tests.returncode != 0:
+        git("checkout", "-q", "-f", branch)
+        git("reset", "-q", "--hard", old)
+        die(f"update: tests fail at {new[:7]}; factory-mcp stays on {old[:7]}")
+    if git("diff", "--quiet", old, new, "--", "worker/Dockerfile").returncode != 0:
+        run("docker", "build", "-q", "-t", "factory-worker:latest", str(HERE / "worker"))
+    restart_factory_mcp()
+    print(f"update: deployed {new[:7]} (was {old[:7]})")
+
+
+def cmd_connect_openbot(_):
+    """The one step OpenBot needs from a person, because it takes sudo and a token (RUNBOOK)."""
+    if not re.search(rf"^\s*127\.0\.0\.1\s.*\b{re.escape(HOST)}\b", Path("/etc/hosts").read_text(), re.M):
+        print(f"Adding 127.0.0.1 {HOST} to /etc/hosts. sudo asks for your password.")
+        subprocess.run(["sudo", "sh", "-c", f"echo '127.0.0.1 {HOST}' >> /etc/hosts"], check=True)
+    token = read_env(CONFIG / "secrets").get("FACTORY_MCP_TOKEN")
+    if not token:
+        die("no FACTORY_MCP_TOKEN in ~/.config/factory-mcp/secrets")
+    subprocess.run(["pbcopy"], input=token, text=True, check=True)
+    print("In OpenBot, open Admin > Plugins and add a custom MCP server:")
+    print("  id:    factory-mcp")
+    print(f"  URL:   https://{HOST}:{PORT}/mcp")
+    print("  token: paste it (it is on your clipboard)")
+    run("open", "http://localhost:3010")
+
+
 def cmd_serve(_):
     env = dict(os.environ, **SETTINGS, **read_env(CONFIG / "secrets"))
     if not env.get("FACTORY_MCP_TOKEN"):
@@ -267,6 +329,10 @@ def main(argv):
         print(json.dumps(call(args[0], json.loads(args[1]) if len(args) > 1 else {}), indent=1))
     elif command == "serve":
         cmd_serve(args)
+    elif command == "update":
+        cmd_update(args)
+    elif command == "connect-openbot":
+        cmd_connect_openbot(args)
     else:
         print(__doc__.strip())
         sys.exit(2)

@@ -22,6 +22,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -100,6 +101,32 @@ def verify_command(cwd, base):
     except (WorkerError, ValueError):
         return None
     return config.get("verify") if isinstance(config.get("verify"), str) else None
+
+
+def docker_answers():
+    try:
+        return subprocess.run(["docker", "info"], capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def ensure_docker(wait=120, poll=2):
+    """Start Docker (OrbStack) when it does not answer, so the first pass after a reboot needs no
+    person."""
+    if docker_answers():
+        return
+    for cmd in (["orb", "start"], ["open", "-g", "-a", "OrbStack"]):
+        try:
+            if subprocess.run(cmd, capture_output=True, timeout=wait).returncode == 0:
+                break
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        if docker_answers():
+            return
+        time.sleep(poll)
+    raise WorkerError("docker is not available: OrbStack did not start")
 
 
 class Sandbox:
@@ -187,6 +214,7 @@ def main(argv=None):
         os.mkdir(agent_dir, 0o700)
         shutil.copyfile(PI_AUTH, os.path.join(agent_dir, "auth.json"))
         seconds = max(120, order["budget"]["wallMs"] // 1000 - 60)
+        ensure_docker()
         sandbox = Sandbox(args.image, agent_dir, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]))
         code, out, err = sandbox.run([*harness, text], seconds * 0.7, work, with_agent_dir=True)
         print((out + err)[-4000:], flush=True)  # for the relay log; the Result line comes last

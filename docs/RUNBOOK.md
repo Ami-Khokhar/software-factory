@@ -60,6 +60,8 @@ last steps, and what it needs from you.
 | `factory stop` | Kill switch: cancels worker tasks, kills sandboxes, stops factory-mcp |
 | `factory start` | Starts Docker (OrbStack), the relay and factory-mcp |
 | `factory logs` | Follows the factory-mcp log |
+| `factory update` | Deploys the deployed checkout's branch, or `main` once that branch is merged, if the tests pass there |
+| `factory connect-openbot` | The one-time OpenBot step (below) |
 
 ## What it can and cannot do
 
@@ -100,8 +102,8 @@ it to `worker/Dockerfile`, then run `docker build -t factory-worker:latest worke
 ## Starting, stopping, rebooting
 
 The relay and factory-mcp are launchd services: they start at login and restart when they
-exit. Workers need Docker, so turn on OrbStack's "Start at login". After a reboot, run
-`factory start` once to check that all three are up.
+exit. A worker pass starts OrbStack itself when Docker does not answer, so a reboot needs
+nothing from you. `factory start` checks all three.
 
 `factory stop` stops everything now and keeps it stopped. Work in progress is not lost: after
 `factory start`, a cancelled pass counts as one failed attempt and is retried.
@@ -118,8 +120,9 @@ exit. Workers need Docker, so turn on OrbStack's "Start at login". After a reboo
 | Worker definition | `pi-glm-factory` in `~/.config/agent-relay/agents.json` |
 | launchd services | `com.agent-relay`, `com.software-factory.factory-mcp` in `~/Library/LaunchAgents` |
 
-To deploy a new version: `git -C ~/.local/share/software-factory pull`, then
-`launchctl kickstart -k gui/$(id -u)/com.software-factory.factory-mcp`.
+To deploy a new version, run `factory update`. It fast-forwards the deployed checkout (and moves
+it to `main` when its branch is merged), runs the tests there, and restarts factory-mcp only if
+they pass. A failing test keeps the old version running.
 
 ## When something looks wrong
 
@@ -135,6 +138,12 @@ To deploy a new version: `git -C ~/.local/share/software-factory pull`, then
 ## OpenBot (optional)
 
 OpenBot adds a chat Foreman, a 15-minute routine and Telegram escalations on top of the steps above.
-The factory works without it. To connect it, add `127.0.0.1 factory.lan.example` to `/etc/hosts`,
-and add a custom MCP server in OpenBot admin → Plugins with the id `factory-mcp`, the URL
-`https://factory.lan.example:43125/mcp`, and the token from `~/.config/factory-mcp/secrets`.
+The factory works without it. To connect it, run `factory connect-openbot` once. It adds
+`127.0.0.1 factory.lan.example` to `/etc/hosts` (sudo asks for your password), copies the token
+to your clipboard, and prints the id (`factory-mcp`) and the URL to enter in OpenBot admin →
+Plugins as a custom MCP server. OpenBot allows only an https URL with a dotted, public-looking
+name, which is why the hosts entry is needed.
+
+The tenant package ships five skills, which a person types after `/`: `factory-status`,
+`drive-issue` and `answer-escalation` for the Foreman, and `plan-issues` and `write-acceptance`
+for the Planner (`tenant/factory/skills.yaml`). OpenBot loads them when it starts.
