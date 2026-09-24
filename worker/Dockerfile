@@ -5,7 +5,7 @@
 FROM node:24-bookworm-slim
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git python3 python3-venv ca-certificates ripgrep \
+ && apt-get install -y --no-install-recommends git python3 python3-venv ca-certificates ripgrep curl procps lsof \
  && rm -rf /var/lib/apt/lists/*
 
 ARG PI_VERSION=0.87.0

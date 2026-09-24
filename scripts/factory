@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+"""factory: operate the local software factory.
+
+  factory new <owner/repo> <title> "<claim> | <check>" ["<claim> | <check>" ...] [-d <description>]
+  factory status [<owner/repo#n>]
+  factory retry  <owner/repo#n> <note>    try again; the note goes to the worker as a finding
+  factory regate <owner/repo#n> <note>    you pushed a fix yourself; the gate reviews it again
+  factory close  <owner/repo#n> <note>    give up on this WorkItem
+  factory stop                            kill switch: cancel running workers, stop factory-mcp
+  factory start                           start Docker, the relay and factory-mcp
+  factory logs                            follow the factory-mcp log
+  factory call <tool> [<json arguments>]  one raw factory-mcp tool call
+  factory serve                           run factory-mcp in the foreground (the launchd entry)
+
+Settings: ~/.config/factory-mcp/env. Secrets: ~/.config/factory-mcp/secrets (FACTORY_MCP_TOKEN).
+FACTORY_GITHUB_TOKEN comes from `gh auth token` unless the secrets file sets it.
+"""
+import http.client
+import json
+import os
+import socket
+import ssl
+import subprocess
+import sys
+import time
+import urllib.request
+from pathlib import Path
+
+CONFIG = Path.home() / ".config" / "factory-mcp"
+STATE = Path.home() / ".local" / "state" / "factory-mcp"
+LABEL = "com.software-factory.factory-mcp"
+RELAY_LABEL = "com.agent-relay"
+HOST = "factory.lan.example"
+HERE = Path(os.path.realpath(__file__)).parent.parent
+
+
+def die(message):
+    sys.exit(f"factory: {message}")
+
+
+def read_env(path):
+    """KEY=VALUE lines, as `set -a; . file` would read them, for the simple values used here."""
+    values = {}
+    if path.is_file():
+        for line in path.read_text().splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                key, value = line.split("=", 1)
+                value = value.strip()
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                    value = value[1:-1]
+                values[key.strip()] = value
+    return values
+
+
+SETTINGS = read_env(CONFIG / "env")
+PORT = int(SETTINGS.get("FACTORY_PORT") or 43125)
+RELAY = (SETTINGS.get("FACTORY_RELAY_URL") or "http://127.0.0.1:43124").rstrip("/")
+
+
+def run(*cmd, check=False):
+    return subprocess.run(cmd, capture_output=True, text=True, check=check)
+
+
+def call(tool, arguments=None):
+    """One tools/call over the https MCP endpoint. The token is read here and never printed."""
+    token = read_env(CONFIG / "secrets").get("FACTORY_MCP_TOKEN")
+    if not token:
+        die(f"no FACTORY_MCP_TOKEN in {CONFIG / 'secrets'}")
+    caroot = run("mkcert", "-CAROOT").stdout.strip()
+    context = ssl.create_default_context(cafile=os.path.join(caroot, "rootCA.pem"))
+    try:
+        sock = socket.create_connection(("127.0.0.1", PORT), timeout=60)
+    except OSError:
+        die(f"factory-mcp is not running on port {PORT} (start it with: factory start)")
+    connection = http.client.HTTPSConnection(HOST, PORT, context=context)
+    connection.sock = context.wrap_socket(sock, server_hostname=HOST)
+    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": tool, "arguments": arguments or {}}}
+    connection.request("POST", "/mcp", json.dumps(body),
+                       {"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    reply = json.loads(connection.getresponse().read())
+    if "error" in reply:
+        die(json.dumps(reply["error"]))
+    value = json.loads(reply["result"]["content"][0]["text"])
+    if reply["result"].get("isError"):
+        die(value.get("error", value))
+    return value
+
+
+def cmd_new(args):
+    if len(args) < 3:
+        die('usage: factory new <owner/repo> <title> "<claim> | <check>" ... [-d <description>]')
+    repo, title, rest = args[0], args[1], args[2:]
+    description, bullets = title, []
+    while rest:
+        item = rest.pop(0)
+        if item == "-d":
+            description = rest.pop(0) if rest else description
+        elif " | " in item:
+            claim, check = item.split(" | ", 1)
+            bullets.append(f"- {claim.strip()} — done when: {check.strip()}")
+        else:
+            die(f'an acceptance item needs "<claim> | <check>": {item}')
+    if not bullets:
+        die("give at least one acceptance item")
+    body = f"{description}\n\n## Acceptance\n" + "\n".join(bullets) + "\n"
+    done = subprocess.run(["gh", "issue", "create", "-R", repo, "--title", title,
+                           "--label", "factory:ready", "--body-file", "-"], input=body, text=True)
+    sys.exit(done.returncode)
+
+
+def cmd_status(args):
+    if args:
+        d = call("factory_status", {"id": args[0]})
+        wi = d["workItem"]
+        print(f"{wi['id']}  {wi['state']}  PR #{wi.get('prNumber') or '-'}  gate round {wi.get('gateRound', 0)}")
+        if d.get("escalation"):
+            print(f"  needs you: {d['escalation']['reason']}")
+            print(f'  answer with: factory retry|regate|close {wi["id"]} "<note>"')
+        print(f"  worker passes: {d['cost']['passes']}")
+        for h in [h for h in d["history"] if not h["action"].startswith("tool:")][-8:]:
+            print(f"  {h['at']}  {h['action']}  {json.dumps(h['detail'])[:110]}")
+        return
+    d = call("factory_status")
+    for wi in d["workItems"]:
+        line = f"{wi['id']:<34} {wi['state']:<18} PR #{wi.get('prNumber') or '-'}"
+        print(line + (f"   needs you: {wi['blockedOn']}" if wi.get("blockedOn") else ""))
+    if not d["workItems"]:
+        print("no WorkItems yet: label an issue factory:ready, or run: factory new")
+    a = d["autonomy"]
+    print(f"autonomy: {a['autonomous']} of {a['ended']} finished WorkItems needed no person")
+
+
+def cmd_resolve(resolution, args):
+    if len(args) < 2:
+        die(f"usage: factory {resolution} <owner/repo#n> <note>")
+    who = run("gh", "api", "user", "--jq", ".login").stdout.strip() or os.environ.get("USER", "owner")
+    wi = call("factory_resolve_human", {"id": args[0], "resolution": resolution,
+                                        "note": " ".join(args[1:]), "by": who})["workItem"]
+    print(f"{wi['id']}: {wi['state']}. The factory takes it from here.")
+
+
+def relay_json(method, path):
+    request = urllib.request.Request(f"{RELAY}{path}", method=method)
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.loads(response.read() or b"null")
+
+
+def listening():
+    return run("lsof", f"-tiTCP:{PORT}", "-sTCP:LISTEN").stdout.split()
+
+
+def cmd_stop(_):
+    # 1. Cancel running worker tasks: the relay stops each runner, and the runner kills its container.
+    workers = {w.split(":")[0] for w in (SETTINGS.get("FACTORY_WORKERS") or "").split(",") if w}
+    try:
+        listing = relay_json("GET", "/v1/tasks?status=running")
+        tasks = listing.get("tasks", []) if isinstance(listing, dict) else listing
+        for task in tasks:
+            if task.get("agentId") in workers:
+                relay_json("DELETE", f"/v1/tasks/{task['id']}")
+                print(f"cancelled worker task {task['id']}")
+    except OSError as exc:
+        print(f"relay: not reachable ({exc}); no worker task to cancel there")
+    # 2. Stop factory-mcp so nothing new is dispatched, and keep launchd from starting it again.
+    if run("launchctl", "bootout", f"gui/{os.getuid()}/{LABEL}").returncode == 0:
+        print("stopped the factory-mcp service")
+    for pid in listening():
+        os.kill(int(pid), 15)
+        print(f"stopped factory-mcp (pid {pid})")
+    # 3. Any sandbox container that is still up.
+    left = run("docker", "ps", "-q", "--filter", "label=factory-worker").stdout.split()
+    if left:
+        run("docker", "kill", *left)
+        print(f"killed {len(left)} worker container(s)")
+    print("The factory is stopped. Start it again with: factory start")
+
+
+def up(url):
+    try:
+        urllib.request.urlopen(url, timeout=3).read()
+        return True
+    except OSError:
+        return False
+
+
+def cmd_start(_):
+    if run("docker", "info").returncode != 0:
+        run("orb", "start")
+    print("docker:", "up" if run("docker", "info").returncode == 0 else "DOWN (start OrbStack; workers need it)")
+    if not up(f"{RELAY}/healthz"):
+        run("launchctl", "kickstart", f"gui/{os.getuid()}/{RELAY_LABEL}")
+        time.sleep(2)
+    print("relay:", "up" if up(f"{RELAY}/healthz") else "DOWN")
+    plist = Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
+    if plist.is_file() and run("launchctl", "print", f"gui/{os.getuid()}/{LABEL}").returncode != 0:
+        run("launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist))
+    for _ in range(40):
+        if listening():
+            break
+        time.sleep(0.5)
+    print("factory-mcp:", "up" if listening() else "DOWN (see: factory logs)")
+
+
+def cmd_serve(_):
+    env = dict(os.environ, **SETTINGS, **read_env(CONFIG / "secrets"))
+    if not env.get("FACTORY_MCP_TOKEN"):
+        die(f"no FACTORY_MCP_TOKEN in {CONFIG / 'secrets'}")
+    if not env.get("FACTORY_GITHUB_TOKEN"):
+        env["FACTORY_GITHUB_TOKEN"] = run("gh", "auth", "token", check=True).stdout.strip()
+    os.chdir(HERE)
+    os.execvpe(sys.executable, [sys.executable, "-m", "factory_mcp"], env)
+
+
+def main(argv):
+    command, args = (argv[0], argv[1:]) if argv else ("", [])
+    if command == "new":
+        cmd_new(args)
+    elif command == "status":
+        cmd_status(args)
+    elif command in ("retry", "regate", "close"):
+        cmd_resolve(command, args)
+    elif command == "stop":
+        cmd_stop(args)
+    elif command == "start":
+        cmd_start(args)
+    elif command == "logs":
+        os.execvp("tail", ["tail", "-n", "50", "-f", str(STATE / "server.log")])
+    elif command == "call" and args:
+        print(json.dumps(call(args[0], json.loads(args[1]) if len(args) > 1 else {}), indent=1))
+    elif command == "serve":
+        cmd_serve(args)
+    else:
+        print(__doc__.strip())
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
