@@ -378,16 +378,18 @@ owner adds `OPENCODE_GO_API_KEY` and `GATEKEEPER_READ_TOKEN` (§10 step 0).
 
 | Phase | Issue | Branch | State |
 |---|---|---|---|
-| 0′ Contracts | #1 | `phase-0-contracts` | PR open |
-| A Skeleton | #2 | `phase-a-skeleton` | PR open |
-| B Intake + reconcile | #3 | `phase-b-reconcile` | PR open |
-| C Foreman actions | #4 | `phase-c-actions` | PR open |
-| D Workers | #5 | `phase-d-workers` | PR open |
-| E Gate loop | #6 | `phase-e-gate-loop` | PR open |
-| F HITL + ops | #7 | `phase-f-hitl` | PR open |
+| 0′ Contracts | #1 | `phase-0-contracts` | PR #9 open |
+| A Skeleton | #2 | `phase-a-skeleton` | PR #10 open |
+| B Intake + reconcile | #3 | `phase-b-reconcile` | PR #11 open |
+| C Foreman actions | #4 | `phase-c-actions` | PR #12 open |
+| D Workers | #5 | `phase-d-workers` | PR #13 open |
+| E Gate loop | #6 | `phase-e-gate-loop` | PR #14 open |
+| F HITL + ops | #7 | `phase-f-hitl` | PR #15 open |
 
-When every PR above is open, the offline work is complete. Merge them in order (0′ first); each
-PR's base is the previous branch, so after one merges, retarget the next one to `main`.
+The offline work is complete when every PR above is open. Merge them in order, 0′ first. Each PR's
+base is the previous branch. pr-gatekeeper squash-merges, so after one merges, merge `main` into
+the next branch (the identical changes merge cleanly), retarget it to `main`, and push. The gate
+then re-reviews a diff that holds only that phase.
 
 ---
 
