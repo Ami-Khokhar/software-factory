@@ -397,10 +397,15 @@ then re-reviews a diff that holds only that phase.
 ## 14. Live setup (issue #8, owner machine)
 
 1. **factory-mcp over https.** OpenBot refuses `http`, IP literals and `localhost` for custom
-   servers (F2). Example: add `127.0.0.1 factory.lan.example` to `/etc/hosts`, run
-   `mkcert factory.lan.example`, start factory-mcp with `FACTORY_TLS_CERT`/`FACTORY_TLS_KEY`, and
-   give OpenBot's server `NODE_EXTRA_CA_CERTS="$(mkcert -CAROOT)/rootCA.pem"`. If OpenBot runs
-   in Docker, the hosts entry must resolve inside the container too.
+   servers (F2). Add `127.0.0.1 factory.lan.example` to `/etc/hosts`, run
+   `mkcert factory.lan.example`, and start factory-mcp with `FACTORY_TLS_CERT`/`FACTORY_TLS_KEY`.
+   `scripts/start.sh` runs OpenBot's server on the host under **Bun** (Docker holds only the
+   supporting services), so `127.0.0.1` reaches factory-mcp. Export
+   `NODE_EXTRA_CA_CERTS="$(mkcert -CAROOT)/rootCA.pem"` before `scripts/start.sh`, and keep
+   `factory.lan.example` in `NO_PROXY` if a proxy is set. Verified in the cloud session:
+   OpenBot's `customUrlRefusal` accepts `https://factory.lan.example:43125/mcp` (and refuses
+   `host.docker.internal`), and the SDK 1.30.1 client under Bun 1.4.2 (the fork pins 1.3.14)
+   rejects the self-signed certificate without `NODE_EXTRA_CA_CERTS` and connects with it.
 2. **Tenant.** `scripts/install-tenant.sh "$HOME/Documents/Coding projects/openbot"`, put the
    printed lines in OpenBot's `.env`, and restart OpenBot.
 3. **Register the server.** In OpenBot admin, add a custom MCP server with id **`factory-mcp`**
