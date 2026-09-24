@@ -135,3 +135,48 @@ the WorkItem.
 
 **Consequence.** Duplicate and stale events are harmless. Recovery is eventual
 and does not depend on delivery.
+
+---
+
+## ADR-0010 — OpenBot is the control plane; decisions stay deterministic
+
+**Context.** The factory needs durable goals, governance, an audit trail, human-in-the-loop
+channels and schedules. OpenBot has all of these (Jobs, CEL policy, audit, Telegram, routines).
+It is also an LLM agent platform, and a model must not decide merges or state transitions.
+
+**Decision.** OpenBot holds the goal (one Job per WorkItem), runs the Foreman and Planner Bots,
+and carries escalations to a human. Every state transition and every side effect is decided by
+deterministic code in `factory-mcp`. The Bots can only call `factory-mcp` tools, and the policy
+denies everything else.
+
+**Consequence.** An OpenBot or model failure can stall a job but cannot cause a wrong merge or
+skip a guard.
+
+---
+
+## ADR-0011 — No Anthropic dependency; providers are swappable
+
+**Context.** The Claude subscription ends 2026-09-28. The factory must keep running after that
+date, and any single provider can fail.
+
+**Decision.** Nothing in the factory depends on Anthropic. Models and workers come from OpenCode
+Go, OpenAI and local providers. Workers are routed by locality and risk, and a provider that
+fails is skipped on the next attempt.
+
+**Consequence.** Any harness (Codex, pi, OpenCode) can continue the work, and one provider's
+outage degrades throughput instead of stopping the line.
+
+---
+
+## ADR-0012 — The Foreman is `factory-mcp`
+
+**Context.** OpenBot's MCP client speaks Streamable HTTP only; agent-relay's MCP server is stdio
+only. Keeping WorkItem state in OpenBot's Postgres would mean forking an alpha codebase.
+
+**Decision.** `factory-mcp` is a Streamable-HTTP MCP server in this repo, written with the
+Python standard library. It owns the WorkItem state machine and its SQLite store, calls
+agent-relay over HTTP and GitHub over REST. The store is rebuildable from GitHub (issue labels,
+branch `factory/<issue>`, PR, verdict marker). There is no merge tool.
+
+**Consequence.** OpenBot stays unmodified except for the tenant package. Losing the store loses
+history, not correctness.

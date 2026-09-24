@@ -1,0 +1,38 @@
+{
+  "schema": "workitem",
+  "valid": {
+    "schemaVersion": "factory.workitem/v1",
+    "id": "Ami-Khokhar/agent-relay#12",
+    "repo": "Ami-Khokhar/agent-relay",
+    "issueNumber": 12,
+    "goal": "Fail loud when the user registry is missing",
+    "acceptance": [
+      {
+        "claim": "default_config_path() raises when ~/.config/agent-relay/agents.json is absent",
+        "doneWhen": "python3 -m unittest tests.test_config passes"
+      }
+    ],
+    "state": "exhausted",
+    "stateVersion": 3,
+    "createdAt": "2026-09-24T12:00:00Z",
+    "updatedAt": "2026-09-24T12:00:00Z",
+    "terminalReason": "maxPasses 4 reached"
+  },
+  "invalid": {
+    "schemaVersion": "factory.workitem/v1",
+    "id": "Ami-Khokhar/agent-relay#12",
+    "repo": "Ami-Khokhar/agent-relay",
+    "issueNumber": 12,
+    "goal": "Fail loud when the user registry is missing",
+    "acceptance": [
+      {
+        "claim": "default_config_path() raises when ~/.config/agent-relay/agents.json is absent",
+        "doneWhen": "python3 -m unittest tests.test_config passes"
+      }
+    ],
+    "state": "out_of_budget",
+    "stateVersion": 3,
+    "createdAt": "2026-09-24T12:00:00Z",
+    "updatedAt": "2026-09-24T12:00:00Z"
+  }
+}

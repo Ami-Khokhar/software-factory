@@ -1,0 +1,34 @@
+{
+  "description": "Six WorkItems: 1 autonomous merge out of 4 that ended with full history; o/r#6 was rebuilt (unknown); o/r#5 is still running.",
+  "expected": {"ended": 4, "autonomous": 1, "unknown": 1, "rate": 0.25},
+  "workItems": {
+    "o/r#1": {"state": "closed", "history": [
+      ["result", {"commitSha": "a1"}],
+      ["reconcile", {"from": "pr_open", "to": "reviewing", "headSha": "a1"}],
+      ["result", {"commitSha": "a2"}],
+      ["reconcile", {"from": "reviewing", "to": "merge_pending", "headSha": "a2"}],
+      ["reconcile", {"from": "merge_pending", "to": "closed", "headSha": "a2"}]
+    ]},
+    "o/r#2": {"state": "closed", "history": [
+      ["result", {"commitSha": "b1"}],
+      ["reconcile", {"from": "reviewing", "to": "human_waiting", "headSha": "b1"}],
+      ["human_resolved", {"from": "human_waiting", "to": "reviewing"}],
+      ["reconcile", {"from": "reviewing", "to": "closed", "headSha": "b1"}]
+    ]},
+    "o/r#3": {"state": "merged", "history": [
+      ["result", {"commitSha": "c1"}],
+      ["reconcile", {"from": "reviewing", "to": "reviewing", "headSha": "c9"}],
+      ["reconcile", {"from": "reviewing", "to": "merged", "headSha": "c9"}]
+    ]},
+    "o/r#4": {"state": "exhausted", "history": [
+      ["exhausted", {"from": "ready", "to": "exhausted"}]
+    ]},
+    "o/r#6": {"state": "closed", "history": [
+      ["rebuilt", {}],
+      ["reconcile", {"from": "pr_open", "to": "closed", "headSha": "f1"}]
+    ]},
+    "o/r#5": {"state": "reviewing", "history": [
+      ["result", {"commitSha": "e1"}]
+    ]}
+  }
+}

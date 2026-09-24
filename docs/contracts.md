@@ -4,12 +4,10 @@ The frozen interfaces of the software factory. Cells exchange **documents, never
 vendor SDKs** — that is what keeps the line harness- and model-agnostic. These
 four documents are the only things that cross a boundary.
 
-Status: **frozen v1**. These are the contract the controller is built against.
-They currently live in this repo as a staging area; they move to the
-`factory-controller` repo when it is created (Phase 1).
+Status: **frozen v1** with the six Phase 0′ edits applied. The controller is
+`factory-mcp` in this repo (ADR-0012).
 
-See also: [`docs/factory-architecture.html`](../factory-architecture.html) ·
-[`decisions.md`](decisions.md).
+See also: [`architecture.html`](architecture.html) · [`decisions.md`](decisions.md).
 
 ## The four documents
 
@@ -42,7 +40,8 @@ See also: [`docs/factory-architecture.html`](../factory-architecture.html) ·
 ## Design rules baked into the schemas
 
 - **The artifact is the handoff.** A `Result` with `status: completed` **must**
-  carry `artifact` (branch + commit) and evidence. Free-text `notes` are for
+  carry `artifact` (branch + commit) or `patch` (format + diff, for hosted
+  providers that return a diff) and evidence. Free-text `notes` are for
   humans; the control path must never parse them. This is what makes any
   harness that can commit a first-class worker.
 - **`Verdict.headSha` is mandatory.** A verdict only applies to the exact commit
@@ -52,6 +51,14 @@ See also: [`docs/factory-architecture.html`](../factory-architecture.html) ·
   increments it; a transition that writes on a stale version loses.
 - **`human_waiting` is not terminal.** `merged`, `closed`, and `cancelled` are.
   HUMAN is an action queue with a path back.
+- **Acceptance is checkable.** Each `acceptance` item has a `claim` and a
+  `doneWhen`: a check read back from the produced artifact, never from effort.
+- **`blocked` carries evidence.** A WorkItem in `blocked` must have `blockedOn`
+  and at least two `attempts`, mirroring OpenBot's `job_blocked`.
+- **Budgets have two ceilings.** `WorkOrder.budget` requires `maxPasses` and
+  `wallMs`. Reaching `maxPasses` moves the WorkItem to `exhausted`.
+- **Provider-neutral task fields.** `provider`, `providerTaskId`,
+  `sessionHandle`, `sessionNative`, `sessionUrl` replace `relayTaskId`.
 - **`blockers[].fingerprint` is the identity of "the same problem."** Round
   counting is per unresolved problem, not per gate round (see
   [decisions.md](decisions.md), ADR-0005).
@@ -75,8 +82,8 @@ intent → issued → planned → ready → dispatching → implementing → pr_
                           human_waiting ──► (ready | closed)     merged → closed
 ```
 
-Operational fault states: `blocked`, `failed`.
-Terminal states: `merged`, `closed`, `cancelled`. **`human_waiting` is not
+Operational fault states: `blocked`, `failed`. Budget ceiling: `exhausted`.
+Terminal states: `merged`, `closed`, `cancelled`, `exhausted`. **`human_waiting` is not
 terminal.**
 
 ## Controller obligations (the guards)
