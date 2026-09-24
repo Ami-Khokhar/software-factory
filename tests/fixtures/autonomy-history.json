@@ -1,6 +1,6 @@
 {
-  "description": "Five WorkItems for the autonomy rate: 1 autonomous merge out of 4 that ended; o/r#5 is still running.",
-  "expected": {"ended": 4, "autonomous": 1, "rate": 0.25},
+  "description": "Six WorkItems: 1 autonomous merge out of 4 that ended with full history; o/r#6 was rebuilt (unknown); o/r#5 is still running.",
+  "expected": {"ended": 4, "autonomous": 1, "unknown": 1, "rate": 0.25},
   "workItems": {
     "o/r#1": {"state": "closed", "history": [
       ["result", {"commitSha": "a1"}],
@@ -22,6 +22,10 @@
     ]},
     "o/r#4": {"state": "exhausted", "history": [
       ["exhausted", {"from": "ready", "to": "exhausted"}]
+    ]},
+    "o/r#6": {"state": "closed", "history": [
+      ["rebuilt", {}],
+      ["reconcile", {"from": "pr_open", "to": "closed", "headSha": "f1"}]
     ]},
     "o/r#5": {"state": "reviewing", "history": [
       ["result", {"commitSha": "e1"}]

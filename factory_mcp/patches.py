@@ -10,7 +10,11 @@ class PatchError(Exception):
 
 
 def _git(args, cwd, env):
-    done = subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True, timeout=120)
+    try:
+        done = subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True,
+                              timeout=120)
+    except subprocess.TimeoutExpired:
+        raise PatchError(f"git {args[0]} timed out") from None
     if done.returncode != 0:
         raise PatchError(f"git {args[0]} failed: {(done.stderr or done.stdout).strip()[-300:]}")
     return done.stdout.strip()

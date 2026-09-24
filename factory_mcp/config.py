@@ -11,6 +11,7 @@ class Config:
     db_path: str = str(Path.home() / ".local" / "state" / "factory-mcp" / "factory.sqlite3")
     relay_url: str = "http://127.0.0.1:43124"
     github_token: str = ""
+    github_api: str = "https://api.github.com"
     host: str = "127.0.0.1"
     port: int = 43125
     tls_cert: str = ""
@@ -20,6 +21,7 @@ class Config:
     git_url: str = "https://github.com/{repo}.git"
     owner: str = ""  # the person who owns escalations; default is the repo owner
     poll_seconds: int = 60
+    gate_wait_seconds: int = 7200  # no verdict on the head for this long: a person looks
     max_passes: int = 4
     wall_ms: int = 20 * 60 * 1000
     protected_paths: tuple = (".github/", "AGENTS.md")
@@ -40,6 +42,7 @@ class Config:
             db_path=env.get("FACTORY_DB") or defaults.db_path,
             relay_url=(env.get("FACTORY_RELAY_URL") or defaults.relay_url).rstrip("/"),
             github_token=env.get("FACTORY_GITHUB_TOKEN", ""),
+            github_api=(env.get("FACTORY_GITHUB_API") or defaults.github_api).rstrip("/"),
             host=env.get("FACTORY_HOST") or defaults.host,
             port=int(env.get("FACTORY_PORT") or defaults.port),
             tls_cert=env.get("FACTORY_TLS_CERT", ""),
@@ -51,6 +54,7 @@ class Config:
             git_url=env.get("FACTORY_GIT_URL") or defaults.git_url,
             owner=env.get("FACTORY_OWNER", ""),
             poll_seconds=int(env.get("FACTORY_POLL_SECONDS") or defaults.poll_seconds),
+            gate_wait_seconds=int(env.get("FACTORY_GATE_WAIT_SECONDS") or defaults.gate_wait_seconds),
             max_passes=int(env.get("FACTORY_MAX_PASSES") or defaults.max_passes),
             wall_ms=int(env.get("FACTORY_WALL_MS") or defaults.wall_ms),
         )

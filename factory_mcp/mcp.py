@@ -49,6 +49,8 @@ def handle(message, tools, audit=lambda name, args, ok: None):
         return None
     message_id, method = message["id"], message["method"]
     params = message.get("params") or {}
+    if not isinstance(params, dict):
+        return _error(message_id, -32602, "params must be an object")
     if method == "initialize":
         asked = params.get("protocolVersion")
         return _result(message_id, {

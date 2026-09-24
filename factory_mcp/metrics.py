@@ -28,16 +28,22 @@ def autonomy(workitems, history_of):
     """Merged with no human state and no human commit ÷ all WorkItems that reached an end state.
 
     A human commit is a PR head no worker Result produced. Merges by pr-gatekeeper are not touches.
+    A WorkItem rebuilt from GitHub lost the history that decides this, so it counts as unknown.
     """
-    ended = [wi for wi in workitems if wi["state"] in REACHED_END]
-    autonomous = 0
-    for wi in ended:
+    ended, unknown, autonomous = [], 0, 0
+    for wi in workitems:
+        if wi["state"] not in REACHED_END:
+            continue
         history = history_of(wi["id"])
+        if any(h["action"] == "rebuilt" for h in history):
+            unknown += 1
+            continue
+        ended.append(wi)
         worker_shas = {h["detail"]["commitSha"] for h in history if h["action"] == "result"}
         heads = {h["detail"]["headSha"] for h in history
                  if h["action"] == "reconcile" and h["detail"].get("headSha")}
         touched = any(h["detail"].get("to") in HUMAN_STATES for h in history)
         if wi["state"] in ("merged", "closed") and not touched and heads <= worker_shas:
             autonomous += 1
-    return {"ended": len(ended), "autonomous": autonomous,
+    return {"ended": len(ended), "autonomous": autonomous, "unknown": unknown,
             "rate": round(autonomous / len(ended), 3) if ended else None}

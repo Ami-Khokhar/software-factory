@@ -1,4 +1,6 @@
 """The Foreman: under a per-WorkItem lease, reconcile with GitHub, then act at most once."""
+import calendar
+import time
 import uuid
 
 from . import documents, patches, routing, workitem
@@ -39,6 +41,8 @@ class Foreman:
                 if self.store.get(workitem.workitem_id(repo, issue["number"])) is None:
                     try:
                         found.append(self.intake(repo, issue["number"])["id"])
+                        if self.github.pulls_for_branch(repo, workitem.branch_for(issue["number"])):
+                            self.store.log("rebuilt", {}, found[-1])  # its earlier history is gone
                     except ToolError as exc:
                         self.store.log("rebuild_skipped", {"reason": str(exc)},
                                        workitem.workitem_id(repo, issue["number"]))
@@ -55,7 +59,11 @@ class Foreman:
         ticked = []
         for wi in self.store.all():
             if wi["state"] not in workitem.TERMINAL:
-                before, after = self.tick_one(wi["id"])
+                try:
+                    before, after = self.tick_one(wi["id"])
+                except Exception as exc:  # noqa: BLE001 - one bad WorkItem must not starve the rest
+                    self.store.log("tick_error", {"error": f"{type(exc).__name__}: {exc}"}, wi["id"])
+                    continue
                 ticked.append({"id": wi["id"], "from": before, "to": after["state"]})
         return {"rebuilt": rebuilt, "ticked": ticked}
 
@@ -103,6 +111,13 @@ class Foreman:
             return self.submit(wi, self._order(wi))
         if wi["state"] == "implementing":
             return self.poll(wi)
+        if wi["state"] in ("pr_open", "reviewing"):
+            since = calendar.timegm(time.strptime(wi["updatedAt"], "%Y-%m-%dT%H:%M:%SZ"))
+            if time.time() - since > self.config.gate_wait_seconds:
+                return self._write(wi, dict(wi, state="human_waiting", blockedOn=(
+                    f"no pr-gatekeeper verdict on {wi.get('headSha')} after "
+                    f"{self.config.gate_wait_seconds // 60} min; check the gate workflow run")),
+                    "gate_silent")
         return wi
 
     def _order(self, wi):
@@ -149,6 +164,9 @@ class Foreman:
         if task["status"] != "completed":
             return self.fail(wi, order, f"{task['agentId']}: task {task['status']}: {task.get('error')}")
         result = documents.parse_result(task.get("output"))
+        if result is None and task.get("outputTruncated"):
+            return self.fail(wi, order, f"{task['agentId']}: the relay truncated the output before "
+                             "the Result line; raise AGENT_RELAY_MAX_OUTPUT_BYTES or quiet the harness")
         if isinstance(result, dict) and isinstance(result.get("usage"), dict):
             self.store.log("usage", result["usage"], wi["id"])  # the cost ledger, pass or fail
         errors = documents.check_result(result, order)
@@ -225,20 +243,20 @@ class Foreman:
 
     def resolve_human(self, workitem_id, resolution, note, by):
         """A person's answer to human_waiting or blocked (D5): retry, regate or close."""
-        wi = self.store.get(workitem_id)
-        if wi is None or wi["state"] not in ("human_waiting", "blocked"):
-            raise ToolError(f"{workitem_id} is not waiting on a person")
-        if resolution == "retry":
-            new = dict(wi, state="changes_requested" if wi.get("prNumber") else "ready")
-        elif resolution == "regate" and wi.get("prNumber"):
-            new = dict(wi, state="reviewing")
-        elif resolution == "close":
-            new = dict(wi, state="cancelled", terminalReason=f"closed by {by}: {note}")
-        else:
-            raise ToolError("resolution must be retry, regate (needs a PR) or close")
         if not self.store.acquire(workitem_id, self.holder):
             raise ToolError(f"{workitem_id} is being ticked; try again")
         try:
+            wi = self.store.get(workitem_id)
+            if wi is None or wi["state"] not in ("human_waiting", "blocked"):
+                raise ToolError(f"{workitem_id} is not waiting on a person")
+            if resolution == "retry":
+                new = dict(wi, state="changes_requested" if wi.get("prNumber") else "ready")
+            elif resolution == "regate" and wi.get("prNumber"):
+                new = dict(wi, state="reviewing")
+            elif resolution == "close":
+                new = dict(wi, state="cancelled", terminalReason=f"closed by {by}: {note}")
+            else:
+                raise ToolError("resolution must be retry, regate (needs a PR) or close")
             return self._write(wi, dict(new, blockedOn=None, attempts=[]), "human_resolved",
                                resolution=resolution, note=note, by=by)
         finally:

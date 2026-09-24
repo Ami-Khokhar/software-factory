@@ -385,6 +385,7 @@ owner adds `OPENCODE_GO_API_KEY` and `GATEKEEPER_READ_TOKEN` (§10 step 0).
 | D Workers | #5 | `phase-d-workers` | PR #13 open |
 | E Gate loop | #6 | `phase-e-gate-loop` | PR #14 open |
 | F HITL + ops | #7 | `phase-f-hitl` | PR #15 open |
+| Rehearsal + hardening | #16 | `rehearsal` | PR open |
 
 The offline work is complete when every PR above is open. Merge them in order, 0′ first. Each PR's
 base is the previous branch. pr-gatekeeper squash-merges, so after one merges, merge `main` into
@@ -412,3 +413,8 @@ then re-reviews a diff that holds only that phase.
    on it. Check in the OpenBot audit that the policy row's `bot.id` is `factory-foreman`.
 6. **Relay.** agent-relay running with the agents named in `FACTORY_WORKERS`; each agent's `cwd`
    in `~/.config/agent-relay/agents.json` is a checkout of the target repo with push access.
+   The relay keeps only the **first** 256 KB of a task's output, and the Result is the **last**
+   line. Start it with `AGENT_RELAY_MAX_OUTPUT_BYTES=4194304` and use quiet harness flags.
+   (A relay change to keep the tail instead would remove this trap: a good dogfood issue.)
+7. **Rehearse first.** `python3 scripts/rehearsal.py <agent-relay checkout>` and again with
+   `--lose-store` must both print `REHEARSAL PASSED` before touching the real stack.

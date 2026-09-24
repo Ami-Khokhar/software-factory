@@ -123,6 +123,8 @@ class ForemanTest(unittest.TestCase):
         self.assertEqual((wi["state"], wi["prNumber"], wi["headSha"], wi["gateRound"]),
                          ("implementing", 11, "s1", 1))
         self.assertEqual(len(relay.tasks), 1)  # same idempotency key: the relay's task is reused
+        self.assertIn("rebuilt", [h["action"] for h in lost.store.history(f"{REPO}#7")])
+        self.assertNotIn("rebuilt", [h["action"] for h in foreman.store.history(f"{REPO}#7")])
 
 
 if __name__ == "__main__":

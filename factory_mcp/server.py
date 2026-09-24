@@ -53,7 +53,10 @@ class Handler(BaseHTTPRequestHandler):
         expected = f"Bearer {self.server.config.mcp_token}".encode()
         if not hmac.compare_digest(self.headers.get("Authorization", "").encode(), expected):
             return self._send(401, {"error": "unauthorized"}, [("www-authenticate", "Bearer")])
-        length = int(self.headers.get("content-length") or 0)
+        try:
+            length = int(self.headers.get("content-length") or 0)
+        except ValueError:
+            return self._send(400, {"error": "bad_content_length"})
         if length > MAX_BODY:
             self.close_connection = True
             return self._send(413, {"error": "body_too_large"})
@@ -72,7 +75,7 @@ def make_server(config, store, github=None, relay=None):
     server = ThreadingHTTPServer((config.host, config.port), Handler)
     server.daemon_threads = True
     server.config = config
-    foreman = Foreman(store, github or GitHub(config.github_token), config,
+    foreman = Foreman(store, github or GitHub(config.github_token, config.github_api), config,
                       relay or Relay(config.relay_url))
     server.foreman = foreman
     server.tools = tools.build(store, foreman)
