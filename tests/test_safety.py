@@ -113,6 +113,30 @@ class EscalationTest(unittest.TestCase):
         self.assertIn("an earlier attempt failed", relay.tasks[f.store.get("o/r#7")["providerTaskId"]]["input"])
         self.assertIn("Do not push", json.dumps(relay.tasks[f.store.get("o/r#7")["providerTaskId"]]["input"]))
 
+    def test_a_retry_of_a_blocked_workitem_carries_the_owners_note(self):
+        github, relay = FakeGitHub(), FakeRelay()
+        github.add_issue(REPO, 7)
+        f = foreman(github, relay)
+        f.intake(REPO, 7)
+        for _ in range(2):  # two failed attempts before any PR block the WorkItem
+            wi = f.tick("o/r#7")["workItem"]
+            relay.finish(wi["providerTaskId"], status="failed", error="verify exited 1")
+            wi = f.tick("o/r#7")["workItem"]
+        self.assertEqual(wi["state"], "blocked")
+        f.resolve_human("o/r#7", "retry", "Put the field in health(), not in the router", "o")
+        wi = f.tick("o/r#7")["workItem"]
+        self.assertEqual(wi["state"], "implementing")
+        order = f.store.workorders("o/r#7")[-1]
+        self.assertEqual([(x["fingerprint"], x["problem"]) for x in order["findingsToAddress"]],
+                         [("human", "Put the field in health(), not in the router")])
+        self.assertIn('fingerprint "human" is from the owner', relay.tasks[wi["providerTaskId"]]["input"])
+        wi = f.tick("o/r#7")["workItem"]  # the note is used once: a later pass does not repeat it
+        relay.finish(wi["providerTaskId"], status="failed", error="verify exited 2")
+        f.tick("o/r#7")
+        f.tick("o/r#7")
+        self.assertEqual([x["fingerprint"] for x in f.store.workorders("o/r#7")[-1]["findingsToAddress"]],
+                         ["previous-attempt"])
+
 
 if __name__ == "__main__":
     unittest.main()

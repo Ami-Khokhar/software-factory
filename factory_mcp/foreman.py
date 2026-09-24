@@ -128,16 +128,12 @@ class Foreman:
             self.store.log("notify_failed", {"error": str(exc)}, wi["id"])
 
     def act(self, wi, facts):
-        if wi["state"] == "ready":  # a retry says why the last attempt failed
-            return self.dispatch(wi, "implement", self._attempt_findings(wi))
+        if wi["state"] == "ready":  # a retry says why the last attempt failed, or what a person said
+            return self.dispatch(wi, "implement", self._human_findings(wi) + self._attempt_findings(wi))
         if wi["state"] == "changes_requested":  # findings travel as data (D6)
             findings = [{key: f[key] for key in ("fingerprint", "path", "line", "problem")}
                         for f in (blocking(facts["verdicts"][-1]) if facts["verdicts"] else [])]
-            last = next((h for h in reversed(self.store.history(wi["id"]))
-                         if h["action"] in ("human_resolved", "dispatch")), None)
-            if last and last["action"] == "human_resolved" and last["detail"].get("note"):
-                findings.append({"fingerprint": "human", "problem": last["detail"]["note"]})
-            return self.dispatch(wi, "fix", findings + self._attempt_findings(wi))
+            return self.dispatch(wi, "fix", findings + self._human_findings(wi) + self._attempt_findings(wi))
         if wi["state"] == "dispatching":  # the intent was written, the relay call may not have landed
             return self.submit(wi, self._order(wi))
         if wi["state"] == "implementing":
@@ -153,6 +149,14 @@ class Foreman:
             self.github.close_issue(wi["repo"], wi["issueNumber"])
             return self._write(wi, dict(wi, state="closed"), "issue_closed", pr=wi.get("prNumber"))
         return wi
+
+    def _human_findings(self, wi):
+        """The note from factory_resolve_human, if no pass was dispatched after it."""
+        last = next((h for h in reversed(self.store.history(wi["id"]))
+                     if h["action"] in ("human_resolved", "dispatch")), None)
+        if last and last["action"] == "human_resolved" and last["detail"].get("note"):
+            return [{"fingerprint": "human", "problem": last["detail"]["note"]}]
+        return []
 
     @staticmethod
     def _attempt_findings(wi):
