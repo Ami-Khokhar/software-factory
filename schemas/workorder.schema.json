@@ -39,7 +39,7 @@
     "acceptance": {
       "type": "array",
       "minItems": 1,
-      "items": { "type": "string", "minLength": 1 }
+      "items": { "$ref": "#/$defs/criterion" }
     },
     "constraints": { "$ref": "#/$defs/constraints" },
     "findingsToAddress": {
@@ -64,6 +64,19 @@
     "createdAt": { "type": "string", "format": "date-time" }
   },
   "$defs": {
+    "criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claim", "doneWhen"],
+      "properties": {
+        "claim": { "type": "string", "minLength": 1 },
+        "doneWhen": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A check read back from the produced artifact (a command, a file, a test), never from effort spent."
+        }
+      }
+    },
     "constraints": {
       "type": "object",
       "additionalProperties": false,
@@ -97,8 +110,18 @@
     "budget": {
       "type": "object",
       "additionalProperties": false,
+      "required": ["maxPasses", "wallMs"],
       "properties": {
-        "wallMs": { "type": "integer", "minimum": 1 },
+        "maxPasses": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Ceiling on worker passes for the WorkItem; reaching it means exhausted."
+        },
+        "wallMs": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Wall-clock ceiling for this WorkOrder; also the relay task timeout."
+        },
         "tokens": { "type": "integer", "minimum": 1 },
         "usd": { "type": "number", "minimum": 0 }
       }

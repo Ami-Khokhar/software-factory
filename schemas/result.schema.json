@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://factory.local/schemas/result.schema.json",
   "title": "Result",
-  "description": "A worker's artifact handoff. The control path consumes the artifact (branch + commit + evidence), never the free-text notes. This is what makes the factory harness-agnostic: any harness that can commit is a valid worker.",
+  "description": "A worker's artifact handoff. The control path consumes the artifact (branch + commit, or a patch, plus evidence), never the free-text notes. This is what makes the factory harness-agnostic: any harness that can commit is a valid worker.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "workOrderId", "status", "startedAt", "finishedAt"],
@@ -21,6 +21,24 @@
             "branch": { "type": "string", "minLength": 1 },
             "commitSha": { "type": "string", "minLength": 1 },
             "filesChanged": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      ]
+    },
+    "patch": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["format", "diff"],
+          "properties": {
+            "format": {
+              "enum": ["unified", "mbox"],
+              "description": "unified = git diff output; mbox = git format-patch output."
+            },
+            "baseSha": { "type": ["string", "null"], "description": "Commit the diff applies to." },
+            "diff": { "type": "string", "minLength": 1 }
           }
         }
       ]
@@ -68,7 +86,12 @@
   "allOf": [
     {
       "if": { "properties": { "status": { "const": "completed" } }, "required": ["status"] },
-      "then": { "required": ["artifact"], "properties": { "artifact": { "type": "object" } } }
+      "then": {
+        "anyOf": [
+          { "required": ["artifact"], "properties": { "artifact": { "type": "object" } } },
+          { "required": ["patch"], "properties": { "patch": { "type": "object" } } }
+        ]
+      }
     },
     {
       "if": {

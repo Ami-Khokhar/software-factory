@@ -30,8 +30,8 @@
     "acceptance": {
       "type": "array",
       "minItems": 1,
-      "items": { "type": "string", "minLength": 1 },
-      "description": "Frozen at intake. A merge is not completion until these are checked."
+      "items": { "$ref": "#/$defs/criterion" },
+      "description": "Frozen at intake. A merge is not completion until each doneWhen is checked."
     },
     "branch": { "type": ["string", "null"] },
     "prNumber": { "type": ["integer", "null"], "minimum": 1 },
@@ -49,7 +49,15 @@
       "minimum": 0,
       "description": "Mirror of pr-gatekeeper's round number. Never incremented by controller retries."
     },
-    "attempts": { "type": "integer", "minimum": 0 },
+    "attempts": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "What was tried and what each try did, one entry per attempt. Mirrors OpenBot job_blocked.tried."
+    },
+    "blockedOn": {
+      "type": ["string", "null"],
+      "description": "The one thing that must be supplied before work can continue. Required while state is blocked."
+    },
     "blockers": {
       "type": "array",
       "description": "Fingerprinted unresolved findings, for same-problem round counting.",
@@ -62,7 +70,14 @@
       "description": "Optimistic-concurrency version. Every durable write increments it."
     },
     "activeWorkOrderId": { "type": ["string", "null"] },
-    "relayTaskId": { "type": ["string", "null"] },
+    "provider": { "type": ["string", "null"], "description": "Worker provider, e.g. agent-relay." },
+    "providerTaskId": { "type": ["string", "null"], "description": "The provider's id for the active task." },
+    "sessionHandle": { "type": ["string", "null"] },
+    "sessionNative": {
+      "type": ["boolean", "null"],
+      "description": "True when sessionHandle resumes the harness's own session."
+    },
+    "sessionUrl": { "type": ["string", "null"] },
     "worker": { "type": ["string", "null"], "description": "agent-relay agentId used." },
     "owner": {
       "type": ["string", "null"],
@@ -72,7 +87,32 @@
     "createdAt": { "type": "string", "format": "date-time" },
     "updatedAt": { "type": "string", "format": "date-time" }
   },
+  "allOf": [
+    {
+      "if": { "properties": { "state": { "const": "blocked" } }, "required": ["state"] },
+      "then": {
+        "required": ["blockedOn", "attempts"],
+        "properties": {
+          "blockedOn": { "type": "string", "minLength": 1 },
+          "attempts": { "minItems": 2 }
+        }
+      }
+    }
+  ],
   "$defs": {
+    "criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claim", "doneWhen"],
+      "properties": {
+        "claim": { "type": "string", "minLength": 1 },
+        "doneWhen": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A check read back from the produced artifact (a command, a file, a test), never from effort spent."
+        }
+      }
+    },
     "state": {
       "enum": [
         "intent",
@@ -90,9 +130,10 @@
         "human_waiting",
         "blocked",
         "failed",
-        "cancelled"
+        "cancelled",
+        "exhausted"
       ],
-      "description": "merged and closed and cancelled are terminal. human_waiting is NOT terminal: it is an action queue with a path back to ready or closed."
+      "description": "merged, closed, cancelled and exhausted are terminal. exhausted = budget hit, neither done nor blocked. human_waiting is NOT terminal: it is an action queue with a path back to ready or closed."
     },
     "blocker": {
       "type": "object",
