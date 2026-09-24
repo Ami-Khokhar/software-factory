@@ -10,6 +10,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import mcp, tools
 from .config import Config
+from .foreman import Foreman
+from .github import GitHub
 from .store import Store
 
 MAX_BODY = 1_048_576
@@ -63,11 +65,12 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, response)
 
 
-def make_server(config, store):
+def make_server(config, store, github=None):
     server = ThreadingHTTPServer((config.host, config.port), Handler)
     server.daemon_threads = True
     server.config = config
-    server.tools = tools.build(store, config)
+    foreman = Foreman(store, github or GitHub(config.github_token), config)
+    server.tools = tools.build(store, foreman)
     server.audit = lambda name, args, ok: store.log(
         f"tool:{name}", {"args": args, "ok": ok}, workitem_id=args.get("id"))
     if config.tls_cert:

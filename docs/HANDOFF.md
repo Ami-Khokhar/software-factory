@@ -378,7 +378,7 @@ owner adds `OPENCODE_GO_API_KEY` and `GATEKEEPER_READ_TOKEN` (§10 step 0).
 |---|---|---|---|
 | 0′ Contracts | #1 | `phase-0-contracts` | PR open |
 | A Skeleton | #2 | `phase-a-skeleton` | PR open |
-| B Intake + reconcile | #3 | `phase-b-reconcile` | not started |
+| B Intake + reconcile | #3 | `phase-b-reconcile` | PR open |
 | C Foreman actions | #4 | `phase-c-actions` | not started |
 | D Workers | #5 | `phase-d-workers` | not started |
 | E Gate loop | #6 | `phase-e-gate-loop` | not started |

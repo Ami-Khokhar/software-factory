@@ -69,6 +69,8 @@ def handle(message, tools, audit=lambda name, args, ok: None):
             value, ok = tool.fn(args), True
         except ToolError as exc:
             value, ok = {"error": str(exc)}, False
+        except Exception as exc:  # noqa: BLE001 - GitHub or relay failure: tell the caller, stay up
+            value, ok = {"error": f"{type(exc).__name__}: {exc}"}, False
         audit(tool.name, args, ok)
         return _result(message_id, {"content": [{"type": "text", "text": json.dumps(value, indent=1)}],
                                     "isError": not ok})
