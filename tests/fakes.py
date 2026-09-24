@@ -84,6 +84,11 @@ class FakeGitHub:
     def changed_files(self, repo, base, head):
         return self.files[(repo, head)]
 
+    def create_issue(self, repo, title, body, labels):
+        number = 200 + len(self.issues)
+        self.add_issue(repo, number, labels=labels, body=body)
+        return dict(self.issues[(repo, number)], html_url=f"https://github.com/{repo}/issues/{number}")
+
     def create_pull(self, repo, head, base, title, body):
         number = 100 + len(self.pulls)
         self.add_pr(repo, number, head, self.branches[(repo, head)])

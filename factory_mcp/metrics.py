@@ -1,0 +1,43 @@
+"""Ops numbers computed from the audit history: escalation, cost ledger, autonomy rate (HANDOFF §7)."""
+import json
+
+HUMAN_STATES = ("human_waiting", "blocked")
+REACHED_END = frozenset({"merged", "closed", "cancelled", "exhausted", "failed"})
+
+
+def escalation(wi, history):
+    """What OpenBot's job_blocked needs: the reason, the one action, and at least two tries."""
+    if wi["state"] not in HUMAN_STATES:
+        return None
+    tried = list(wi.get("attempts") or []) or [
+        f"{h['at']} {h['action']}: {json.dumps(h['detail'], sort_keys=True)}"
+        for h in history if not h["action"].startswith("tool:")][-3:]
+    return {"reason": wi.get("blockedOn") or wi["state"],
+            "needFromYou": f"Decide {wi['id']}: call factory_resolve_human with retry (the factory "
+                           "tries again), regate (you pushed a fix; re-run the gate) or close.",
+            "owner": wi.get("owner"), "tried": tried}
+
+
+def cost(history, passes):
+    usage = [h["detail"] for h in history if h["action"] == "usage"]
+    return {"passes": passes, "tokens": sum(u.get("tokens") or 0 for u in usage),
+            "usd": round(sum(u.get("usd") or 0 for u in usage), 4)}
+
+
+def autonomy(workitems, history_of):
+    """Merged with no human state and no human commit ÷ all WorkItems that reached an end state.
+
+    A human commit is a PR head no worker Result produced. Merges by pr-gatekeeper are not touches.
+    """
+    ended = [wi for wi in workitems if wi["state"] in REACHED_END]
+    autonomous = 0
+    for wi in ended:
+        history = history_of(wi["id"])
+        worker_shas = {h["detail"]["commitSha"] for h in history if h["action"] == "result"}
+        heads = {h["detail"]["headSha"] for h in history
+                 if h["action"] == "reconcile" and h["detail"].get("headSha")}
+        touched = any(h["detail"].get("to") in HUMAN_STATES for h in history)
+        if wi["state"] in ("merged", "closed") and not touched and heads <= worker_shas:
+            autonomous += 1
+    return {"ended": len(ended), "autonomous": autonomous,
+            "rate": round(autonomous / len(ended), 3) if ended else None}

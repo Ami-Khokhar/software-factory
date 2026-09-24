@@ -18,6 +18,8 @@ class Config:
     workers: tuple = (("codex", "hosted"),)  # (relay agentId, "local"|"hosted"), preferred first
     local_only_repos: frozenset = frozenset()
     git_url: str = "https://github.com/{repo}.git"
+    owner: str = ""  # the person who owns escalations; default is the repo owner
+    poll_seconds: int = 60
     max_passes: int = 4
     wall_ms: int = 20 * 60 * 1000
     protected_paths: tuple = (".github/", "AGENTS.md")
@@ -47,6 +49,8 @@ class Config:
             local_only_repos=frozenset(r.strip() for r in env.get("FACTORY_LOCAL_ONLY_REPOS", "")
                                        .split(",") if r.strip()),
             git_url=env.get("FACTORY_GIT_URL") or defaults.git_url,
+            owner=env.get("FACTORY_OWNER", ""),
+            poll_seconds=int(env.get("FACTORY_POLL_SECONDS") or defaults.poll_seconds),
             max_passes=int(env.get("FACTORY_MAX_PASSES") or defaults.max_passes),
             wall_ms=int(env.get("FACTORY_WALL_MS") or defaults.wall_ms),
         )

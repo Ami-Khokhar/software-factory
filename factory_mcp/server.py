@@ -6,6 +6,8 @@ a request, 202 for a notification, and 405 for the optional GET stream.
 import hmac
 import json
 import ssl
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import mcp, tools
@@ -72,6 +74,7 @@ def make_server(config, store, github=None, relay=None):
     server.config = config
     foreman = Foreman(store, github or GitHub(config.github_token), config,
                       relay or Relay(config.relay_url))
+    server.foreman = foreman
     server.tools = tools.build(store, foreman)
     server.audit = lambda name, args, ok: store.log(
         f"tool:{name}", {"args": args, "ok": ok}, workitem_id=args.get("id"))
@@ -82,9 +85,23 @@ def make_server(config, store, github=None, relay=None):
     return server
 
 
+def poll(foreman, store, seconds):
+    """Tick everything every few seconds. OpenBot's 15-minute routine stays the backstop (F5)."""
+    while True:
+        time.sleep(seconds)
+        try:
+            foreman.tick()
+        except Exception as exc:  # noqa: BLE001 - the poller must outlive one bad tick
+            store.log("poll_error", {"error": str(exc)})
+
+
 def main():
     config = Config.from_env()
-    server = make_server(config, Store(config.db_path))
+    store = Store(config.db_path)
+    server = make_server(config, store)
+    if config.poll_seconds > 0:
+        threading.Thread(target=poll, args=(server.foreman, store, config.poll_seconds),
+                         daemon=True).start()
     scheme = "https" if config.tls_cert else "http"
     print(f"factory-mcp on {scheme}://{config.host}:{server.server_port}/mcp", flush=True)
     server.serve_forever()

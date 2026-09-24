@@ -74,6 +74,10 @@ class GitHub:
         """[{filename, additions, deletions, status}] between base and head (three-dot)."""
         return self._request("GET", f"{self.api}/repos/{repo}/compare/{base}...{head}")[0]["files"]
 
+    def create_issue(self, repo, title, body, labels):
+        return self._request("POST", f"{self.api}/repos/{repo}/issues",
+                             {"title": title, "body": body, "labels": labels})[0]
+
     def create_pull(self, repo, head, base, title, body):
         return self._request("POST", f"{self.api}/repos/{repo}/pulls",
                              {"head": head, "base": base, "title": title, "body": body})[0]

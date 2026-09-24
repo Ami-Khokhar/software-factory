@@ -1,0 +1,5 @@
+# Any model the OpenAI-compatible endpoint publishes (OpenCode Go, OpenAI, local). No Anthropic (D11).
+model:
+  provider: openai
+  credential_secret_ref: openai-api-key
+  default_model: ${FACTORY_MODEL}

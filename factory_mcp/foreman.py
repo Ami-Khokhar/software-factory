@@ -67,7 +67,8 @@ class Foreman:
             return before, wi
         try:
             facts = workitem.observe(self.github, wi)
-            wi = self._write(wi, workitem.reconcile(wi, facts), "reconcile")
+            new = workitem.reconcile(wi, facts)
+            wi = self._write(wi, new, "reconcile", headSha=new.get("headSha"))
             wi = self.act(wi, facts)
         except Conflict:
             wi = self.store.get(workitem_id)
@@ -81,6 +82,8 @@ class Foreman:
     def _write(self, old, new, action, **detail):
         if new == old:
             return old
+        if new["state"] in ("human_waiting", "blocked") and not new.get("owner"):
+            new = dict(new, owner=self.config.owner or new["repo"].split("/")[0])
         stored = self.store.put(new)
         self.store.log(action, dict(detail, **{"from": old["state"], "to": stored["state"]}), old["id"])
         return stored
@@ -90,7 +93,11 @@ class Foreman:
             return self.dispatch(wi, "implement")
         if wi["state"] == "changes_requested":  # findings travel as data (D6)
             findings = [{key: f[key] for key in ("fingerprint", "path", "line", "problem")}
-                        for f in blocking(facts["verdicts"][-1])]
+                        for f in (blocking(facts["verdicts"][-1]) if facts["verdicts"] else [])]
+            last = next((h for h in reversed(self.store.history(wi["id"]))
+                         if h["action"] in ("human_resolved", "dispatch")), None)
+            if last and last["action"] == "human_resolved" and last["detail"].get("note"):
+                findings.append({"fingerprint": "human", "problem": last["detail"]["note"]})
             return self.dispatch(wi, "fix", findings)
         if wi["state"] == "dispatching":  # the intent was written, the relay call may not have landed
             return self.submit(wi, self._order(wi))
@@ -142,6 +149,8 @@ class Foreman:
         if task["status"] != "completed":
             return self.fail(wi, order, f"{task['agentId']}: task {task['status']}: {task.get('error')}")
         result = documents.parse_result(task.get("output"))
+        if isinstance(result, dict) and isinstance(result.get("usage"), dict):
+            self.store.log("usage", result["usage"], wi["id"])  # the cost ledger, pass or fail
         errors = documents.check_result(result, order)
         if not errors and result["status"] != "completed":
             errors = [f"worker reported {result['status']}: {result.get('error')}"]
@@ -157,8 +166,7 @@ class Foreman:
         if errors:
             return self.fail(wi, order, f"{task['agentId']}: " + "; ".join(errors))
         sha = artifact["commitSha"]
-        self.store.log("result", {"workOrder": order["id"], "commitSha": sha,
-                                  "usage": result.get("usage")}, wi["id"])
+        self.store.log("result", {"workOrder": order["id"], "commitSha": sha}, wi["id"])
         done = dict(wi, headSha=sha, attempts=[], activeWorkOrderId=None, providerTaskId=None)
         if result.get("session"):  # the harness's own session, resumable by a later fix
             done.update(sessionHandle=result["session"].get("handle"),
@@ -214,3 +222,36 @@ class Foreman:
                 f"{len(attempts)} worker attempts at the {order['kind']} WorkOrder failed. Fix the "
                 "cause named in attempts, then call factory_resolve_human."))
         return self._write(wi, new, "attempt_failed", reason=reason, worker=wi.get("worker"))
+
+    def resolve_human(self, workitem_id, resolution, note, by):
+        """A person's answer to human_waiting or blocked (D5): retry, regate or close."""
+        wi = self.store.get(workitem_id)
+        if wi is None or wi["state"] not in ("human_waiting", "blocked"):
+            raise ToolError(f"{workitem_id} is not waiting on a person")
+        if resolution == "retry":
+            new = dict(wi, state="changes_requested" if wi.get("prNumber") else "ready")
+        elif resolution == "regate" and wi.get("prNumber"):
+            new = dict(wi, state="reviewing")
+        elif resolution == "close":
+            new = dict(wi, state="cancelled", terminalReason=f"closed by {by}: {note}")
+        else:
+            raise ToolError("resolution must be retry, regate (needs a PR) or close")
+        if not self.store.acquire(workitem_id, self.holder):
+            raise ToolError(f"{workitem_id} is being ticked; try again")
+        try:
+            return self._write(wi, dict(new, blockedOn=None, attempts=[]), "human_resolved",
+                               resolution=resolution, note=note, by=by)
+        finally:
+            self.store.release(workitem_id, self.holder)
+
+    def propose_issue(self, repo, title, body):
+        """Planner: open an issue labelled factory:proposed. A person adds factory:ready."""
+        if repo not in self.config.repos:
+            raise ToolError(f"{repo} is not in FACTORY_REPOS")
+        criteria, missing = workitem.parse_acceptance(body)
+        if missing or not criteria:
+            raise ToolError("The body needs an '## Acceptance' list of "
+                            "'- <claim> — done when: <check>' bullets")
+        issue = self.github.create_issue(repo, title, body, [workitem.PROPOSED])
+        self.store.log("proposed", {"title": title}, workitem.workitem_id(repo, issue["number"]))
+        return {"issue": issue["number"], "url": issue.get("html_url")}

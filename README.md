@@ -36,3 +36,8 @@ FACTORY_MCP_TOKEN=<secret> FACTORY_REPOS=owner/repo FACTORY_GITHUB_TOKEN=<token>
 | `FACTORY_LOCAL_ONLY_REPOS` | Repos whose work may only go to `local` workers |
 | `FACTORY_MAX_PASSES`, `FACTORY_WALL_MS` | WorkOrder budget: worker passes per WorkItem (4), wall time per pass (20 min) |
 | `FACTORY_GIT_URL` | Where patch Results are pushed, default `https://github.com/{repo}.git` |
+| `FACTORY_OWNER` | GitHub login that owns escalations, default the repo owner |
+| `FACTORY_POLL_SECONDS` | Background tick interval, default 60; `0` leaves ticking to the OpenBot routine |
+
+The OpenBot tenant package is in `tenant/factory/`; install it with `scripts/install-tenant.sh`
+(see `docs/HANDOFF.md` §14).

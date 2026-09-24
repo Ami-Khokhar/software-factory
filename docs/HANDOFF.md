@@ -177,7 +177,8 @@ Policy rules (CEL, fail-closed):
 
 - factory Bots: allow `mcp.server == "factory-mcp"`; deny all other MCP, computer and file tools;
 - deny any tool named like `merge` from any Bot (belt and braces; factory-mcp has none);
-- deny secret-looking tool inputs;
+- ~~deny secret-looking tool inputs~~: not expressible, the CEL context carries no tool inputs
+  (`policy.ts` `PolicyContext`); factory-mcp tools take no secrets;
 - scheduled runs (`initiator.*` = routine) may call only `factory_tick` and `factory_status`.
 
 Inside `factory-mcp` (enforced in code, tested):
@@ -383,4 +384,29 @@ owner adds `OPENCODE_GO_API_KEY` and `GATEKEEPER_READ_TOKEN` (§10 step 0).
 | C Foreman actions | #4 | `phase-c-actions` | PR open |
 | D Workers | #5 | `phase-d-workers` | PR open |
 | E Gate loop | #6 | `phase-e-gate-loop` | PR open |
-| F HITL + ops | #7 | `phase-f-hitl` | not started |
+| F HITL + ops | #7 | `phase-f-hitl` | PR open |
+
+When every PR above is open, the offline work is complete. Merge them in order (0′ first); each
+PR's base is the previous branch, so after one merges, retarget the next one to `main`.
+
+---
+
+## 14. Live setup (issue #8, owner machine)
+
+1. **factory-mcp over https.** OpenBot refuses `http`, IP literals and `localhost` for custom
+   servers (F2). Example: add `127.0.0.1 factory.lan.example` to `/etc/hosts`, run
+   `mkcert factory.lan.example`, start factory-mcp with `FACTORY_TLS_CERT`/`FACTORY_TLS_KEY`, and
+   give OpenBot's server `NODE_EXTRA_CA_CERTS="$(mkcert -CAROOT)/rootCA.pem"`. If OpenBot runs
+   in Docker, the hosts entry must resolve inside the container too.
+2. **Tenant.** `scripts/install-tenant.sh "$HOME/Documents/Coding projects/openbot"`, put the
+   printed lines in OpenBot's `.env`, and restart OpenBot.
+3. **Register the server.** In OpenBot admin, add a custom MCP server with id **`factory-mcp`**
+   (the policy matches this id), URL `https://factory.lan.example:43125/mcp`, and the
+   `FACTORY_MCP_TOKEN` value as the token. Grant every `factory_*` tool to Foreman, and
+   `factory_propose_issue` + `factory_status` to Planner. Grant Routines `create_routine` to Foreman.
+4. **Routine.** In `#factory`, ask Foreman: "every 15 minutes, call factory_tick with no id".
+5. **First WorkItem.** On an allowlisted repo, an issue with an `## Acceptance` list of
+   `- <claim> — done when: <check>` bullets and the `factory:ready` label. Tell Foreman to work
+   on it. Check in the OpenBot audit that the policy row's `bot.id` is `factory-foreman`.
+6. **Relay.** agent-relay running with the agents named in `FACTORY_WORKERS`; each agent's `cwd`
+   in `~/.config/agent-relay/agents.json` is a checkout of the target repo with push access.
