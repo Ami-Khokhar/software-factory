@@ -105,7 +105,8 @@ class GitHub:
         if rest == "/issues" and method == "POST":
             number = 1 + max(self.issues)
             self.issues[number] = {"number": number, "title": body["title"], "body": body["body"],
-                                   "state": "open", "labels": [{"name": n} for n in body["labels"]]}
+                                   "state": "open", "labels": [{"name": n} for n in body["labels"]],
+                                   "user": {"login": REPO.split("/")[0]}}
             return 201, self.issues[number]
         if match := re.fullmatch(r"/issues/(\d+)/comments", rest):
             return 200, self.comments.get(int(match.group(1)), [])
@@ -225,7 +226,7 @@ def main(relay_checkout, lose_store=False):
 
     github = GitHub(bare)
     github.issues[7] = {"number": 7, "title": "Fix the greeting", "body": ISSUE, "state": "open",
-                        "labels": [{"name": "factory:ready"}]}
+                        "labels": [{"name": "factory:ready"}], "user": {"login": REPO.split("/")[0]}}
     github_url = serve_github(github)
 
     relay_port, mcp_port, token = free_port(), free_port(), "rehearsal-token"

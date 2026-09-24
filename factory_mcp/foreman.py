@@ -10,6 +10,10 @@ from .relay import RelayError
 from .store import Conflict
 from .verdict import blocking
 
+# States that need a person. Entering one posts a comment on the issue, so the owner hears of it.
+ATTENTION = ("human_waiting", "blocked", "exhausted")
+WORKING = ("dispatching", "implementing")
+
 
 class Foreman:
     def __init__(self, store, github, config, relay=None):
@@ -18,6 +22,7 @@ class Foreman:
         self.config = config
         self.relay = relay
         self.holder = uuid.uuid4().hex
+        self._skipped = set()  # rebuild refusals already logged by this process
 
     def intake(self, repo, number):
         if repo not in self.config.repos:
@@ -25,11 +30,19 @@ class Foreman:
         existing = self.store.get(workitem.workitem_id(repo, number))
         if existing:
             return existing
+        issue = self.github.issue(repo, number)
+        author = (issue.get("user") or {}).get("login")
+        if not self.config.trusts(repo, author):
+            raise ToolError(f"{repo}#{number} was opened by {author}, who is not a trusted author "
+                            "(FACTORY_TRUSTED_AUTHORS); a trusted person must open the issue")
         try:
-            wi = workitem.intake(repo, self.github.issue(repo, number))
+            wi = workitem.intake(repo, issue)
         except ValueError as exc:
             raise ToolError(str(exc)) from None
-        wi = self.store.put(wi)
+        try:
+            wi = self.store.put(wi)
+        except Conflict:  # a concurrent tick took it in first
+            return self.store.get(wi["id"])
         self.store.log("intake", {"state": wi["state"]}, wi["id"])
         return wi
 
@@ -44,8 +57,11 @@ class Foreman:
                         if self.github.pulls_for_branch(repo, workitem.branch_for(issue["number"])):
                             self.store.log("rebuilt", {}, found[-1])  # its earlier history is gone
                     except ToolError as exc:
-                        self.store.log("rebuild_skipped", {"reason": str(exc)},
-                                       workitem.workitem_id(repo, issue["number"]))
+                        key = (repo, issue["number"], str(exc))
+                        if key not in self._skipped:  # once per process, not once a minute
+                            self._skipped.add(key)
+                            self.store.log("rebuild_skipped", {"reason": str(exc)},
+                                           workitem.workitem_id(repo, issue["number"]))
         return found
 
     def tick(self, workitem_id=None):
@@ -94,11 +110,26 @@ class Foreman:
             new = dict(new, owner=self.config.owner or new["repo"].split("/")[0])
         stored = self.store.put(new)
         self.store.log(action, dict(detail, **{"from": old["state"], "to": stored["state"]}), old["id"])
+        if stored["state"] in ATTENTION and old["state"] != stored["state"]:
+            self._notify(stored)
         return stored
 
+    def _notify(self, wi):
+        """Tell the owner on the issue. A failed comment is logged; it never blocks the transition."""
+        reason = " ".join(str(wi.get("blockedOn") or wi.get("terminalReason") or wi["state"]).split())
+        ask = ("Nothing more will happen until a person decides: call `factory_resolve_human` with "
+               "`retry`, `regate` or `close`." if wi["state"] != "exhausted" else
+               "The WorkItem has used its budget and stopped.")
+        body = (f"**software-factory needs a person.** WorkItem `{wi['id']}` is `{wi['state']}`.\n\n"
+                f"```\n{reason[:600]}\n```\n\n{ask}\n\n@{wi.get('owner') or wi['repo'].split('/')[0]}")
+        try:
+            self.github.comment(wi["repo"], wi["issueNumber"], body)
+        except GitHubError as exc:
+            self.store.log("notify_failed", {"error": str(exc)}, wi["id"])
+
     def act(self, wi, facts):
-        if wi["state"] == "ready":
-            return self.dispatch(wi, "implement")
+        if wi["state"] == "ready":  # a retry says why the last attempt failed
+            return self.dispatch(wi, "implement", self._attempt_findings(wi))
         if wi["state"] == "changes_requested":  # findings travel as data (D6)
             findings = [{key: f[key] for key in ("fingerprint", "path", "line", "problem")}
                         for f in (blocking(facts["verdicts"][-1]) if facts["verdicts"] else [])]
@@ -106,7 +137,7 @@ class Foreman:
                          if h["action"] in ("human_resolved", "dispatch")), None)
             if last and last["action"] == "human_resolved" and last["detail"].get("note"):
                 findings.append({"fingerprint": "human", "problem": last["detail"]["note"]})
-            return self.dispatch(wi, "fix", findings)
+            return self.dispatch(wi, "fix", findings + self._attempt_findings(wi))
         if wi["state"] == "dispatching":  # the intent was written, the relay call may not have landed
             return self.submit(wi, self._order(wi))
         if wi["state"] == "implementing":
@@ -120,6 +151,11 @@ class Foreman:
                     "gate_silent")
         return wi
 
+    @staticmethod
+    def _attempt_findings(wi):
+        attempts = wi.get("attempts") or []
+        return [{"fingerprint": "previous-attempt", "problem": attempts[-1]}] if attempts else []
+
     def _order(self, wi):
         return next(o for o in self.store.workorders(wi["id"]) if o["id"] == wi["activeWorkOrderId"])
 
@@ -127,6 +163,10 @@ class Foreman:
         return self.github.repository(repo)["default_branch"]
 
     def dispatch(self, wi, kind, findings=()):
+        # Workers of one repo share its checkout, so one pass runs per repo; the rest wait their turn.
+        if any(other["repo"] == wi["repo"] and other["id"] != wi["id"] and other["state"] in WORKING
+               for other in self.store.all()):
+            return wi
         orders = self.store.workorders(wi["id"])
         if len(orders) >= self.config.max_passes:
             return self._write(wi, dict(wi, state="exhausted", terminalReason=(
@@ -148,7 +188,8 @@ class Foreman:
 
     def submit(self, wi, order):
         task = self.relay.submit(wi["worker"], documents.worker_input(order, wi["branch"]),
-                                 order["idempotencyKey"], order["budget"]["wallMs"])
+                                 order["idempotencyKey"], order["budget"]["wallMs"],
+                                 cwd=self.config.checkout(wi["repo"]))
         return self._write(wi, dict(wi, state="implementing", provider="agent-relay",
                                     providerTaskId=task["id"], sessionHandle=task.get("sessionId"),
                                     sessionNative=False),

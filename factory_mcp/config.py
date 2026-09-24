@@ -25,6 +25,16 @@ class Config:
     max_passes: int = 4
     wall_ms: int = 20 * 60 * 1000
     protected_paths: tuple = (".github/", "AGENTS.md")
+    checkout_root: str = ""  # worker checkouts live at <root>/<owner>/<repo>; empty: the agent's cwd
+    trusted_authors: frozenset = frozenset()  # issue authors a worker may act for; empty: repo owner
+
+    def checkout(self, repo):
+        """The worker checkout for `repo`, sent to the relay as the task cwd, or None."""
+        return str(Path(self.checkout_root, *repo.split("/"))) if self.checkout_root else None
+
+    def trusts(self, repo, author):
+        """Issue text reaches a worker only when a trusted person wrote it (D6)."""
+        return author in (self.trusted_authors or {repo.split("/")[0]})
 
     @classmethod
     def from_env(cls, env=None):
@@ -57,4 +67,7 @@ class Config:
             gate_wait_seconds=int(env.get("FACTORY_GATE_WAIT_SECONDS") or defaults.gate_wait_seconds),
             max_passes=int(env.get("FACTORY_MAX_PASSES") or defaults.max_passes),
             wall_ms=int(env.get("FACTORY_WALL_MS") or defaults.wall_ms),
+            checkout_root=env.get("FACTORY_CHECKOUT_ROOT", ""),
+            trusted_authors=frozenset(a.strip() for a in env.get("FACTORY_TRUSTED_AUTHORS", "").split(",")
+                                      if a.strip()),
         )
