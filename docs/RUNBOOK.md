@@ -33,7 +33,8 @@ registry path in `/healthz`. It was opened with `factory new`, and nothing else 
    factory close  Ami-Khokhar/agent-relay#22 "not worth it"             # give up
    ```
 
-4. **Done** is a PR merged by pr-gatekeeper and the issue closed (`Closes #n` is in every PR).
+4. **Done** is a PR merged by pr-gatekeeper and the issue closed. factory-mcp closes the issue,
+   because GitHub does not act on `Closes #n` when the gate's workflow token merges.
 
 `factory status` lists every WorkItem. `factory status <owner/repo#n>` shows one WorkItem, its
 last steps, and what it needs from you.
@@ -64,9 +65,9 @@ last steps, and what it needs from you.
 
 | Part | It can | It cannot |
 |---|---|---|
-| Worker (pi, GLM 5.3 Flash) | Edit and commit in a throwaway container that holds one repo checkout and its model key | Push, open PRs, read your files, or use your GitHub account: it has no GitHub credential |
+| Worker (pi, GLM 5.3 Flash) | Edit and commit in a throwaway container that holds a fresh copy of one repo and its model key | Push, open PRs, read your files, or use your GitHub account: it has no GitHub credential, and its copy has no remote |
 | worker/runner.py | Run the repo's gate `verify` command from the base commit, in the same sandbox | Accept a patch whose tests fail |
-| factory-mcp | Push `factory/<issue>` and open the PR, after it checks the branch, protected paths (`.github/`, `AGENTS.md`), and the size limits | Merge. There is no merge tool |
+| factory-mcp | Push `factory/<issue>` and open the PR. It refuses a patch that touches a protected path (`.github/`, `AGENTS.md`) before the push, then checks the pushed branch and the size limits | Merge. There is no merge tool |
 | pr-gatekeeper | Review and merge, or ask for changes, or send the PR to a person (HUMAN) | Be bypassed by the factory: a HUMAN verdict waits for you |
 
 Limits: a WorkItem gets at most 4 worker passes (then `exhausted`). Two failed attempts in a row

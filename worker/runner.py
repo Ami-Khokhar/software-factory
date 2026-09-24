@@ -5,11 +5,13 @@ agent-relay starts this with the agent's args and the task input as the last arg
 
     runner.py [--image IMAGE] -- <harness argv...> <task input>
 
-The relay task's cwd is a checkout of the WorkOrder's repo. The harness runs in a container that
-sees only that checkout and a copy of the harness's model credential, so it holds no GitHub
-credential and cannot push (D6, ADR-0007). This script is the trusted half: it prepares the
-checkout, turns the harness's local commits into a patch, and runs the repo's own gate `verify`
-command in the same sandbox, so the evidence is not the model's claim. factory-mcp pushes the patch.
+The relay task's cwd is the persistent checkout of the WorkOrder's repo. It is never mounted into a
+container: each pass gets a fresh copy of it, and only the copy is mounted. The harness runs in a
+container that sees only that copy and a copy of the harness's model credential, so it holds no
+GitHub credential and cannot push (D6, ADR-0007). Host git never runs in a tree the harness could
+have written, because hooks, config and filter drivers in `.git` would run on the host. Committing
+the harness's work and computing the patch happen in the sandbox, and so does the repo's own gate
+`verify` command, so the evidence is not the model's claim. factory-mcp pushes the patch.
 """
 import argparse
 import json
@@ -24,6 +26,13 @@ import uuid
 from datetime import datetime, timezone
 
 IMAGE = "factory-worker:latest"
+# Run in the sandbox after the harness: commit what it left, refuse rewritten history, print the diff.
+EXTRACT = """set -e
+git add -A
+if ! git diff --cached --quiet; then git -c core.hooksPath=/dev/null commit -q -m "$FACTORY_GOAL"; fi
+git merge-base --is-ancestor "$FACTORY_BASE" HEAD || exit 3
+git diff --binary "$FACTORY_BASE" HEAD
+"""
 MAX_PATCH_BYTES = 2_000_000
 PI_AUTH = os.path.expanduser("~/.pi/agent/auth.json")
 CONTAINER_AGENT_DIR = "/home/node/.pi/agent"
@@ -64,8 +73,9 @@ def origin_repo(cwd):
     return match.group(1) if match else url
 
 
-def prepare(cwd, order, branch):
-    """Put the checkout on `branch` at the commit this WorkOrder builds on. Returns that commit."""
+def prepare(cwd, order, branch, work):
+    """Fetch in the persistent checkout, then make `work` a fresh copy on `branch` at the commit this
+    WorkOrder builds on. Returns that commit. The copy has no remote, so a push has nowhere to go."""
     git(cwd, "fetch", "-q", "--prune", "origin")
     if order["kind"] == "fix":
         base = order.get("headSha")
@@ -75,8 +85,10 @@ def prepare(cwd, order, branch):
     if not base:
         raise WorkerError("the WorkOrder names no commit to build on")
     git(cwd, "cat-file", "-e", f"{base}^{{commit}}")
-    git(cwd, "checkout", "-q", "-f", "-B", branch, base)
-    git(cwd, "clean", "-q", "-ffdx")
+    git(os.path.dirname(work), "clone", "-q", "--no-hardlinks", "--no-checkout", cwd, work)
+    git(work, "fetch", "-q", cwd, "+refs/remotes/origin/*:refs/remotes/source/*")
+    git(work, "remote", "remove", "origin")
+    git(work, "checkout", "-q", "-f", "-B", branch, base)
     return base
 
 
@@ -94,8 +106,8 @@ class Sandbox:
     """`docker run` for one WorkOrder. Killed on SIGTERM, because the relay kills this process on a
     timeout or a cancel and a container outlives the docker CLI that started it."""
 
-    def __init__(self, image, cwd, agent_dir, label):
-        self.image, self.cwd, self.agent_dir, self.label = image, cwd, agent_dir, label
+    def __init__(self, image, agent_dir, label):
+        self.image, self.agent_dir, self.label = image, agent_dir, label
         self.names = []
         signal.signal(signal.SIGTERM, self._stop)
 
@@ -104,46 +116,45 @@ class Sandbox:
             subprocess.Popen(["docker", "kill", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         sys.exit(143)
 
-    def run(self, argv, seconds, with_agent_dir):
+    def run(self, argv, seconds, mount, with_agent_dir=False, env=None):
+        """Returns (exit code, stdout, stderr). Only `mount` (and the agent dir, when asked) is visible."""
         name = f"factory-worker-{uuid.uuid4().hex[:12]}"
         self.names.append(name)
         cmd = ["docker", "run", "--rm", "--init", "--name", name, "--label", f"factory-worker={self.label}",
                "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "1024",
-               "--memory", "6g", "--cpus", "4", "-v", f"{self.cwd}:/work", "-w", "/work"]
+               "--memory", "6g", "--cpus", "4", "-v", f"{mount}:/work", "-w", "/work"]
         if with_agent_dir:
             cmd += ["-v", f"{self.agent_dir}:{CONTAINER_AGENT_DIR}", "-e", f"PI_CODING_AGENT_DIR={CONTAINER_AGENT_DIR}"]
+        for key, value in (env or {}).items():
+            cmd += ["-e", f"{key}={value}"]
         # `timeout` inside the container ends it on its own if this process is killed first.
         cmd += [self.image, "timeout", "--kill-after=10", str(int(seconds)), *argv]
         try:
             done = subprocess.run(cmd, capture_output=True, text=True, timeout=seconds + 60)
         except subprocess.TimeoutExpired:
             subprocess.run(["docker", "kill", name], capture_output=True)
-            return 124, "timed out"
+            return 124, "", "timed out"
         except OSError as exc:
             raise WorkerError(f"docker is not available: {exc}") from None
         if done.returncode == 125:
             raise WorkerError(f"docker could not start the sandbox: {done.stderr.strip()[-300:]}")
-        return done.returncode, (done.stdout + done.stderr)
+        return done.returncode, done.stdout, done.stderr
 
 
-def collect(cwd, base, goal):
-    """The harness's work as one unified diff against `base`. Uncommitted changes are committed
-    first, so a harness that forgot to commit still hands its work over."""
-    if git(cwd, "status", "--porcelain"):
-        git(cwd, "add", "-A")
-        git(cwd, "-c", "user.name=factory-worker", "-c", "user.email=factory-worker@users.noreply.github.com",
-            "commit", "-q", "-m", goal)
-    head = git(cwd, "rev-parse", "HEAD")
-    if head == base:
+def collect(sandbox, work, base, goal):
+    """The harness's work as one unified diff against `base`, computed in the sandbox. Uncommitted
+    changes are committed first, so a harness that forgot to commit still hands its work over."""
+    code, diff, err = sandbox.run(["sh", "-c", EXTRACT], 300, work,
+                                  env={"FACTORY_BASE": base, "FACTORY_GOAL": goal})
+    if code == 3:
+        raise WorkerError("the harness rewrote history below the commit it was given")
+    if code != 0:
+        raise WorkerError(f"collecting the work failed ({code}): {' '.join(err.split())[-300:]}")
+    if not diff.strip():
         raise WorkerError("the harness made no change")
-    try:
-        git(cwd, "merge-base", "--is-ancestor", base, head)
-    except WorkerError:
-        raise WorkerError("the harness rewrote history below the commit it was given") from None
-    diff = git(cwd, "diff", "--binary", base, head) + "\n"
     if len(diff.encode()) > MAX_PATCH_BYTES:
         raise WorkerError(f"the patch is over {MAX_PATCH_BYTES} bytes")
-    return diff
+    return diff if diff.endswith("\n") else diff + "\n"
 
 
 def main(argv=None):
@@ -158,7 +169,8 @@ def main(argv=None):
     cwd = os.getcwd()
     result = {"schemaVersion": "factory.result/v1", "workOrderId": None, "status": "failed",
               "evidence": [], "startedAt": now()}
-    agent_dir = tempfile.mkdtemp(prefix="factory-agent-")
+    scratch = tempfile.mkdtemp(prefix="factory-run-")
+    agent_dir, work = os.path.join(scratch, "agent"), os.path.join(scratch, "work")
     try:
         order = workorder_from(text)
         result["workOrderId"] = order["id"]
@@ -166,21 +178,23 @@ def main(argv=None):
         if repo != order["repo"]:
             raise WorkerError(f"the checkout {cwd} is {repo}, not {order['repo']}")
         branch = "factory/" + order["workItemId"].rsplit("#", 1)[1]
-        base = prepare(cwd, order, branch)
+        base = prepare(cwd, order, branch, work)
         verify = verify_command(cwd, base)
         if not verify:
             raise WorkerError("the base commit has no .github/pr-gatekeeper.json verify command")
         if not os.path.isfile(PI_AUTH):
             raise WorkerError(f"no model credential at {PI_AUTH}")
+        os.mkdir(agent_dir, 0o700)
         shutil.copyfile(PI_AUTH, os.path.join(agent_dir, "auth.json"))
         seconds = max(120, order["budget"]["wallMs"] // 1000 - 60)
-        sandbox = Sandbox(args.image, cwd, agent_dir, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]))
-        code, output = sandbox.run([*harness, text], seconds * 0.75, with_agent_dir=True)
-        print(output[-4000:], flush=True)  # for the relay log; the Result line comes last
+        sandbox = Sandbox(args.image, agent_dir, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]))
+        code, out, err = sandbox.run([*harness, text], seconds * 0.7, work, with_agent_dir=True)
+        print((out + err)[-4000:], flush=True)  # for the relay log; the Result line comes last
         if code == 124:
             raise WorkerError("the harness timed out")
-        diff = collect(cwd, base, order["goal"])
-        code, output = sandbox.run(["sh", "-c", verify], seconds * 0.25, with_agent_dir=False)
+        diff = collect(sandbox, work, base, order["goal"])
+        code, out, err = sandbox.run(["sh", "-c", verify], seconds * 0.25, work)
+        output = out + err
         tail = output[-2000:].replace("```", "")
         result["evidence"] = [{"kind": "test", "command": verify, "exit": code, "tail": tail}]
         if code != 0:
@@ -191,7 +205,7 @@ def main(argv=None):
     except Exception as exc:  # noqa: BLE001 - any failure must still end in a Result line
         result["error"] = f"runner failed: {type(exc).__name__}: {exc}"
     finally:
-        shutil.rmtree(agent_dir, ignore_errors=True)
+        shutil.rmtree(scratch, ignore_errors=True)
     result["finishedAt"] = now()
     print(json.dumps(result), flush=True)
     return 0

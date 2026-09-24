@@ -448,4 +448,13 @@ credential. The worker contract is now:
   last attempt failed, and comments on the issue when a WorkItem needs a person.
 - Operations: `scripts/factory` (the operator command) and `scripts/install-services.sh`
   (launchd). The operator guide is `docs/RUNBOOK.md`.
+- The container never sees the persistent checkout. Each pass gets a fresh copy of it with no
+  remote, and committing the harness's work and computing the patch happen in the sandbox.
+  Host git never runs in a tree the harness wrote: a planted hook or filter driver in `.git`
+  would run on the host (`tests/test_worker_runner.py` reproduces this).
+- `patches.apply` refuses a patch that touches a protected path before the push, because a
+  pushed workflow file runs (`on: push`) with the repo's secrets. `check_artifact` still checks
+  what GitHub holds after the push.
+- GitHub does not act on `Closes #n` when a workflow token merges, which is how pr-gatekeeper
+  merges. factory-mcp closes the issue of a merged WorkItem itself (`merged` → `closed`).
 

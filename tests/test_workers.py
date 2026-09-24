@@ -132,9 +132,27 @@ class WorkerTest(unittest.TestCase):
         result["patch"] = {"format": "unified", "diff": "diff --git a/nope.py b/nope.py\nbroken\n"}
         self.relay.finish(wi["providerTaskId"], output=json.dumps(result))
         wi = foreman.tick(ID)["workItem"]
-        self.assertIn("patch did not apply", wi["attempts"][0])
+        self.assertIn("patch not pushed: git apply failed", wi["attempts"][0])
         wi = foreman.tick(ID)["workItem"]
         self.assertEqual(self.relay.tasks[wi["providerTaskId"]]["agentId"], "pi-glm")
+
+    def test_a_patch_to_a_protected_path_is_never_pushed(self):
+        # A pushed workflow file runs (`on: push`) with the repo's secrets before any later check.
+        git("checkout", "-q", "-B", "factory/7", "origin/main", cwd=self.work)
+        os.makedirs(os.path.join(self.work, ".github", "workflows"))
+        self.write(".github/workflows/x.yml", "on: push\n")
+        self.write("app.py", "print('new')\n")
+        git("add", "-A", cwd=self.work)
+        diff = git("diff", "--cached", "origin/main", cwd=self.work) + "\n"
+        foreman = self.foreman()
+        wi = foreman.tick(ID)["workItem"]
+        result = json.loads(result_line(wi["activeWorkOrderId"], "x").splitlines()[-1])
+        del result["artifact"]
+        result["patch"] = {"format": "unified", "diff": diff}
+        self.relay.finish(wi["providerTaskId"], output=json.dumps(result))
+        wi = foreman.tick(ID)["workItem"]
+        self.assertIn("changes protected path .github/workflows/x.yml", wi["attempts"][0])
+        self.assertIsNone(self.github.branch_head(REPO, "factory/7"))
 
     def test_local_only_repo(self):
         wi = self.foreman(workers=WORKERS, local_only_repos=frozenset({REPO})).tick(ID)["workItem"]

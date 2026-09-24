@@ -149,6 +149,9 @@ class Foreman:
                     f"no pr-gatekeeper verdict on {wi.get('headSha')} after "
                     f"{self.config.gate_wait_seconds // 60} min; check the gate workflow run")),
                     "gate_silent")
+        if wi["state"] == "merged":  # GitHub skips `Closes #n` when the gate's workflow token merges
+            self.github.close_issue(wi["repo"], wi["issueNumber"])
+            return self._write(wi, dict(wi, state="closed"), "issue_closed", pr=wi.get("prNumber"))
         return wi
 
     @staticmethod
@@ -218,7 +221,7 @@ class Foreman:
             try:
                 artifact = self.push_patch(wi, order, result["patch"])
             except patches.PatchError as exc:
-                errors = [f"patch did not apply: {exc}"]
+                errors = [f"patch not pushed: {exc}"]
         files = []
         if not errors:
             errors, files = self.check_artifact(wi, order, artifact)
@@ -242,7 +245,8 @@ class Foreman:
         base = patch.get("baseSha") or (order["headSha"] if order["kind"] == "fix" else order["baseSha"])
         sha = patches.apply(self.config.git_url.format(repo=wi["repo"]), self.config.github_token,
                             wi["branch"], base, patch, f"{wi['goal']} (#{wi['issueNumber']})\n\n"
-                            f"WorkOrder {order['id']}", force=order["kind"] != "fix")
+                            f"WorkOrder {order['id']}", force=order["kind"] != "fix",
+                            protected=order["constraints"]["protectedPaths"])
         return {"branch": wi["branch"], "commitSha": sha}
 
     def check_artifact(self, wi, order, artifact):
@@ -256,8 +260,7 @@ class Foreman:
         limits = order["constraints"]
         errors = [f"changes protected path {name}" for f in files  # a rename moves the old path too
                   for name in (f["filename"], f.get("previous_filename")) if name
-                  and any(name == p or (p.endswith("/") and name.startswith(p))
-                          for p in limits["protectedPaths"])]
+                  and patches.is_protected(name, limits["protectedPaths"])]
         lines = sum(f["additions"] + f["deletions"] for f in files)
         if lines > limits["maxChangedLines"] or len(files) > limits["maxChangedFiles"]:
             errors.append(f"{lines} lines in {len(files)} files exceeds the WorkOrder constraints")

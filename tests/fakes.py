@@ -90,6 +90,9 @@ class FakeGitHub:
         self.posted.append((repo, number, body))
         return {"id": len(self.posted), "body": body}
 
+    def close_issue(self, repo, number):
+        self.issues[(repo, number)]["state"] = "closed"
+
     def create_issue(self, repo, title, body, labels):
         number = 200 + len(self.issues)
         self.add_issue(repo, number, labels=labels, body=body)

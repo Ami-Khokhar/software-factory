@@ -69,16 +69,24 @@ class GateLoopTest(unittest.TestCase):
         self.assertTrue(all(b["resolved"] for b in wi["blockers"]))
 
         self.github.pulls[0].update(state="closed", merged_at="2026-09-24T03:00:00Z")
-        wi = self.tick()
-        self.assertEqual((wi["state"], wi.get("terminalReason")), ("merged", None))
+        wi = self.tick()  # GitHub does not close the issue when the gate's workflow token merges
+        self.assertEqual((wi["state"], wi.get("terminalReason")), ("closed", None))
+        self.assertEqual(self.github.issues[(REPO, 7)]["state"], "closed")
+        self.assertEqual(self.foreman.store.history(ID)[-1]["action"], "issue_closed")
+
+    def test_an_issue_github_closed_on_merge_is_not_closed_again(self):
+        self.gate("MERGE", 1, "c1")
+        self.tick()
+        self.github.pulls[0].update(state="closed", merged_at="2026-09-24T03:00:00Z")
         self.github.issues[(REPO, 7)]["state"] = "closed"
+        self.github.close_issue = None  # any call fails the test
         self.assertEqual(self.tick()["state"], "closed")
 
     def test_merge_without_a_merge_verdict_is_flagged(self):
         self.gate("CHANGES", 1, "c1", MISSING_TEST)
         self.github.pulls[0].update(state="closed", merged_at="2026-09-24T03:00:00Z")  # by a person
         wi = self.tick()
-        self.assertEqual(wi["state"], "merged")
+        self.assertEqual(wi["state"], "closed")
         self.assertEqual(wi["terminalReason"], "merged without a pr-gatekeeper MERGE verdict on c1")
 
     def test_same_problem_twice_goes_to_a_human(self):

@@ -18,11 +18,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "worker"))
 import runner  # noqa: E402
 
 HARNESS = r'''
-import subprocess, sys
+import os, stat, subprocess, sys
 mode = sys.argv[1]
 def git(*args):
     subprocess.run(["git", *args], check=True, capture_output=True)
-if mode in ("fix", "nocommit"):
+if mode in ("fix", "nocommit", "plant"):
     open("app.txt", "w").write("fixed\n")
 if mode == "cheat":
     open(".github/pr-gatekeeper.json", "w").write('{"verify": "true"}')
@@ -30,18 +30,24 @@ if mode == "cheat":
 if mode in ("fix", "cheat"):
     git("add", "-A")
     git("-c", "user.name=h", "-c", "user.email=h@h", "commit", "-qm", "harness work")
+if mode == "plant":  # a filter driver and hooks, which run wherever git touches this tree
+    trap = '[ -n "$FACTORY_TEST_SANDBOX" ] || touch "$FACTORY_TEST_MARKER"'
+    open(".gitattributes", "w").write("* filter=plant\n")
+    git("config", "filter.plant.clean", trap + "; cat")
+    git("config", "filter.plant.smudge", trap + "; cat")
+    for hook in ("pre-commit", "post-commit", "post-checkout", "pre-push"):
+        path = os.path.join(".git", "hooks", hook)
+        open(path, "w").write("#!/bin/sh\n" + trap + "\n")
+        os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
 print("DONE")
 '''
+# What the image's system git config and the container boundary give every sandboxed command.
+SANDBOX_ENV = {"FACTORY_TEST_SANDBOX": "1", "GIT_AUTHOR_NAME": "factory-worker",
+               "GIT_AUTHOR_EMAIL": "w@w", "GIT_COMMITTER_NAME": "factory-worker", "GIT_COMMITTER_EMAIL": "w@w"}
 
 
 def sh(cwd, *args):
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
-
-
-def local_run(self, argv, seconds, with_agent_dir):
-    """Sandbox.run without Docker: the same argv in the checkout."""
-    done = subprocess.run(argv, cwd=self.cwd, capture_output=True, text=True, timeout=60)
-    return done.returncode, done.stdout + done.stderr
 
 
 class RunnerTest(unittest.TestCase):
@@ -49,7 +55,7 @@ class RunnerTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name)
         self.origin = root / "origin.git"
-        seed, self.work = root / "seed", root / "work"
+        seed, self.checkout = root / "seed", root / "checkout"
         sh(root, "init", "-q", "--bare", "-b", "main", str(self.origin))
         sh(root, "init", "-q", "-b", "main", str(seed))
         (seed / ".github").mkdir()
@@ -61,15 +67,26 @@ class RunnerTest(unittest.TestCase):
         sh(seed, "-c", "user.name=s", "-c", "user.email=s@s", "commit", "-qm", "seed")
         sh(seed, "push", "-q", str(self.origin), "main")
         self.base = sh(seed, "rev-parse", "HEAD")
-        sh(root, "clone", "-q", str(self.origin), str(self.work))
-        sh(self.work, "config", "remote.origin.url", "https://github.com/o/r.git")
-        sh(self.work, "config", f"url.{self.origin}.insteadOf", "https://github.com/o/r.git")
+        sh(root, "clone", "-q", str(self.origin), str(self.checkout))
+        sh(self.checkout, "config", "remote.origin.url", "https://github.com/o/r.git")
+        sh(self.checkout, "config", f"url.{self.origin}.insteadOf", "https://github.com/o/r.git")
         (root / "harness.py").write_text(HARNESS)
         self.harness = root / "harness.py"
+        self.marker = root / "ran-on-the-host"
         auth = root / "auth.json"
         auth.write_text("{}")
+        self.mounts = []
+
+        def local_run(sandbox, argv, seconds, mount, with_agent_dir=False, env=None):
+            """Sandbox.run without Docker: the same argv in the mounted directory, marked sandboxed."""
+            self.mounts.append(mount)
+            done = subprocess.run(argv, cwd=mount, capture_output=True, text=True, timeout=60,
+                                  env=dict(os.environ, **SANDBOX_ENV, **(env or {})))
+            return done.returncode, done.stdout, done.stderr
+
         patches = [mock.patch.object(runner, "PI_AUTH", str(auth)),
-                   mock.patch.object(runner.Sandbox, "run", local_run)]
+                   mock.patch.object(runner.Sandbox, "run", local_run),
+                   mock.patch.dict(os.environ, {"FACTORY_TEST_MARKER": str(self.marker)})]
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
@@ -81,13 +98,20 @@ class RunnerTest(unittest.TestCase):
         text = documents.worker_input(order, "factory/7")
         out = io.StringIO()
         cwd = os.getcwd()
-        os.chdir(self.work)
+        os.chdir(self.checkout)
         try:
             with redirect_stdout(out):
                 runner.main(["--", sys.executable, str(self.harness), mode, text])
         finally:
             os.chdir(cwd)
         return json.loads(out.getvalue().strip().splitlines()[-1]), order
+
+    def apply_on(self, commit, diff):
+        fresh = Path(self.tmp.name) / f"fresh-{commit[:7]}"
+        sh(self.tmp.name, "clone", "-q", str(self.origin), str(fresh))
+        sh(fresh, "checkout", "-q", commit)
+        subprocess.run(["git", "apply", "--index", "-"], cwd=fresh, input=diff, text=True, check=True)
+        return fresh
 
     def test_completed_patch_applies_on_the_base(self):
         result, order = self.run_order("fix")
@@ -96,11 +120,7 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(result["evidence"][0]["command"], "python3 check.py")
         self.assertEqual(result["evidence"][0]["exit"], 0)
         self.assertEqual(documents.check_result(result, order), [])
-        fresh = Path(self.tmp.name) / "fresh"
-        sh(self.tmp.name, "clone", "-q", str(self.origin), str(fresh))
-        subprocess.run(["git", "apply", "--index", "-"], cwd=fresh, input=result["patch"]["diff"],
-                       text=True, check=True)
-        self.assertEqual((fresh / "app.txt").read_text(), "fixed\n")
+        self.assertEqual((self.apply_on(self.base, result["patch"]["diff"]) / "app.txt").read_text(), "fixed\n")
 
     def test_uncommitted_work_is_collected(self):
         result, _ = self.run_order("nocommit")
@@ -133,7 +153,27 @@ class RunnerTest(unittest.TestCase):
         head = sh(branch, "rev-parse", "HEAD")
         result, _ = self.run_order("fix", kind="fix", head=head)
         self.assertEqual((result["status"], result["patch"]["baseSha"]), ("completed", head), result.get("error"))
-        self.assertTrue((self.work / "notes.txt").exists())
+        self.assertNotIn("notes.txt", result["patch"]["diff"])
+        fresh = self.apply_on(head, result["patch"]["diff"])
+        self.assertEqual(((fresh / "notes.txt").exists(), (fresh / "app.txt").read_text()), (True, "fixed\n"))
+
+    def test_the_harness_gets_a_copy_and_never_the_checkout(self):
+        before = (sh(self.checkout, "rev-parse", "HEAD"), (self.checkout / ".git" / "config").read_text())
+        result, _ = self.run_order("plant")
+        self.assertEqual(result["status"], "completed", result.get("error"))
+        self.assertTrue(self.mounts)
+        for mount in self.mounts:
+            self.assertFalse(Path(mount).resolve().is_relative_to(self.checkout.resolve()), mount)
+            self.assertFalse(Path(mount).exists(), "the copy is removed after the pass")
+        self.assertEqual((sh(self.checkout, "rev-parse", "HEAD"), (self.checkout / ".git" / "config").read_text()),
+                         before)
+        self.assertEqual(sh(self.checkout, "status", "--porcelain"), "")
+
+    def test_hooks_and_filters_the_harness_plants_never_run_on_the_host(self):
+        result, _ = self.run_order("plant")
+        self.assertEqual(result["status"], "completed", result.get("error"))
+        self.assertIn("+fixed", result["patch"]["diff"])
+        self.assertFalse(self.marker.exists(), "host git ran in a tree the harness wrote")
 
 
 if __name__ == "__main__":

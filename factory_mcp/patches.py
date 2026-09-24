@@ -20,8 +20,15 @@ def _git(args, cwd, env):
     return done.stdout.strip()
 
 
-def apply(url, token, branch, base_sha, patch, message, force):
-    """Clone, apply the patch on base_sha, commit, push to `branch`. Returns the new commit sha."""
+def is_protected(name, protected_paths):
+    """True if a repo path is a protected path, or is under a protected directory (one ending in /)."""
+    return any(name == p or (p.endswith("/") and name.startswith(p)) for p in protected_paths)
+
+
+def apply(url, token, branch, base_sha, patch, message, force, protected=()):
+    """Clone, apply the patch on base_sha, commit, push to `branch`. Returns the new commit sha.
+    A patch that touches a protected path is refused before the push: a pushed workflow file would
+    already run (`on: push`) with the repo's secrets, whatever checks come after."""
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_AUTHOR_NAME="factory-mcp",
                GIT_AUTHOR_EMAIL="factory-mcp@users.noreply.github.com",
                GIT_COMMITTER_NAME="factory-mcp", GIT_COMMITTER_EMAIL="factory-mcp@users.noreply.github.com")
@@ -40,5 +47,9 @@ def apply(url, token, branch, base_sha, patch, message, force):
         else:
             _git(["apply", "--index", "../result.patch"], work, env)
             _git(["commit", "-q", "-m", message], work, env)
+        touched = _git(["diff", "--name-only", "--no-renames", "-z", base_sha, "HEAD"], work, env)
+        refused = [name for name in touched.split("\0") if name and is_protected(name, protected)]
+        if refused:
+            raise PatchError(f"changes protected path {', '.join(refused)}")
         _git(["push", "-q", *(["--force"] if force else []), "origin", f"HEAD:refs/heads/{branch}"], work, env)
         return _git(["rev-parse", "HEAD"], work, env)
