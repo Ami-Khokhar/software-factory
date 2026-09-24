@@ -5,7 +5,7 @@
 FROM node:24-bookworm-slim
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git python3 python3-venv ca-certificates ripgrep curl procps lsof \
+ && apt-get install -y --no-install-recommends git python3 python3-pip python3-venv ca-certificates ripgrep curl procps lsof \
  && rm -rf /var/lib/apt/lists/*
 
 ARG PI_VERSION=0.87.0
@@ -19,5 +19,6 @@ RUN git config --system safe.directory '*' \
  && git config --system init.defaultBranch main
 
 USER node
-ENV HOME=/home/node PI_OFFLINE=1 PI_TELEMETRY=0
+# The container is thrown away after each step, so a verify command may pip-install freely.
+ENV HOME=/home/node PI_OFFLINE=1 PI_TELEMETRY=0 PIP_BREAK_SYSTEM_PACKAGES=1 PIP_USER=1
 WORKDIR /work

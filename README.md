@@ -8,7 +8,8 @@ human only on true exceptions.
 - **Gate and merge authority:** pr-gatekeeper.
 - **Source of truth:** GitHub.
 
-Start with [`docs/HANDOFF.md`](docs/HANDOFF.md). Contracts are in [`schemas/`](schemas/) and
+To use it, read [`docs/RUNBOOK.md`](docs/RUNBOOK.md) (the `factory` command, daily use, what to
+trust). To build on it, start with [`docs/HANDOFF.md`](docs/HANDOFF.md). Contracts are in [`schemas/`](schemas/) and
 explained in [`docs/contracts.md`](docs/contracts.md). Decisions are in
 [`docs/decisions.md`](docs/decisions.md).
 
@@ -40,6 +41,8 @@ FACTORY_MCP_TOKEN=<secret> FACTORY_REPOS=owner/repo FACTORY_GITHUB_TOKEN=<token>
 | `FACTORY_POLL_SECONDS` | Background tick interval, default 60; `0` leaves ticking to the OpenBot routine |
 | `FACTORY_GATE_WAIT_SECONDS` | No gate verdict on the PR head for this long sends it to a person, default 7200 |
 | `FACTORY_GITHUB_API` | GitHub REST base URL, default `https://api.github.com` (GitHub Enterprise, rehearsal) |
+| `FACTORY_CHECKOUT_ROOT` | Worker checkouts live at `<root>/<owner>/<repo>`; sent to the relay as the task cwd |
+| `FACTORY_TRUSTED_AUTHORS` | Issue authors a worker may act for, default the repo owner |
 
 `python3 scripts/rehearsal.py <agent-relay checkout> [--lose-store]` runs one issue from
 `factory:ready` to `closed` with the real relay and a stand-in GitHub.

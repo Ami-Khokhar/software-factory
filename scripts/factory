@@ -2,6 +2,7 @@
 """factory: operate the local software factory.
 
   factory new <owner/repo> <title> "<claim> | <check>" ["<claim> | <check>" ...] [-d <description>]
+  factory add-repo <owner/repo>           make a repo a factory target (it needs pr-gatekeeper)
   factory status [<owner/repo#n>]
   factory retry  <owner/repo#n> <note>    try again; the note goes to the worker as a finding
   factory regate <owner/repo#n> <note>    you pushed a fix yourself; the gate reviews it again
@@ -15,6 +16,7 @@
 Settings: ~/.config/factory-mcp/env. Secrets: ~/.config/factory-mcp/secrets (FACTORY_MCP_TOKEN).
 FACTORY_GITHUB_TOKEN comes from `gh auth token` unless the secrets file sets it.
 """
+import base64
 import http.client
 import json
 import os
@@ -107,6 +109,39 @@ def cmd_new(args):
     done = subprocess.run(["gh", "issue", "create", "-R", repo, "--title", title,
                            "--label", "factory:ready", "--body-file", "-"], input=body, text=True)
     sys.exit(done.returncode)
+
+
+def cmd_add_repo(args):
+    """Make a repo a factory target: gate check, worker checkout, labels, FACTORY_REPOS, restart."""
+    if len(args) != 1 or args[0].count("/") != 1:
+        die("usage: factory add-repo <owner/repo>")
+    repo = args[0]
+    gate = run("gh", "api", f"repos/{repo}/contents/.github/pr-gatekeeper.json", "--jq", ".content")
+    if gate.returncode != 0:
+        die(f"{repo} has no .github/pr-gatekeeper.json: install pr-gatekeeper there first "
+            "(its verify command is what the worker must pass, and the gate is what merges)")
+    verify = json.loads(base64.b64decode(gate.stdout)).get("verify", "")
+    root = SETTINGS.get("FACTORY_CHECKOUT_ROOT") or die("FACTORY_CHECKOUT_ROOT is not set in the env file")
+    checkout = Path(root, *repo.split("/"))
+    if not (checkout / ".git").is_dir():
+        run("git", "clone", "-q", f"https://github.com/{repo}.git", str(checkout), check=True)
+        print(f"cloned the worker checkout: {checkout}")
+    for name, color, text in (("factory:ready", "0E8A16", "software-factory may work on this issue"),
+                              ("factory:proposed", "C5DEF5", "proposed by the Planner; add factory:ready to accept")):
+        run("gh", "label", "create", name, "-R", repo, "--color", color, "--description", text)
+    env = CONFIG / "env"
+    lines = env.read_text().splitlines()
+    repos = [r for r in (SETTINGS.get("FACTORY_REPOS") or "").split(",") if r]
+    if repo not in repos:
+        lines = [line for line in lines if not line.startswith("FACTORY_REPOS=")]
+        lines.append("FACTORY_REPOS=" + ",".join(repos + [repo]))
+        env.write_text("\n".join(lines) + "\n")
+        run("launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{LABEL}")
+        print(f"added {repo} to FACTORY_REPOS and restarted factory-mcp")
+    tool = verify.split("&&")[-1].split()[0] if verify.strip() else ""
+    if tool and run("docker", "run", "--rm", "factory-worker:latest", "sh", "-c", f"command -v {tool}").returncode:
+        print(f"warning: the sandbox image has no `{tool}`, which verify needs; add it to worker/Dockerfile")
+    print(f"{repo} is ready. Label an issue factory:ready, or run: factory new {repo} ...")
 
 
 def cmd_status(args):
@@ -216,6 +251,8 @@ def main(argv):
     command, args = (argv[0], argv[1:]) if argv else ("", [])
     if command == "new":
         cmd_new(args)
+    elif command == "add-repo":
+        cmd_add_repo(args)
     elif command == "status":
         cmd_status(args)
     elif command in ("retry", "regate", "close"):

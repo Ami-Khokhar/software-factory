@@ -429,3 +429,23 @@ After this merge, every later change is a normal gated PR of at most 600 lines.
    (A relay change to keep the tail instead would remove this trap: a good dogfood issue.)
 7. **Rehearse first.** `python3 scripts/rehearsal.py <agent-relay checkout>` and again with
    `--lose-store` must both print `REHEARSAL PASSED` before touching the real stack.
+
+---
+
+## 15. Worker sandbox (rev 3, 2026-09-24)
+
+The first live run gave the worker full shell access on the host and the owner's GitHub
+credential. The worker contract is now:
+
+- A worker is `worker/runner.py` plus a harness. The runner puts the checkout on `factory/<issue>`
+  at the commit to build on, runs the harness in the `factory-worker` container
+  (`worker/Dockerfile`: the checkout and a copy of the model key, no GitHub credential), turns
+  the local commits into a unified **patch** Result, and runs the repo's gate `verify` command
+  from the base commit in the same sandbox. The harness never pushes; factory-mcp pushes the patch
+  (the existing patch path, Phase D). D6 now holds by construction, not by instruction.
+- factory-mcp sends a per-repo checkout as the relay task cwd (`FACTORY_CHECKOUT_ROOT`), runs one
+  pass per repo at a time, takes issues only from `FACTORY_TRUSTED_AUTHORS`, tells a retry why the
+  last attempt failed, and comments on the issue when a WorkItem needs a person.
+- Operations: `scripts/factory` (the operator command) and `scripts/install-services.sh`
+  (launchd). The operator guide is `docs/RUNBOOK.md`.
+
