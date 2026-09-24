@@ -382,5 +382,5 @@ owner adds `OPENCODE_GO_API_KEY` and `GATEKEEPER_READ_TOKEN` (§10 step 0).
 | B Intake + reconcile | #3 | `phase-b-reconcile` | PR open |
 | C Foreman actions | #4 | `phase-c-actions` | PR open |
 | D Workers | #5 | `phase-d-workers` | PR open |
-| E Gate loop | #6 | `phase-e-gate-loop` | not started |
+| E Gate loop | #6 | `phase-e-gate-loop` | PR open |
 | F HITL + ops | #7 | `phase-f-hitl` | not started |

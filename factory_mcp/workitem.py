@@ -6,13 +6,15 @@ Transitions that are the Foreman's own actions (dispatch, open PR) live in the t
 import re
 
 from .store import now
-from .verdict import verdicts
+from .verdict import blockers, verdicts
 
 READY, PROPOSED = "factory:ready", "factory:proposed"
 TERMINAL = frozenset({"closed", "cancelled", "exhausted", "failed"})
 # The Foreman owns these: a worker is running, or a human holds the WorkItem.
 BUSY = frozenset({"dispatching", "implementing", "human_waiting", "blocked"})
 OUTCOME_STATE = {"MERGE": "merge_pending", "CHANGES": "changes_requested", "HUMAN": "human_waiting"}
+# Gate rounds one problem may be reported in before a human takes it (D4, ADR-0005).
+ROUNDS_PER_PROBLEM = 2
 
 
 def workitem_id(repo, number):
@@ -127,7 +129,17 @@ def reconcile(wi, facts):
     verdict = current_verdict(wi, facts)
     if verdict:
         wi.update(gateRound=verdict["round"], reviewedSha=verdict["headSha"],
-                  state=OUTCOME_STATE[verdict["outcome"]])
+                  state=OUTCOME_STATE[verdict["outcome"]], blockers=blockers(facts["verdicts"]))
+        if verdict["outcome"] == "HUMAN":
+            wi["blockedOn"] = "pr-gatekeeper decided HUMAN; read the latest gate comment"
+        stuck = [b["fingerprint"] for b in wi["blockers"] if not b["resolved"]
+                 and verdict["round"] - b["firstSeenRound"] + 1 >= ROUNDS_PER_PROBLEM]
+        if verdict["outcome"] == "CHANGES" and stuck:
+            wi.update(state="human_waiting", blockedOn=(
+                f"the same problem was reported in {ROUNDS_PER_PROBLEM} gate rounds: "
+                + "; ".join(f["problem"] for f in verdict["findings"] if f["fingerprint"] in stuck)))
+    elif wi["state"] == "changes_requested" and pr["headSha"] != wi.get("reviewedSha"):
+        wi["state"] = "reviewing"  # someone pushed after the verdict; the gate re-runs on it
     elif wi["state"] in ("issued", "planned", "ready"):
         wi["state"] = "pr_open"  # rebuilt from GitHub: the PR exists already
     if wi["state"] == "pr_open" and facts["gate"]:

@@ -6,6 +6,7 @@ from .github import GitHubError
 from .mcp import ToolError
 from .relay import RelayError
 from .store import Conflict
+from .verdict import blocking
 
 
 class Foreman:
@@ -65,8 +66,9 @@ class Foreman:
         if not self.store.acquire(workitem_id, self.holder):
             return before, wi
         try:
-            wi = self._write(wi, workitem.reconcile(wi, workitem.observe(self.github, wi)), "reconcile")
-            wi = self.act(wi)
+            facts = workitem.observe(self.github, wi)
+            wi = self._write(wi, workitem.reconcile(wi, facts), "reconcile")
+            wi = self.act(wi, facts)
         except Conflict:
             wi = self.store.get(workitem_id)
         except (GitHubError, RelayError) as exc:
@@ -83,9 +85,13 @@ class Foreman:
         self.store.log(action, dict(detail, **{"from": old["state"], "to": stored["state"]}), old["id"])
         return stored
 
-    def act(self, wi):
+    def act(self, wi, facts):
         if wi["state"] == "ready":
             return self.dispatch(wi, "implement")
+        if wi["state"] == "changes_requested":  # findings travel as data (D6)
+            findings = [{key: f[key] for key in ("fingerprint", "path", "line", "problem")}
+                        for f in blocking(facts["verdicts"][-1])]
+            return self.dispatch(wi, "fix", findings)
         if wi["state"] == "dispatching":  # the intent was written, the relay call may not have landed
             return self.submit(wi, self._order(wi))
         if wi["state"] == "implementing":

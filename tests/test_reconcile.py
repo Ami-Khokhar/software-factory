@@ -7,7 +7,7 @@ from factory_mcp.mcp import ToolError
 from factory_mcp.store import Store
 from factory_mcp.verdict import fingerprint, parse_marker, verdicts
 from factory_mcp.workitem import intake, parse_acceptance, reconcile
-from tests.fakes import FakeGitHub, marker_comment
+from tests.fakes import FakeGitHub, FakeRelay, marker_comment
 
 REPO = "o/r"
 CONFIG = Config(mcp_token="t", repos=frozenset({REPO}))
@@ -108,19 +108,21 @@ class ForemanTest(unittest.TestCase):
             foreman.intake("other/repo", 7)
 
     def test_rebuild_after_store_loss(self):
-        foreman = Foreman(Store(":memory:"), self.github, CONFIG)
+        relay = FakeRelay()
+        foreman = Foreman(Store(":memory:"), self.github, CONFIG, relay)
         foreman.intake(REPO, 7)
         self.github.add_pr(REPO, 11, "factory/7", "s1")
         self.github.add_run(REPO, "s1")
         self.github.add_verdict(REPO, 11, "CHANGES", 1, "s1")
-        self.assertEqual(foreman.tick(f"{REPO}#7")["to"], "changes_requested")
+        self.assertEqual(foreman.tick(f"{REPO}#7")["to"], "implementing")  # fix dispatched
 
-        lost = Foreman(Store(":memory:"), self.github, CONFIG)  # the SQLite file is gone
+        lost = Foreman(Store(":memory:"), self.github, CONFIG, relay)  # the SQLite file is gone
         result = lost.tick()
         self.assertEqual(result["rebuilt"], [f"{REPO}#7"])
         wi = lost.store.get(f"{REPO}#7")
         self.assertEqual((wi["state"], wi["prNumber"], wi["headSha"], wi["gateRound"]),
-                         ("changes_requested", 11, "s1", 1))
+                         ("implementing", 11, "s1", 1))
+        self.assertEqual(len(relay.tasks), 1)  # same idempotency key: the relay's task is reused
 
 
 if __name__ == "__main__":

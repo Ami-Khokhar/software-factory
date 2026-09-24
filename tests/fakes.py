@@ -75,6 +75,9 @@ class FakeGitHub:
 
     def push(self, repo, branch, sha, files=(("src/app.py", 10, 2),)):
         self.branches[(repo, branch)] = sha
+        for pr in self.pulls:  # an open PR follows its branch, as on GitHub
+            if pr["repo"] == repo and pr["head"]["ref"] == branch and pr["state"] == "open":
+                pr["head"]["sha"] = sha
         self.files[(repo, sha)] = [{"filename": f, "status": "modified", "additions": a, "deletions": d}
                                    for f, a, d in files]
 
