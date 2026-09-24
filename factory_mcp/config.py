@@ -15,7 +15,9 @@ class Config:
     port: int = 43125
     tls_cert: str = ""
     tls_key: str = ""
-    worker: str = "codex"
+    workers: tuple = (("codex", "hosted"),)  # (relay agentId, "local"|"hosted"), preferred first
+    local_only_repos: frozenset = frozenset()
+    git_url: str = "https://github.com/{repo}.git"
     max_passes: int = 4
     wall_ms: int = 20 * 60 * 1000
     protected_paths: tuple = (".github/", "AGENTS.md")
@@ -40,7 +42,11 @@ class Config:
             port=int(env.get("FACTORY_PORT") or defaults.port),
             tls_cert=env.get("FACTORY_TLS_CERT", ""),
             tls_key=env.get("FACTORY_TLS_KEY", ""),
-            worker=env.get("FACTORY_WORKER") or defaults.worker,
+            workers=tuple(tuple(w.strip().split(":", 1)) for w in env["FACTORY_WORKERS"].split(",")
+                          if w.strip()) if env.get("FACTORY_WORKERS") else defaults.workers,
+            local_only_repos=frozenset(r.strip() for r in env.get("FACTORY_LOCAL_ONLY_REPOS", "")
+                                       .split(",") if r.strip()),
+            git_url=env.get("FACTORY_GIT_URL") or defaults.git_url,
             max_passes=int(env.get("FACTORY_MAX_PASSES") or defaults.max_passes),
             wall_ms=int(env.get("FACTORY_WALL_MS") or defaults.wall_ms),
         )

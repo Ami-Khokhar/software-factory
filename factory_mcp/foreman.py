@@ -1,7 +1,7 @@
 """The Foreman: under a per-WorkItem lease, reconcile with GitHub, then act at most once."""
 import uuid
 
-from . import documents, workitem
+from . import documents, patches, routing, workitem
 from .github import GitHubError
 from .mcp import ToolError
 from .relay import RelayError
@@ -104,20 +104,26 @@ class Foreman:
             return self._write(wi, dict(wi, state="exhausted", terminalReason=(
                 f"{len(orders)} worker passes used; FACTORY_MAX_PASSES is {self.config.max_passes}")),
                 "exhausted")
+        failed = {h["detail"].get("worker") for h in self.store.history(wi["id"])
+                  if h["action"] == "attempt_failed"}
+        worker = routing.route(self.config.workers, wi["repo"] in self.config.local_only_repos, failed)
+        if worker is None:
+            return self._write(wi, dict(wi, state="human_waiting", blockedOn=(
+                f"{wi['repo']} is local-only and FACTORY_WORKERS has no local worker")), "no_worker")
         attempt = sum(1 for o in orders if o["round"] == wi.get("gateRound", 0) and o["kind"] == kind)
         base = self.github.branch_head(wi["repo"], self._default_branch(wi["repo"]))
         order = documents.workorder(wi, kind, attempt, self.config, base, findings)
         self.store.save_workorder(order)
-        wi = self._write(wi, dict(wi, state="dispatching", activeWorkOrderId=order["id"]),
-                         "dispatch", workOrder=order["id"])
+        wi = self._write(wi, dict(wi, state="dispatching", activeWorkOrderId=order["id"], worker=worker),
+                         "dispatch", workOrder=order["id"], worker=worker)
         return self.submit(wi, order)
 
     def submit(self, wi, order):
-        task = self.relay.submit(self.config.worker, documents.worker_input(order, wi["branch"]),
+        task = self.relay.submit(wi["worker"], documents.worker_input(order, wi["branch"]),
                                  order["idempotencyKey"], order["budget"]["wallMs"])
         return self._write(wi, dict(wi, state="implementing", provider="agent-relay",
-                                    providerTaskId=task["id"], worker=task["agentId"],
-                                    sessionHandle=task.get("sessionId"), sessionNative=False),
+                                    providerTaskId=task["id"], sessionHandle=task.get("sessionId"),
+                                    sessionNative=False),
                            "submitted", task=task["id"])
 
     def poll(self, wi):
@@ -133,22 +139,38 @@ class Foreman:
         errors = documents.check_result(result, order)
         if not errors and result["status"] != "completed":
             errors = [f"worker reported {result['status']}: {result.get('error')}"]
-        if not errors and not result.get("artifact"):
-            errors = ["patch Results are not handled yet"]
+        artifact = result.get("artifact") if not errors else None
+        if not errors and not artifact:
+            try:
+                artifact = self.push_patch(wi, order, result["patch"])
+            except patches.PatchError as exc:
+                errors = [f"patch did not apply: {exc}"]
         files = []
         if not errors:
-            errors, files = self.check_artifact(wi, order, result["artifact"])
+            errors, files = self.check_artifact(wi, order, artifact)
         if errors:
             return self.fail(wi, order, f"{task['agentId']}: " + "; ".join(errors))
-        sha = result["artifact"]["commitSha"]
+        sha = artifact["commitSha"]
         self.store.log("result", {"workOrder": order["id"], "commitSha": sha,
                                   "usage": result.get("usage")}, wi["id"])
         done = dict(wi, headSha=sha, attempts=[], activeWorkOrderId=None, providerTaskId=None)
+        if result.get("session"):  # the harness's own session, resumable by a later fix
+            done.update(sessionHandle=result["session"].get("handle"),
+                        sessionNative=result["session"].get("native"))
         if wi.get("prNumber"):
             return self._write(wi, dict(done, state="reviewing"), "pushed")
         pr = self.open_pr(wi, order, files, result["evidence"], task["agentId"])
         return self._write(wi, dict(done, state="pr_open", prNumber=pr["number"]), "pr_opened",
                            pr=pr["number"])
+
+    def push_patch(self, wi, order, patch):
+        """Apply a patch Result on the WorkOrder's base and push it; the commit is then checked
+        like any worker's artifact."""
+        base = patch.get("baseSha") or (order["headSha"] if order["kind"] == "fix" else order["baseSha"])
+        sha = patches.apply(self.config.git_url.format(repo=wi["repo"]), self.config.github_token,
+                            wi["branch"], base, patch, f"{wi['goal']} (#{wi['issueNumber']})\n\n"
+                            f"WorkOrder {order['id']}", force=order["kind"] != "fix")
+        return {"branch": wi["branch"], "commitSha": sha}
 
     def check_artifact(self, wi, order, artifact):
         """Guards on what GitHub holds, never on what the worker says it did."""
@@ -185,4 +207,4 @@ class Foreman:
             new.update(state="blocked", blockedOn=(
                 f"{len(attempts)} worker attempts at the {order['kind']} WorkOrder failed. Fix the "
                 "cause named in attempts, then call factory_resolve_human."))
-        return self._write(wi, new, "attempt_failed", reason=reason)
+        return self._write(wi, new, "attempt_failed", reason=reason, worker=wi.get("worker"))

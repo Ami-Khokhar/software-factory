@@ -32,3 +32,7 @@ FACTORY_MCP_TOKEN=<secret> FACTORY_REPOS=owner/repo FACTORY_GITHUB_TOKEN=<token>
 | `FACTORY_DB` | SQLite path, default `~/.local/state/factory-mcp/factory.sqlite3` |
 | `FACTORY_HOST`, `FACTORY_PORT` | Listen address, default `127.0.0.1:43125` |
 | `FACTORY_TLS_CERT`, `FACTORY_TLS_KEY` | Serve https; OpenBot refuses plain-http custom servers |
+| `FACTORY_WORKERS` | Relay agents with locality, preferred first, e.g. `codex:hosted,pi-glm:local` |
+| `FACTORY_LOCAL_ONLY_REPOS` | Repos whose work may only go to `local` workers |
+| `FACTORY_MAX_PASSES`, `FACTORY_WALL_MS` | WorkOrder budget: worker passes per WorkItem (4), wall time per pass (20 min) |
+| `FACTORY_GIT_URL` | Where patch Results are pushed, default `https://github.com/{repo}.git` |

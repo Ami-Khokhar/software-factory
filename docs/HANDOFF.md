@@ -291,6 +291,7 @@ not count as human touches.
 | Claude subscription ends 2026-09-28 | D11; phases filed as issues any harness can run |
 | Timeout → duplicate workers | Lease + idempotency key; reconcile relay tasks and branches before retry |
 | Stale verdict acted on | Guard on `repo+pr+headSha+round` |
+| A patch Result clones the repo inside a tick (may exceed the 30 s rule on a large repo) | Patches are for hosted providers on small repos; move `patches.apply` to a background worker if a large repo needs one |
 | factory-mcp store lost | Rebuild from GitHub (issue labels, branch name `factory/<issue>`, PR, verdict marker) |
 | Missing branch protection (D7) | Owner enables required `pr-gatekeeper` check on target repos before Phase E live proof |
 
@@ -380,6 +381,6 @@ owner adds `OPENCODE_GO_API_KEY` and `GATEKEEPER_READ_TOKEN` (§10 step 0).
 | A Skeleton | #2 | `phase-a-skeleton` | PR open |
 | B Intake + reconcile | #3 | `phase-b-reconcile` | PR open |
 | C Foreman actions | #4 | `phase-c-actions` | PR open |
-| D Workers | #5 | `phase-d-workers` | not started |
+| D Workers | #5 | `phase-d-workers` | PR open |
 | E Gate loop | #6 | `phase-e-gate-loop` | not started |
 | F HITL + ops | #7 | `phase-f-hitl` | not started |
