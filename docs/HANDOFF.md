@@ -407,7 +407,13 @@ then re-reviews a diff that holds only that phase.
    `host.docker.internal`), and the SDK 1.30.1 client under Bun 1.4.2 (the fork pins 1.3.14)
    rejects the self-signed certificate without `NODE_EXTRA_CA_CERTS` and connects with it.
 2. **Tenant.** `scripts/install-tenant.sh "$HOME/Documents/Coding projects/openbot"`, put the
-   printed lines in OpenBot's `.env`, and restart OpenBot.
+   printed lines in OpenBot's `.env`, and restart OpenBot. **A boundary saved on OpenBot's admin
+   Boundaries page is stored in Postgres and overrides `AGENT_COMPUTER_POLICY`**
+   (`computer/policy-store.ts`). If one was ever saved, reset it to configuration there, or paste
+   `tenant/factory/policy.json` into it. Verified in the cloud session with the fork's own code
+   under Bun: `loadTenantPackage` accepts `tenant/factory/` (and fails loudly without
+   `FACTORY_MODEL`), `parseActionPolicy` accepts `policy.json`, and `evaluateActionPolicy` gives
+   the expected answer in 13 of 13 cases with no expression errors.
 3. **Register the server.** In OpenBot admin, add a custom MCP server with id **`factory-mcp`**
    (the policy matches this id), URL `https://factory.lan.example:43125/mcp`, and the
    `FACTORY_MCP_TOKEN` value as the token. Grant every `factory_*` tool to Foreman, and
