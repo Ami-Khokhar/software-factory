@@ -372,25 +372,25 @@ curl -sS http://127.0.0.1:43124/v1/agents
 
 ## 13. Progress (keep current)
 
-Offline work runs in cloud sessions; live proofs are issue #8 (owner machine). Branches are
-stacked, each based on the previous one; nothing is merged yet. The gate runs fail until the
-owner adds `OPENCODE_GO_API_KEY` and `GATEKEEPER_READ_TOKEN` (§10 step 0).
+Offline work runs in cloud sessions; live proofs are issue #8 (owner machine). All offline work
+(phases 0′, A–F and the rehearsal, issues #1–#7 and #16) is in **one PR from `main-ily6yr`**.
+The owner merges it by hand: at 51 files and ~3,500 lines it is over pr-gatekeeper's 600-line /
+20-file limits, so the gate cannot approve it. The per-phase PRs #9–#15 and #17 were closed in
+favour of it; their branches (`phase-0-contracts` … `phase-f-hitl`, `rehearsal`) still show each
+phase's diff on its own for review.
 
-| Phase | Issue | Branch | State |
-|---|---|---|---|
-| 0′ Contracts | #1 | `phase-0-contracts` | PR #9 open |
-| A Skeleton | #2 | `phase-a-skeleton` | PR #10 open |
-| B Intake + reconcile | #3 | `phase-b-reconcile` | PR #11 open |
-| C Foreman actions | #4 | `phase-c-actions` | PR #12 open |
-| D Workers | #5 | `phase-d-workers` | PR #13 open |
-| E Gate loop | #6 | `phase-e-gate-loop` | PR #14 open |
-| F HITL + ops | #7 | `phase-f-hitl` | PR #15 open |
-| Rehearsal + hardening | #16 | `rehearsal` | PR open |
+| Phase | Issue | Per-phase branch (review only) |
+|---|---|---|
+| 0′ Contracts | #1 | `phase-0-contracts` |
+| A Skeleton | #2 | `phase-a-skeleton` |
+| B Intake + reconcile | #3 | `phase-b-reconcile` |
+| C Foreman actions | #4 | `phase-c-actions` |
+| D Workers | #5 | `phase-d-workers` |
+| E Gate loop | #6 | `phase-e-gate-loop` |
+| F HITL + ops | #7 | `phase-f-hitl` |
+| Rehearsal + hardening | #16 | `rehearsal` |
 
-The offline work is complete when every PR above is open. Merge them in order, 0′ first. Each PR's
-base is the previous branch. pr-gatekeeper squash-merges, so after one merges, merge `main` into
-the next branch (the identical changes merge cleanly), retarget it to `main`, and push. The gate
-then re-reviews a diff that holds only that phase.
+After this merge, every later change is a normal gated PR of at most 600 lines.
 
 ---
 
