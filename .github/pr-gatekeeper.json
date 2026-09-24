@@ -1,10 +1,10 @@
 {
-  "verify": "python3 -m unittest discover -s tests -p 'test_*.py'",
+  "verify": "python3 -m pip install -q -r requirements.txt && python3 -m unittest discover -s tests -p 'test_*.py'",
   "test_file_globs": [
     "tests/test_*.py",
     "tests/**/test_*.py"
   ],
-  "test_command": "python3 -m unittest discover -s tests -p 'test_*.py'",
+  "test_command": "python3 -m pip install -q -r requirements.txt && python3 -m unittest discover -s tests -p 'test_*.py'",
   "protected_paths": [
     ".github/",
     "AGENTS.md"
