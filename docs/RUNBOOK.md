@@ -25,7 +25,8 @@ registry path in `/healthz`. It was opened with `factory new`, and nothing else 
    and the gate takes about 5 more. GitHub notifies you when the PR opens, when the gate comments,
    and when it merges.
 3. **Answer when asked.** When the factory needs a person, it comments on the issue with
-   "software-factory needs a person" and mentions you. Read the reason, then decide:
+   "software-factory needs a person" and mentions you, and Day Desk messages you in Telegram
+   (below). Read the reason, then decide, in a reply to Day Desk or here:
 
    ```bash
    factory retry  Ami-Khokhar/agent-relay#22 "what to do differently"   # try again
@@ -61,7 +62,6 @@ last steps, and what it needs from you.
 | `factory start` | Starts Docker (OrbStack), the relay and factory-mcp |
 | `factory logs` | Follows the factory-mcp log |
 | `factory update` | Deploys the deployed checkout's branch, or `main` once that branch is merged, if the tests pass there |
-| `factory connect-openbot` | The one-time OpenBot step (below) |
 
 ## What it can and cannot do
 
@@ -152,8 +152,7 @@ Hermes asks you to approve each tool call that changes something, with buttons i
 no answer in 15 minutes is a no. Its settings, skill and manner are the Hermes profile
 distribution in `tenant/hermes/`, so they are reviewed like code.
 
-Set it up once. `factory connect-openbot` must have run once before, for the hosts entry and the
-certificate.
+Set it up once:
 
 ```bash
 hermes profile install ~/path/to/software-factory/tenant/hermes
@@ -180,9 +179,9 @@ shell is denied the `factory` write commands, `gh pr merge`, `gh label`, `gh api
 factory's config directory (`approvals.deny` in `tenant/hermes/config.yaml`). The shell still
 runs as you, so these rules are a guard, not a sandbox.
 
-### The trial before OpenBot is retired
+### Check that it works
 
-Check in Telegram that Day Desk:
+After setting it up, check in Telegram that Day Desk:
 
 1. answers "what needs me?" with the WorkItems `factory status` shows waiting on you;
 2. checks a repo without pr-gatekeeper, says what it lacks, and does not enable it;
@@ -191,16 +190,3 @@ Check in Telegram that Day Desk:
    within a minute;
 5. refuses "merge PR 12" and "run factory retry" in its shell;
 6. relays a factory-watch message, and your reply to it resolves the WorkItem once you approve.
-
-## OpenBot (optional)
-
-OpenBot adds a chat Foreman, a 15-minute routine and Telegram escalations on top of the steps above.
-The factory works without it. To connect it, run `factory connect-openbot` once. It adds
-`127.0.0.1 factory.lan.example` to `/etc/hosts` (sudo asks for your password), copies the token
-to your clipboard, and prints the id (`factory-mcp`) and the URL to enter in OpenBot admin →
-Plugins as a custom MCP server. OpenBot allows only an https URL with a dotted, public-looking
-name, which is why the hosts entry is needed.
-
-The tenant package ships five skills, which a person types after `/`: `factory-status`,
-`drive-issue` and `answer-escalation` for the Foreman, and `plan-issues` and `write-acceptance`
-for the Planner (`tenant/factory/skills.yaml`). OpenBot loads them when it starts.

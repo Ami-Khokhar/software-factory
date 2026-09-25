@@ -43,7 +43,7 @@ class McpServerTest(unittest.TestCase):
 
     def test_handshake(self):
         result = self.rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
-                                         "clientInfo": {"name": "openbot", "version": "1"}})["result"]
+                                         "clientInfo": {"name": "hermes", "version": "1"}})["result"]
         self.assertEqual(result["protocolVersion"], "2025-06-18")
         self.assertEqual(result["serverInfo"]["name"], "factory-mcp")
         self.assertIn("tools", result["capabilities"])
@@ -81,6 +81,7 @@ class McpServerTest(unittest.TestCase):
         self.assertEqual(self.post(body, {"Authorization": "Bearer wrong"})[0], 401)
         self.assertEqual(self.post(body, {"Origin": "http://evil.example"})[0], 403)
         self.assertEqual(self.post(body, method="GET")[0], 405)
+        self.assertEqual(self.server.server_address[0], "127.0.0.1")  # plain HTTP never leaves the machine
 
 
 if __name__ == "__main__":

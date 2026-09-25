@@ -4,10 +4,9 @@
 
 mcp_servers:
   factory:
-    url: "https://factory.lan.example:43125/mcp"
+    url: "http://127.0.0.1:43125/mcp"  # factory-mcp listens on loopback only
     headers:
       Authorization: "Bearer ${FACTORY_MCP_TOKEN}"
-    ssl_verify: "${userHome}/Library/Application Support/mkcert/rootCA.pem"
     trust: untrusted  # every tool without readOnlyHint waits for the owner's yes in Telegram
     tools:
       include:  # factory_tick and factory_intake stay out: factory-mcp ticks on its own

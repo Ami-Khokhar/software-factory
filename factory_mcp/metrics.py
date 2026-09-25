@@ -8,7 +8,7 @@ REACHED_END = frozenset({"merged", "closed", "cancelled", "exhausted"})
 
 
 def escalation(wi, history):
-    """What OpenBot's job_blocked needs: the reason, the one action, and at least two tries."""
+    """What an escalation tells the owner: the reason, the one decision needed, and what was tried."""
     if wi["state"] not in HUMAN_STATES:
         return None
     tried = list(wi.get("attempts") or []) or [

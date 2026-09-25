@@ -50,7 +50,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | File | What it does |
 |---|---|
 | `factory_mcp/__init__.py`, `__main__.py` | The package; `python3 -m factory_mcp` starts the server |
-| `factory_mcp/server.py` | Streamable HTTP for MCP: `POST /mcp`, the bearer token, TLS, the background tick loop |
+| `factory_mcp/server.py` | Streamable HTTP for MCP on loopback: `POST /mcp`, the bearer token, the background tick loop |
 | `factory_mcp/mcp.py` | The MCP protocol: one JSON-RPC message in, one response out, no I/O |
 | `factory_mcp/tools.py` | The tools, and whether each one reads or writes |
 | `factory_mcp/foreman.py` | The Foreman: intake, rebuild, tick, dispatch, poll a task, open a PR, and the person's acts (resolve, approve an issue, add a repo) |
@@ -69,7 +69,6 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `worker/Dockerfile` | The sandbox image: git, Python, Node and the pi harness, and no GitHub credential |
 | `scripts/factory` | The owner's CLI: `new`, `add-repo`, `status`, `watch`, `retry`/`regate`/`close`, `start`/`stop`, `update`, `serve` |
 | `scripts/install-services.sh` | The launchd services for agent-relay and factory-mcp |
-| `scripts/install-tenant.sh` | Installs the OpenBot tenant, until #37 retires it |
 | `scripts/rehearsal.py` | One issue end to end, with the real agent-relay and a stand-in GitHub |
 
 ## One tick
