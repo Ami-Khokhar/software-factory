@@ -36,8 +36,8 @@ def build(store, foreman):
              "read", status),
         Tool("factory_repo_check",
              "Check what a GitHub repo needs before the factory can work on it: the factory's token "
-             "can push to it, and pr-gatekeeper is installed with a verify command. Each failed "
-             "check says how to fix it. Changes nothing.",
+             "can push to it, pr-gatekeeper is installed with a verify command, and its AGENTS.md "
+             "carries the factory standard. Each failed check says how to fix it. Changes nothing.",
              {"type": "object", "required": ["repo"], "additionalProperties": False,
               "properties": {"repo": {"type": "string", "description": "owner/repo"}}},
              "read", repo_check),

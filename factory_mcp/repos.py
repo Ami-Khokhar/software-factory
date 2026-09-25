@@ -17,10 +17,17 @@ from .github import GitHubError
 from .workitem import PROPOSED, READY
 
 NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+STANDARD = re.compile(r"<!-- factory-standard:begin -->.*?<!-- factory-standard:end -->", re.S)
+TEMPLATE = Path(__file__).resolve().parent.parent / "templates" / "AGENTS.md"  # ADR-0015
 ENTRY_KEYS = {"name", "added_by", "added_at"}
 GATE_CONFIG, GATE_WORKFLOW = ".github/pr-gatekeeper.json", ".github/workflows/pr-gatekeeper.yml"
 LABELS = ((READY, "0E8A16", "software-factory may work on this issue"),
           (PROPOSED, "C5DEF5", "proposed by the Planner; add factory:ready to accept"))
+
+
+def standard_blocks(text):
+    """The factory-standard blocks in an AGENTS.md text."""
+    return STANDARD.findall((text or "").replace("\r\n", "\n"))
 
 
 def _result(check_id, ok, detail, fix):
@@ -54,10 +61,23 @@ def check(github, repo):
                        f"verify: {verify}" if verify else f"{GATE_CONFIG} has no verify command",
                        "Set verify to the command that runs the repo's tests: every worker pass must pass it.")
     workflow = github.file(repo, GATE_WORKFLOW) is not None
+    agents = github.file(repo, "AGENTS.md")
+    found, wanted = standard_blocks(agents), standard_blocks(TEMPLATE.read_text())
+    if agents is None:
+        detail = f"{repo} has no AGENTS.md"
+    elif not found:
+        detail = "AGENTS.md has no factory-standard block"
+    elif found != wanted:
+        detail = "AGENTS.md's factory-standard block differs from software-factory's templates/AGENTS.md"
+    else:
+        detail = "AGENTS.md carries the factory standard"
     return [_result("repo", True, f"{repo} exists and the factory's token can push to it", None), gate,
             _result("gate_workflow", workflow, "the gate workflow is installed" if workflow else
                     f"{repo} has no {GATE_WORKFLOW}",
-                    "Install pr-gatekeeper's workflow: without it no PR gets a verdict.")]
+                    "Install pr-gatekeeper's workflow: without it no PR gets a verdict."),
+            _result("agents_md", bool(found) and found == wanted, detail,
+                    "Copy the factory standard from software-factory's templates/AGENTS.md into the "
+                    "repo's AGENTS.md, and merge that PR yourself: AGENTS.md is a protected path.")]
 
 
 def problems(doc):
