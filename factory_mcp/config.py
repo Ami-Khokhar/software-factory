@@ -1,13 +1,15 @@
-"""Configuration, read from the environment once at start."""
+"""Configuration, read from the environment and repos.json once at start."""
 import os
 from dataclasses import dataclass
 from pathlib import Path
+
+from . import repos as manifest
 
 
 @dataclass(frozen=True)
 class Config:
     mcp_token: str
-    repos: frozenset
+    repos: frozenset  # the allowlist: FACTORY_REPOS and the repos in repos.json
     db_path: str = str(Path.home() / ".local" / "state" / "factory-mcp" / "factory.sqlite3")
     relay_url: str = "http://127.0.0.1:43124"
     github_token: str = ""
@@ -27,14 +29,17 @@ class Config:
     protected_paths: tuple = (".github/", "AGENTS.md")
     checkout_root: str = ""  # worker checkouts live at <root>/<owner>/<repo>; empty: the agent's cwd
     trusted_authors: frozenset = frozenset()  # issue authors a worker may act for; empty: repo owner
+    repos_file: str = ""  # repos.json (ADR-0014); empty: FACTORY_REPOS is the whole allowlist
 
     def checkout(self, repo):
         """The worker checkout for `repo`, sent to the relay as the task cwd, or None."""
         return str(Path(self.checkout_root, *repo.split("/"))) if self.checkout_root else None
 
     def trusts(self, repo, author):
-        """Issue text reaches a worker only when a trusted person wrote it (D6)."""
-        return author in (self.trusted_authors or {repo.split("/")[0]})
+        """Issue text reaches a worker only when a trusted person wrote it (D6). GitHub logins
+        ignore case."""
+        trusted = self.trusted_authors or {repo.split("/")[0]}
+        return (author or "").lower() in {login.lower() for login in trusted}
 
     @classmethod
     def from_env(cls, env=None):
@@ -44,7 +49,9 @@ class Config:
             # OpenBot always sends a bearer token to a custom MCP server, and an open Foreman
             # would let anything on the network drive the factory.
             raise ValueError("FACTORY_MCP_TOKEN is required")
-        repos = frozenset(r.strip() for r in env.get("FACTORY_REPOS", "").split(",") if r.strip())
+        repos_file = env.get("FACTORY_REPOS_FILE", "")
+        repos = frozenset(r.strip() for r in env.get("FACTORY_REPOS", "").split(",") if r.strip()) \
+            | frozenset(entry["name"] for entry in manifest.load(repos_file))
         defaults = cls(mcp_token=token, repos=repos)
         return cls(
             mcp_token=token,
@@ -70,4 +77,5 @@ class Config:
             checkout_root=env.get("FACTORY_CHECKOUT_ROOT", ""),
             trusted_authors=frozenset(a.strip() for a in env.get("FACTORY_TRUSTED_AUTHORS", "").split(",")
                                       if a.strip()),
+            repos_file=repos_file,
         )

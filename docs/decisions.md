@@ -180,3 +180,22 @@ branch `factory/<issue>`, PR, verdict marker). There is no merge tool.
 
 **Consequence.** OpenBot stays unmodified except for the tenant package. Losing the store loses
 history, not correctness.
+
+---
+
+## ADR-0014 — The allowlist is `FACTORY_REPOS` plus `repos.json`
+
+**Context.** The allowlist lived only in `FACTORY_REPOS`, and `factory add-repo` edited the env
+file and restarted factory-mcp. A tool that enables a repo from chat cannot restart the process
+that serves it, and an allowlist the factory extends itself should be a file a person can read.
+
+**Decision.** `repos.json` (`FACTORY_REPOS_FILE`; `factory serve` uses
+`~/.config/factory-mcp/repos.json`) lists the repos a tool enabled, with who enabled each and when.
+The allowlist is `FACTORY_REPOS` plus that file. factory-mcp reads it at start, and the tool that
+adds a repo also adds it to the running process. JSON, because factory-mcp uses only the standard
+library. Per-repo workers, trusted authors and protected paths stay out until something needs
+them; a repo's protected paths already live in its own `.github/pr-gatekeeper.json`.
+
+**Consequence.** Enabling a repo needs no restart and leaves a record a person can review. Repos
+already in `FACTORY_REPOS` keep working. Taking a repo away is an edit and a restart, and its
+WorkItems wait untouched until it comes back.
