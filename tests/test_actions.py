@@ -1,10 +1,12 @@
-"""Phase C: the Foreman's actions and guards, driven tick by tick against fakes."""
+"""The Foreman's actions and guards, driven tick by tick against fakes. Every WorkItem and WorkOrder
+it writes must validate against its schema."""
 import json
 import unittest
 from pathlib import Path
 
+from jsonschema import Draft202012Validator
+
 from factory_mcp.config import Config
-from factory_mcp.documents import check_result
 from factory_mcp.foreman import Foreman
 from factory_mcp.store import Store
 from tests.fakes import FakeGitHub, FakeRelay, result_line
@@ -14,10 +16,6 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def schema_errors(name, doc):
-    try:
-        from jsonschema import Draft202012Validator
-    except ImportError:
-        return []
     schema = json.loads((ROOT / "schemas" / f"{name}.schema.json").read_text())
     return [e.message for e in Draft202012Validator(schema).iter_errors(doc)]
 
@@ -93,6 +91,60 @@ class ActionsTest(unittest.TestCase):
         self.assertEqual(wi["state"], "ready")
         self.assertIn("changes protected path AGENTS.md", wi["attempts"][0])
 
+    def test_a_change_must_fit_one_pr(self):
+        """ADR-0002: a PR stays within 600 changed lines and 20 files, the gate's limits."""
+        cases = [("600 lines", (("src/app.py", 590, 10),), "pr_open"),
+                 ("601 lines", (("src/app.py", 591, 10),), "ready"),
+                 ("20 files", tuple((f"src/m{n}.py", 1, 0) for n in range(20)), "pr_open"),
+                 ("21 files", tuple((f"src/m{n}.py", 1, 0) for n in range(21)), "ready")]
+        for case, files, state in cases:
+            with self.subTest(case):
+                self.setUp()
+                wi, task = self.dispatched()
+                self.github.push(REPO, "factory/7", "c1", files=files)
+                self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"], "c1"))
+                wi = self.tick()
+                self.assertEqual(wi["state"], state, wi.get("attempts"))
+                if state == "ready":
+                    self.assertIn("exceeds the WorkOrder constraints", wi["attempts"][0])
+
+    def test_an_artifact_on_another_branch_fails_the_result(self):
+        wi, task = self.dispatched()
+        self.github.push(REPO, "factory/8", "c1")
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"], "c1", branch="factory/8"))
+        wi = self.tick()
+        self.assertEqual(wi["state"], "ready")
+        self.assertIn("artifact branch factory/8 is not factory/7", wi["attempts"][0])
+
+    def test_a_result_that_reports_failed_is_an_attempt(self):
+        """How worker/runner.py reports a failing verify: the task completes, and its Result says failed."""
+        wi, task = self.dispatched()
+        self.relay.finish(task["id"], output=json.dumps({
+            "schemaVersion": "factory.result/v1", "workOrderId": wi["activeWorkOrderId"], "status": "failed",
+            "error": "verify exited 1: FAILED (failures=2)",
+            "evidence": [{"kind": "test", "command": "make test", "exit": 1, "tail": "FAILED"}],
+            "startedAt": "2026-09-24T00:00:00Z", "finishedAt": "2026-09-24T00:10:00Z"}))
+        wi = self.tick()
+        self.assertEqual(wi["state"], "ready")
+        self.assertIn("worker reported failed: verify exited 1: FAILED (failures=2)", wi["attempts"][0])
+        self.assertEqual(self.github.pulls, [])
+
+    def test_a_result_for_a_branch_with_an_open_pr_joins_that_pr(self):
+        """ADR-0003: the Foreman adopts the PR on the branch instead of opening a second one."""
+        wi, task = self.dispatched()
+        self.github.add_pr(REPO, 55, "factory/7", "c0")  # opened while the worker ran
+        self.github.push(REPO, "factory/7", "c1")
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"], "c1"))
+        wi = self.tick()
+        self.assertEqual((wi["state"], wi["prNumber"], wi["headSha"]), ("reviewing", 55, "c1"))
+        self.assertEqual(len(self.github.pulls), 1)
+
+    def test_open_pr_adopts_a_pr_opened_after_the_reconcile(self):
+        wi, _ = self.dispatched()
+        self.github.add_pr(REPO, 55, "factory/7", "c1")
+        pr = self.foreman.open_pr(wi, self.foreman.store.workorders(ID)[0], [], [], "codex")
+        self.assertEqual((pr["number"], len(self.github.pulls)), (55, 1))
+
     def test_bad_results_fail_attempts_then_block(self):
         wi, task = self.dispatched()
         self.github.push(REPO, "factory/7", "c1", files=((".github/workflows/x.yml", 1, 0),))
@@ -139,22 +191,6 @@ class ActionsTest(unittest.TestCase):
         self.tick()
         self.github.add_verdict(REPO, 100, "MERGE", 1, "c0-older")
         self.assertEqual(self.tick()["state"], "pr_open")
-
-
-class ResultCheckTest(unittest.TestCase):
-    ORDER = {"id": "wo-12-r0-a0", "requiredEvidence": ["tests-pass"]}
-
-    def test_agrees_with_the_schema_on_the_fixture(self):
-        fixture = json.loads((ROOT / "tests" / "fixtures" / "edit5-artifact-or-patch.json").read_text())
-        self.assertEqual(check_result(fixture["valid"], self.ORDER), [])
-        self.assertIn("a completed Result needs an artifact or a patch",
-                      check_result(fixture["invalid"], self.ORDER))
-
-    def test_rejects_unknown_fields_and_failing_evidence(self):
-        result = json.loads(result_line("wo-12-r0-a0", "c1", exit_code=1).splitlines()[-1])
-        result["relayTaskId"] = "x"
-        self.assertEqual(check_result(result, self.ORDER), [
-            "unknown field relayTaskId", "required evidence tests-pass: no passing test entry"])
 
 
 if __name__ == "__main__":

@@ -50,10 +50,16 @@ class McpServerTest(unittest.TestCase):
         status, body = self.post({"jsonrpc": "2.0", "method": "notifications/initialized"})
         self.assertEqual((status, body), (202, None))
 
-    def test_tools_listed_with_effects(self):
-        tools = {t["name"]: t for t in self.rpc("tools/list")["result"]["tools"]}
-        self.assertEqual(tools["factory_status"]["annotations"], {"readOnlyHint": True})
-        self.assertEqual(tools["factory_status"]["inputSchema"]["type"], "object")
+    def test_every_tool_declares_whether_it_writes(self):
+        """An MCP client decides from readOnlyHint whether to ask a person first (Hermes does), so a
+        write tool marked read would skip that question. A new tool must be added here on purpose."""
+        tools = self.rpc("tools/list")["result"]["tools"]
+        reads = {t["name"] for t in tools if t["annotations"]["readOnlyHint"] is True}
+        writes = {t["name"] for t in tools if t["annotations"]["readOnlyHint"] is False}
+        self.assertEqual(reads, {"factory_status"})
+        self.assertEqual(writes, {"factory_intake", "factory_tick", "factory_resolve_human",
+                                  "factory_propose_issue"})
+        self.assertTrue(all(t["inputSchema"]["type"] == "object" for t in tools))
 
     def test_status_call_is_audited(self):
         self.store.put(workitem())

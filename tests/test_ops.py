@@ -1,4 +1,4 @@
-"""Phase F: resolving escalations, proposing issues, the cost ledger and the autonomy rate."""
+"""Escalations and the person's answer to them, proposing issues, the cost ledger and the autonomy rate."""
 import json
 import unittest
 from pathlib import Path
@@ -49,7 +49,8 @@ class ResolveHumanTest(unittest.TestCase):
         with self.assertRaisesRegex(ToolError, "not waiting on a person"):
             self.foreman.resolve_human(ID, "close", "n", "amteshwar")
 
-    def test_retry_on_a_pr_sends_the_note_as_a_finding(self):
+    def gate_says_human(self):
+        """PR 100 at c1, with a HUMAN verdict from the gate."""
         wi = self.tick()
         self.github.push(REPO, "factory/7", "c1")
         self.relay.finish(wi["providerTaskId"], output=result_line(wi["activeWorkOrderId"], "c1"))
@@ -57,6 +58,9 @@ class ResolveHumanTest(unittest.TestCase):
         self.github.add_run(REPO, "c1", conclusion="neutral")
         self.github.add_verdict(REPO, 100, "HUMAN", 1, "c1")
         self.assertEqual(self.tick()["state"], "human_waiting")
+
+    def test_retry_on_a_pr_sends_the_note_as_a_finding(self):
+        self.gate_says_human()
         with self.assertRaisesRegex(ToolError, "resolution must be"):
             self.foreman.resolve_human(ID, "merge", "n", "amteshwar")
 
@@ -66,6 +70,20 @@ class ResolveHumanTest(unittest.TestCase):
         self.assertEqual((wi["state"], order["kind"]), ("implementing", "fix"))
         self.assertEqual(order["findingsToAddress"],
                          [{"fingerprint": "human", "problem": "Keep the old path as a fallback"}])
+
+    def test_regate_sends_a_pr_back_to_the_gate(self):
+        self.gate_says_human()
+        wi = self.foreman.resolve_human(ID, "regate", "Pushed the fix myself", "amteshwar")
+        self.assertEqual((wi["state"], wi["blockedOn"]), ("reviewing", None))
+        self.assertEqual(self.tick()["state"], "reviewing")  # it waits for the gate: no worker pass
+        self.assertEqual(len(self.foreman.store.workorders(ID)), 1)
+
+    def test_a_decision_waits_while_a_tick_holds_the_lease(self):
+        self.block()
+        self.foreman.store.acquire(ID, "another-tick")
+        with self.assertRaisesRegex(ToolError, "is being ticked; try again"):
+            self.foreman.resolve_human(ID, "close", "Not worth it", "amteshwar")
+        self.assertEqual(self.foreman.store.get(ID)["state"], "blocked")
 
     def test_regate_and_close(self):
         self.block()

@@ -1,4 +1,4 @@
-"""Phase B: intake, verdict parsing, fact-driven reconcile, rebuild after store loss."""
+"""Intake, verdict parsing, the fact-driven reconcile table, and rebuild after store loss."""
 import unittest
 
 from factory_mcp.config import Config
@@ -7,7 +7,7 @@ from factory_mcp.mcp import ToolError
 from factory_mcp.store import Store
 from factory_mcp.verdict import fingerprint, parse_marker, verdicts
 from factory_mcp.workitem import intake, parse_acceptance, reconcile
-from tests.fakes import FakeGitHub, FakeRelay, marker_comment
+from tests.fakes import ISSUE_BODY, FakeGitHub, FakeRelay, marker_comment
 
 REPO = "o/r"
 CONFIG = Config(mcp_token="t", repos=frozenset({REPO}))
@@ -27,6 +27,13 @@ class AcceptanceTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "C has no check"):
             intake(REPO, {"number": 1, "title": "t", "state": "open", "labels": [],
                           "body": "## Acceptance\n- C has no check"})
+
+    def test_intake_refuses_a_pull_request_and_a_closed_issue(self):
+        issue = {"number": 1, "title": "t", "state": "open", "labels": [], "body": ISSUE_BODY}
+        for refused, message in ((dict(issue, pull_request={}), "is a pull request"),
+                                 (dict(issue, state="closed"), "is closed")):
+            with self.subTest(message), self.assertRaisesRegex(ValueError, message):
+                intake(REPO, refused)
 
 
 class VerdictTest(unittest.TestCase):
