@@ -9,7 +9,7 @@ from .store import now
 from .verdict import blockers, verdicts
 
 READY, PROPOSED = "factory:ready", "factory:proposed"
-TERMINAL = frozenset({"closed", "cancelled", "exhausted", "failed"})
+TERMINAL = frozenset({"closed", "cancelled", "exhausted"})
 # The Foreman owns these: a worker is running, or a human holds the WorkItem.
 BUSY = frozenset({"dispatching", "implementing", "human_waiting", "blocked"})
 OUTCOME_STATE = {"MERGE": "merge_pending", "CHANGES": "changes_requested", "HUMAN": "human_waiting"}
@@ -84,7 +84,7 @@ def observe(github, wi):
     if pulls:
         pr = max(pulls, key=lambda p: p["number"])
         facts["pr"] = {"number": pr["number"], "state": pr["state"], "merged": bool(pr.get("merged_at")),
-                       "headSha": pr["head"]["sha"], "baseSha": pr["base"]["sha"]}
+                       "headSha": pr["head"]["sha"]}
         facts["verdicts"] = verdicts(github.comments(wi["repo"], pr["number"]), wi["repo"], pr["number"])
         runs = github.check_runs(wi["repo"], pr["head"]["sha"])
         if runs:
@@ -117,7 +117,7 @@ def reconcile(wi, facts):
         return wi
     issue, pr = facts["issue"], facts["pr"]
     if pr:
-        wi.update(prNumber=pr["number"], headSha=pr["headSha"], baseSha=pr["baseSha"])
+        wi.update(prNumber=pr["number"], headSha=pr["headSha"])
         if pr["merged"]:
             wi["state"] = "closed" if issue["state"] == "closed" else "merged"
             if not gated(facts):  # a person merged it: a fact, but not the gate's decision (D3)

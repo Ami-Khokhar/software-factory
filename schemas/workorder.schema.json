@@ -10,6 +10,7 @@
     "id",
     "workItemId",
     "round",
+    "repo",
     "kind",
     "goal",
     "acceptance",
@@ -28,8 +29,8 @@
       "minimum": 0,
       "description": "Gate round this work order acts on (0 = first implementation)."
     },
-    "kind": { "enum": ["implement", "fix", "verify"] },
-    "repo": { "type": ["string", "null"] },
+    "kind": { "enum": ["implement", "fix"] },
+    "repo": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
     "baseSha": { "type": ["string", "null"] },
     "headSha": {
       "type": ["string", "null"],
@@ -44,22 +45,21 @@
     "constraints": { "$ref": "#/$defs/constraints" },
     "findingsToAddress": {
       "type": "array",
-      "description": "For kind=fix: the specific findings this work order exists to resolve.",
+      "description": "What this WorkOrder must resolve: the gate's findings, the owner's note (fingerprint human), or why the last attempt failed.",
       "items": { "$ref": "#/$defs/findingRef" }
     },
     "requiredEvidence": {
       "type": "array",
       "minItems": 1,
       "items": {
-        "enum": ["tests-pass", "lint-pass", "typecheck-pass", "build-pass", "scan-clean", "proof-commands"]
+        "enum": ["tests-pass"]
       }
     },
     "budget": { "$ref": "#/$defs/budget" },
-    "workspace": { "$ref": "#/$defs/workspace" },
     "idempotencyKey": {
       "type": "string",
       "minLength": 1,
-      "description": "Stable key, e.g. pr-13-fix-r2. A replay returns the existing task instead of starting duplicate work."
+      "description": "<workItemId>:r<round>:<kind>:a<attempt>. A replay returns the existing task instead of starting duplicate work."
     },
     "createdAt": { "type": "string", "format": "date-time" }
   },
@@ -88,11 +88,6 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Touching any of these forces HUMAN at the gate."
-        },
-        "allowedPaths": {
-          "type": "array",
-          "items": { "type": "string" },
-          "description": "Optional least-privilege scope. Empty/absent = the whole repo."
         }
       }
     },
@@ -121,17 +116,7 @@
           "type": "integer",
           "minimum": 1,
           "description": "Wall-clock ceiling for this WorkOrder; also the relay task timeout."
-        },
-        "tokens": { "type": "integer", "minimum": 1 },
-        "usd": { "type": "number", "minimum": 0 }
-      }
-    },
-    "workspace": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "provider": { "enum": ["local", "worktree", "container", "remote"] },
-        "path": { "type": ["string", "null"] }
+        }
       }
     }
   }

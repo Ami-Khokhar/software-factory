@@ -1,8 +1,9 @@
 """The schemas are the published contracts, and the code must say what they say.
 
 Every WorkItem and WorkOrder the Foreman writes is validated against its schema in
-tests/test_actions.py. Here: each schema is valid JSON Schema, and the Result check the Foreman
-runs on worker output accepts exactly the Results the schema accepts.
+tests/test_actions.py. Here: each schema is valid JSON Schema, the Result check the Foreman runs on
+worker output accepts exactly the Results the schema accepts, and the Verdicts read from gate
+comments meet their schema.
 """
 import json
 import unittest
@@ -11,6 +12,8 @@ from pathlib import Path
 from jsonschema import Draft202012Validator
 
 from factory_mcp.documents import check_result
+from factory_mcp.verdict import verdicts
+from tests.fakes import marker_comment
 
 ROOT = Path(__file__).resolve().parent.parent
 ORDER = {"id": "o/r#7:r0:implement:a0", "requiredEvidence": ["tests-pass"]}
@@ -37,12 +40,15 @@ CASES = [
                                                                 "baseSha": "b0"}), True),
     ("completed with no artifact or patch", result(artifact=...), False),
     ("an artifact without a commit", result(artifact={"branch": "factory/7"}), False),
+    ("an artifact with an unknown field", result(artifact={"branch": "factory/7", "commitSha": "c1",
+                                                           "filesChanged": ["app.py"]}), False),
     ("a patch in an unknown format", result(artifact=..., patch={"format": "zip", "diff": "x"}), False),
     ("a patch with an empty diff", result(artifact=..., patch={"format": "unified", "diff": ""}), False),
+    ("a patch with an unknown field", result(artifact=..., patch={"format": "unified", "diff": "d",
+                                                                   "stat": "1 file"}), False),
     ("failed with its error", result(status="failed", artifact=..., error="verify exited 1"), True),
     ("failed without an error", result(status="failed", artifact=...), False),
-    ("timed out without an error", result(status="timed_out", artifact=...), False),
-    ("cancelled without an error", result(status="cancelled", artifact=...), True),
+    ("timed_out, a relay task status", result(status="timed_out", artifact=..., error="slow"), False),
     ("an unknown status", result(status="done"), False),
     ("an unknown field", result(relayTaskId="t1"), False),
     ("another schema version", result(schemaVersion="factory.result/v2"), False),
@@ -73,6 +79,17 @@ class SchemaTest(unittest.TestCase):
         self.assertEqual(check_result(result(evidence=[dict(PASSING, exit=1)]), ORDER),
                          ["required evidence tests-pass: no passing test entry"])
         self.assertEqual(check_result(None, ORDER), ["the task output has no Result JSON line"])
+
+    def test_a_verdict_read_from_a_gate_comment_meets_its_schema(self):
+        findings = [{"severity": "blocking", "path": "app.py", "line": 3, "problem": "x > y", "fix": "swap"},
+                    {"severity": "note", "path": None, "line": "7", "problem": "No test"}]
+        comments = [{"body": marker_comment(outcome, n, f"s{n}", findings), "created_at": "2026-09-24T02:00:00Z"}
+                    for n, outcome in enumerate(("CHANGES", "HUMAN", "MERGE"), start=1)]
+        validator = Draft202012Validator(schema("verdict"))
+        found = verdicts(comments, "o/r", 5)
+        self.assertEqual(len(found), 3)
+        for verdict in found:
+            self.assertEqual([e.message for e in validator.iter_errors(verdict)], [])
 
 
 if __name__ == "__main__":

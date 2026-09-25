@@ -44,7 +44,7 @@ def to_verdict(marker, repo, pr_number, published_at):
         })
     return {"schemaVersion": "factory.verdict/v1", "repo": repo, "prNumber": pr_number,
             "round": marker["round"], "headSha": marker["head_sha"], "outcome": marker["outcome"],
-            "reasons": [], "findings": findings, "publishedAt": published_at}
+            "findings": findings, "publishedAt": published_at}
 
 
 def blocking(verdict):

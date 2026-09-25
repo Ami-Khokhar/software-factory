@@ -3,10 +3,11 @@ import json
 
 from .store import now
 
-EVIDENCE_KIND = {"tests-pass": "test", "lint-pass": "lint", "typecheck-pass": "typecheck",
-                 "build-pass": "build", "scan-clean": "scan", "proof-commands": "proof"}
-RESULT_KEYS = {"schemaVersion", "workOrderId", "status", "artifact", "patch", "evidence", "usage",
-               "session", "error", "notes", "startedAt", "finishedAt"}
+EVIDENCE_KIND = {"tests-pass": "test"}
+RESULT_KEYS = {"schemaVersion", "workOrderId", "status", "artifact", "patch", "evidence", "error",
+               "startedAt", "finishedAt"}
+ARTIFACT_KEYS = {"branch", "commitSha"}
+PATCH_KEYS = {"format", "diff", "baseSha"}
 EVIDENCE_KEYS = {"kind", "command", "exit", "tail"}
 
 
@@ -74,7 +75,7 @@ def check_result(result, order):
         errors.append("schemaVersion is not factory.result/v1")
     if result.get("workOrderId") != order["id"]:
         errors.append(f"workOrderId is not {order['id']}")
-    if result.get("status") not in ("completed", "failed", "timed_out", "cancelled"):
+    if result.get("status") not in ("completed", "failed"):
         errors.append("status is missing or unknown")
     for key in ("startedAt", "finishedAt"):
         if not isinstance(result.get(key), str):
@@ -85,18 +86,20 @@ def check_result(result, order):
             and isinstance(e.get("command"), str) and e["command"]
             and isinstance(e.get("exit"), int) and set(e) <= EVIDENCE_KEYS for e in evidence):
         return errors + ["evidence entries need kind, command and an integer exit, and nothing else"]
-    if result.get("status") in ("failed", "timed_out") and not result.get("error"):
+    if result.get("status") == "failed" and not result.get("error"):
         errors.append("a failed Result needs an error")
     if result.get("status") != "completed":
         return errors
     artifact, patch = result.get("artifact"), result.get("patch")
     if isinstance(artifact, dict):
         if not (isinstance(artifact.get("branch"), str) and artifact["branch"]
-                and isinstance(artifact.get("commitSha"), str) and artifact["commitSha"]):
-            errors.append("artifact needs branch and commitSha")
+                and isinstance(artifact.get("commitSha"), str) and artifact["commitSha"]
+                and set(artifact) <= ARTIFACT_KEYS):
+            errors.append("artifact needs branch and commitSha, and nothing else")
     elif isinstance(patch, dict):
-        if patch.get("format") not in ("unified", "mbox") or not patch.get("diff"):
-            errors.append("patch needs format unified|mbox and a diff")
+        if patch.get("format") not in ("unified", "mbox") or not patch.get("diff") \
+                or not set(patch) <= PATCH_KEYS:
+            errors.append("patch needs format unified|mbox and a diff, and at most a baseSha")
     else:
         errors.append("a completed Result needs an artifact or a patch")
     for required in order["requiredEvidence"]:

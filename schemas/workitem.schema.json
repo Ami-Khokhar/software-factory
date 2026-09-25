@@ -22,10 +22,6 @@
     "id": { "type": "string", "minLength": 1 },
     "repo": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
     "issueNumber": { "type": "integer", "minimum": 1 },
-    "parentGoalId": {
-      "type": ["string", "null"],
-      "description": "Set for child issues of an epic. Parent completion depends on all children."
-    },
     "goal": { "type": "string", "minLength": 1 },
     "acceptance": {
       "type": "array",
@@ -35,7 +31,6 @@
     },
     "branch": { "type": ["string", "null"] },
     "prNumber": { "type": ["integer", "null"], "minimum": 1 },
-    "baseSha": { "type": ["string", "null"] },
     "headSha": {
       "type": ["string", "null"],
       "description": "The commit the controller last dispatched/observed on the branch."
@@ -52,7 +47,7 @@
     "attempts": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
-      "description": "What was tried and what each try did, one entry per attempt. Mirrors OpenBot job_blocked.tried."
+      "description": "What was tried and what each try did, one entry per attempt. An escalation shows them."
     },
     "blockedOn": {
       "type": ["string", "null"],
@@ -70,14 +65,7 @@
       "description": "Optimistic-concurrency version. Every durable write increments it."
     },
     "activeWorkOrderId": { "type": ["string", "null"] },
-    "provider": { "type": ["string", "null"], "description": "Worker provider, e.g. agent-relay." },
-    "providerTaskId": { "type": ["string", "null"], "description": "The provider's id for the active task." },
-    "sessionHandle": { "type": ["string", "null"] },
-    "sessionNative": {
-      "type": ["boolean", "null"],
-      "description": "True when sessionHandle resumes the harness's own session."
-    },
-    "sessionUrl": { "type": ["string", "null"] },
+    "providerTaskId": { "type": ["string", "null"], "description": "agent-relay's id for the active task." },
     "worker": { "type": ["string", "null"], "description": "agent-relay agentId used." },
     "owner": {
       "type": ["string", "null"],
@@ -115,7 +103,6 @@
     },
     "state": {
       "enum": [
-        "intent",
         "issued",
         "planned",
         "ready",
@@ -129,11 +116,10 @@
         "closed",
         "human_waiting",
         "blocked",
-        "failed",
         "cancelled",
         "exhausted"
       ],
-      "description": "merged, closed, cancelled and exhausted are terminal. exhausted = budget hit, neither done nor blocked. human_waiting is NOT terminal: it is an action queue with a path back to ready or closed."
+      "description": "closed, cancelled and exhausted are terminal. merged waits for the issue to close. exhausted = budget hit, neither done nor blocked. human_waiting is NOT terminal: it is an action queue with a path back to ready or closed."
     },
     "blocker": {
       "type": "object",

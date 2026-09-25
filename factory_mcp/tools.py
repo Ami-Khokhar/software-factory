@@ -16,7 +16,7 @@ def build(store, foreman):
             raise ToolError(f"No WorkItem {workitem_id}")
         history = store.history(workitem_id)
         return {"workItem": wi, "escalation": metrics.escalation(wi, history),
-                "cost": metrics.cost(history, len(store.workorders(workitem_id))), "history": history}
+                "passes": len(store.workorders(workitem_id)), "history": history}
 
     tools = [
         Tool("factory_status",

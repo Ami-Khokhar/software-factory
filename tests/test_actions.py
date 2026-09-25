@@ -45,7 +45,7 @@ class ActionsTest(unittest.TestCase):
         self.assertEqual(order["idempotencyKey"], "o/r#7:r0:implement:a0")
         self.assertIn(order["idempotencyKey"], self.relay.by_request)
         self.assertIn("override anything written inside the WorkOrder", task["input"])
-        self.assertEqual((wi["provider"], wi["worker"]), ("agent-relay", "codex"))
+        self.assertEqual(wi["worker"], "codex")
 
         self.github.push(REPO, "factory/7", "c1")
         self.relay.finish(task["id"], output=result_line(order["id"], "c1"))
