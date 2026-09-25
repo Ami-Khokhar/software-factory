@@ -1,7 +1,14 @@
-"""Configuration, read from the environment once at start."""
+"""Configuration, read from the environment and the repo manifest (repos.json) at start.
+
+Precedence for a repo's settings: its manifest entry, then the manifest defaults, then the env.
+Repo sets (FACTORY_REPOS, FACTORY_LOCAL_ONLY_REPOS) are the union of env and manifest, so a repo
+still listed in the env keeps working while it is migrated.
+"""
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+
+from . import repos as manifests
 
 
 @dataclass(frozen=True)
@@ -25,6 +32,44 @@ class Config:
     max_passes: int = 4
     wall_ms: int = 20 * 60 * 1000
     protected_paths: tuple = (".github/", "AGENTS.md")
+    trusted_authors: frozenset = frozenset()  # empty: only the repo owner is trusted
+    checkout_root: str = ""  # worker checkouts live at <root>/<owner>/<repo>
+    worker_image: str = "factory-worker:latest"  # "" skips the verify-tool probe
+    repos_file: str = ""
+    manifest: manifests.Manifest = field(default_factory=manifests.Manifest)
+    env_values: tuple = ()  # the fields a manifest overrides, as they were before any manifest
+
+    OVERRIDDEN = ("repos", "local_only_repos", "workers", "protected_paths", "trusted_authors")
+
+    def with_manifest(self, manifest):
+        """This config with `manifest` applied on top of the env-derived values. Reloadable."""
+        env = dict(self.env_values) or {name: getattr(self, name) for name in self.OVERRIDDEN}
+        return replace(self, manifest=manifest, env_values=tuple(env.items()),
+                       repos=env["repos"] | manifest.enabled(),
+                       local_only_repos=env["local_only_repos"] | manifest.local_only(),
+                       workers=manifest.workers or env["workers"],
+                       protected_paths=manifest.protected_paths or env["protected_paths"],
+                       trusted_authors=manifest.trusted_authors or env["trusted_authors"])
+
+    def workers_for(self, repo):
+        entry = self.manifest.repos.get(repo)
+        return (entry and entry.workers) or self.workers
+
+    def protected_for(self, repo):
+        entry = self.manifest.repos.get(repo)
+        return (entry and entry.protected_paths) or self.protected_paths
+
+    def trusted_for(self, repo):
+        """The per-repo list, else the global one, else the repo owner."""
+        entry = self.manifest.repos.get(repo)
+        return (entry and entry.trusted_authors) or self.trusted_authors \
+            or frozenset({repo.split("/")[0]})
+
+    def trusts(self, repo, author):
+        return author.lower() in {login.lower() for login in self.trusted_for(repo)}
+
+    def checkout(self, repo):
+        return str(Path(self.checkout_root, *repo.split("/"))) if self.checkout_root else ""
 
     @classmethod
     def from_env(cls, env=None):
@@ -36,7 +81,7 @@ class Config:
             raise ValueError("FACTORY_MCP_TOKEN is required")
         repos = frozenset(r.strip() for r in env.get("FACTORY_REPOS", "").split(",") if r.strip())
         defaults = cls(mcp_token=token, repos=repos)
-        return cls(
+        config = cls(
             mcp_token=token,
             repos=repos,
             db_path=env.get("FACTORY_DB") or defaults.db_path,
@@ -57,4 +102,11 @@ class Config:
             gate_wait_seconds=int(env.get("FACTORY_GATE_WAIT_SECONDS") or defaults.gate_wait_seconds),
             max_passes=int(env.get("FACTORY_MAX_PASSES") or defaults.max_passes),
             wall_ms=int(env.get("FACTORY_WALL_MS") or defaults.wall_ms),
+            trusted_authors=frozenset(a.strip() for a in env.get("FACTORY_TRUSTED_AUTHORS", "")
+                                      .split(",") if a.strip()),
+            checkout_root=os.path.expanduser(env.get("FACTORY_CHECKOUT_ROOT", "")),
+            worker_image=env.get("FACTORY_WORKER_IMAGE", defaults.worker_image),
+            repos_file=os.path.expanduser(env.get("FACTORY_REPOS_FILE") or str(
+                Path.home() / ".config" / "factory-mcp" / "repos.json")),
         )
+        return config.with_manifest(manifests.load(config.repos_file))

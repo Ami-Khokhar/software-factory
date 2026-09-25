@@ -21,7 +21,7 @@ class Foreman:
 
     def intake(self, repo, number):
         if repo not in self.config.repos:
-            raise ToolError(f"{repo} is not in FACTORY_REPOS")
+            raise ToolError(f"{repo} is not an enabled factory repo (FACTORY_REPOS or repos.json)")
         existing = self.store.get(workitem.workitem_id(repo, number))
         if existing:
             return existing
@@ -134,7 +134,7 @@ class Foreman:
                 "exhausted")
         failed = {h["detail"].get("worker") for h in self.store.history(wi["id"])
                   if h["action"] == "attempt_failed"}
-        worker = routing.route(self.config.workers, wi["repo"] in self.config.local_only_repos, failed)
+        worker = routing.route(self.config.workers_for(wi["repo"]), wi["repo"] in self.config.local_only_repos, failed)
         if worker is None:
             return self._write(wi, dict(wi, state="human_waiting", blockedOn=(
                 f"{wi['repo']} is local-only and FACTORY_WORKERS has no local worker")), "no_worker")
@@ -265,7 +265,7 @@ class Foreman:
     def propose_issue(self, repo, title, body):
         """Planner: open an issue labelled factory:proposed. A person adds factory:ready."""
         if repo not in self.config.repos:
-            raise ToolError(f"{repo} is not in FACTORY_REPOS")
+            raise ToolError(f"{repo} is not an enabled factory repo (FACTORY_REPOS or repos.json)")
         criteria, missing = workitem.parse_acceptance(body)
         if missing or not criteria:
             raise ToolError("The body needs an '## Acceptance' list of "

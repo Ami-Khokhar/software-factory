@@ -3,6 +3,7 @@ import json
 import unittest
 from pathlib import Path
 
+from factory_mcp import tools
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
@@ -42,6 +43,8 @@ class ResolveHumanTest(unittest.TestCase):
         self.assertEqual(len(asked["tried"]), 2)
         self.assertIn("factory_resolve_human", asked["needFromYou"])
         self.assertEqual(cost(history, 2), {"passes": 2, "tokens": 2000, "usd": 0.5})
+        needs = tools.build(self.foreman.store, self.foreman)["factory_status"].fn({})["needsYou"]
+        self.assertEqual([(n["id"], n["reason"]) for n in needs], [(ID, wi["blockedOn"])])
 
         wi = self.foreman.resolve_human(ID, "retry", "Registry path fixed on the runner", "amteshwar")
         self.assertEqual((wi["state"], wi["attempts"], wi["blockedOn"]), ("ready", [], None))

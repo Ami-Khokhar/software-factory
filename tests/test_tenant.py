@@ -55,6 +55,22 @@ class PolicyTest(unittest.TestCase):
             (("factory-planner", "factory-mcp", "factory_propose_issue"), True),
             (("factory-planner", "factory-mcp", "factory_tick"), False),
             (("someone-else", "factory-mcp", "factory_status"), False),
+            # Day Desk reads; factory-ops holds the repo and start tools (plan.md realisation B)
+            (("day-desk", "factory-mcp", "factory_status"), True),
+            (("day-desk", "factory-mcp", "factory_repo_check"), True),
+            (("day-desk", "factory-mcp", "factory_repo_status"), True),
+            (("day-desk", "factory-mcp", "factory_add_repo"), False),
+            (("day-desk", "factory-mcp", "factory_approve_issue"), False),
+            (("day-desk", "factory-mcp", "factory_tick"), False),
+            (("factory-ops", "factory-mcp", "factory_repo_check"), True),
+            (("factory-ops", "factory-mcp", "factory_add_repo"), True),
+            (("factory-ops", "factory-mcp", "factory_approve_issue"), True),
+            (("factory-ops", "factory-mcp", "factory_approve_issue", "routine"), False),
+            (("factory-ops", "factory-mcp", "factory_tick"), False),
+            (("factory-ops", "factory-mcp", "factory_propose_issue"), False),
+            (("factory-ops", "github", "create_repository"), False),
+            (("factory-foreman", "factory-mcp", "factory_add_repo"), False),
+            (("factory-planner", "factory-mcp", "factory_approve_issue"), False),
         ]
         for args, expected in cases:
             with self.subTest(call=args):
@@ -68,7 +84,7 @@ class PackageTest(unittest.TestCase):
 
     def test_names_agree(self):
         agents = set(re.findall(r"^  - id: (\S+)", (TENANT / "agents.yaml").read_text(), re.M))
-        self.assertEqual(agents, {"factory-foreman", "factory-planner"})
+        self.assertEqual(agents, {"factory-foreman", "factory-planner", "factory-ops"})
         permitted = re.search(r"permitted_agents: \[(.*)\]", (TENANT / "channels.yaml").read_text())
         self.assertEqual({a.strip() for a in permitted.group(1).split(",")}, agents)
         real = set(tools.build(None, None))

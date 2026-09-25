@@ -14,6 +14,7 @@ from . import mcp, tools
 from .config import Config
 from .foreman import Foreman
 from .github import GitHub
+from .ops import Ops
 from .relay import Relay
 from .store import Store
 
@@ -71,14 +72,16 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, response)
 
 
-def make_server(config, store, github=None, relay=None):
+def make_server(config, store, github=None, relay=None, ops=None):
+    """`ops`: keyword overrides for Ops (probe, clone), for tests."""
     server = ThreadingHTTPServer((config.host, config.port), Handler)
     server.daemon_threads = True
     server.config = config
-    foreman = Foreman(store, github or GitHub(config.github_token, config.github_api), config,
-                      relay or Relay(config.relay_url))
+    github = github or GitHub(config.github_token, config.github_api)
+    foreman = Foreman(store, github, config, relay or Relay(config.relay_url))
     server.foreman = foreman
-    server.tools = tools.build(store, foreman)
+    server.ops = Ops(store, github, config, foreman, **(ops or {}))
+    server.tools = tools.build(store, foreman, server.ops)
     server.audit = lambda name, args, ok: store.log(
         f"tool:{name}", {"args": args, "ok": ok}, workitem_id=args.get("id"))
     if config.tls_cert:

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "defaults": {
+    "workers": ["pi-glm-factory:local"],
+    "trusted_authors": ["Ami-Khokhar"],
+    "protected_paths": [".github/", "AGENTS.md"]
+  },
+  "repos": [
+    {
+      "name": "Ami-Khokhar/agent-relay",
+      "enabled": true,
+      "risk": "normal",
+      "default_branch": "main",
+      "gate": {"verify": "python3 -m unittest discover -s test -p 'test_*.py'"},
+      "added_by": "Ami-Khokhar",
+      "added_at": "2026-09-25"
+    }
+  ]
+}

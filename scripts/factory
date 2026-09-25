@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""Operator CLI: call factory-mcp tools the same way OpenBot does (one implementation, G6).
+
+  scripts/factory tools                         list the tools and their effect
+  scripts/factory call <tool> ['<json args>']   call one tool, print its result
+  scripts/factory check owner/repo              factory_repo_check as a checklist
+  scripts/factory add-repo owner/repo [risk]    factory_add_repo (asks first)
+
+FACTORY_MCP_URL (default https://127.0.0.1:43125/mcp) and FACTORY_MCP_TOKEN select the server;
+SSL_CERT_FILE names the CA for a mkcert certificate.
+"""
+import getpass
+import json
+import os
+import ssl
+import sys
+import urllib.request
+
+
+def rpc(method, params=None):
+    url = os.environ.get("FACTORY_MCP_URL", "https://127.0.0.1:43125/mcp")
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}).encode()
+    request = urllib.request.Request(url, body, {
+        "Authorization": f"Bearer {os.environ['FACTORY_MCP_TOKEN']}",
+        "content-type": "application/json", "accept": "application/json"})
+    context = ssl.create_default_context(cafile=os.environ.get("SSL_CERT_FILE"))
+    with urllib.request.urlopen(request, context=context, timeout=60) as response:
+        reply = json.loads(response.read())
+    if "error" in reply:
+        sys.exit(f"factory-mcp: {reply['error']['message']}")
+    return reply["result"]
+
+
+def call(tool, args):
+    result = rpc("tools/call", {"name": tool, "arguments": args})
+    value = json.loads(result["content"][0]["text"])
+    if result["isError"]:
+        sys.exit(f"{tool} refused: {value['error']}")
+    return value
+
+
+def checklist(check):
+    for c in check["checks"]:
+        mark = "ok  " if c["ok"] else ("FAIL" if c["required"] else "warn")
+        print(f"[{mark}] {c['id']}: {c['detail']}" + (f"\n       fix: {c['fix']}" if c["fix"] else ""))
+    print(f"{check['repo']}: " + ("ready to enable" if check["ok"] else "not ready"))
+    return check["ok"]
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help"):
+        sys.exit(__doc__)
+    command, rest = argv[0], argv[1:]
+    if command == "tools":
+        for tool in rpc("tools/list")["tools"]:
+            effect = "read " if tool["annotations"]["readOnlyHint"] else "write"
+            print(f"{effect}  {tool['name']}")
+    elif command == "call":
+        print(json.dumps(call(rest[0], json.loads(rest[1]) if len(rest) > 1 else {}), indent=1))
+    elif command == "check":
+        sys.exit(0 if checklist(call("factory_repo_check", {"repo": rest[0]})) else 1)
+    elif command == "add-repo":
+        if not checklist(call("factory_repo_check", {"repo": rest[0]})):
+            sys.exit(1)
+        if input(f"Enable {rest[0]} for the factory? [y/N] ").strip().lower() != "y":
+            sys.exit("not enabled")
+        args = {"repo": rest[0], "confirm": True, "by": getpass.getuser()}
+        if len(rest) > 1:
+            args["risk"] = rest[1]
+        print(json.dumps(call("factory_add_repo", args), indent=1))
+    else:
+        sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

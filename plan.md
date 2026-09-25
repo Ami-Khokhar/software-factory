@@ -1,6 +1,7 @@
 # Plan — Day Desk as the single front door to the software factory
 
-Status: **proposal / implementation plan.** Written 2026-09-25.
+Status: **Phases 1 and 2 implemented in code** (see §16); Phase 0 and the OpenBot side (§9) are
+operator steps on the owner machine. Written 2026-09-25.
 Owner: (you). Pick-up target: a cloud coding session, reading this file from `main`.
 
 This document is self-contained: it records the current verified state, the target design, the
@@ -494,6 +495,16 @@ Boundaries-page row ever exists it **overrides** `.env` (see `computer/policy-st
 
 ---
 
+### Decisions (2026-09-25, implementing session)
+
+1. **(B)** — a dedicated `factory-ops` Bot holds `factory_add_repo` / `factory_approve_issue`;
+   Day Desk gets the read tools (`factory_status`, `factory_repos`, `factory_repo_check`,
+   `factory_repo_status`) and hands off. `tenant/factory/policy.json` enforces it.
+2. **`repos.json`** — PyYAML is not a dependency; the manifest is JSON with the §6.1 shape.
+3. **No auto-approve.** Both write tools need `confirm: true` and `by` (who asked).
+4. **Per-repo workers allowed;** a repo without its own list uses the defaults, then `FACTORY_WORKERS`.
+5. **All at once**, with Day Desk read-only by policy.
+
 ## 15. Task list for the implementing session (in order)
 
 1. Read `factory_mcp/config.py`, `tools.py`, `foreman.py`, `github.py`, `server.py`, `workitem.py`,
@@ -524,3 +535,36 @@ $ curl -s -X POST http://127.0.0.1:3001/api/plugins/call \
     -d '{"ref":"factory-mcp/factory_status","args":{},"agentId":"factory-foreman"}'   # 200, real WorkItems
 $ python3 -m unittest discover -s tests -p 'test_*.py'               # baseline green
 ```
+
+---
+
+## 16. Implementation record (2026-09-25)
+
+What landed, against §8:
+
+| Plan | Done in | Notes |
+|---|---|---|
+| §8.1 config | `factory_mcp/config.py` | `with_manifest` (reloadable), `workers_for`, `protected_for`, `trusted_for`/`trusts`, `checkout`; new env `FACTORY_REPOS_FILE`, `FACTORY_TRUSTED_AUTHORS`, `FACTORY_CHECKOUT_ROOT`, `FACTORY_WORKER_IMAGE` |
+| §8.2 github | `factory_mcp/github.py` | all seven methods |
+| §8.3 repos | `factory_mcp/repos.py` | JSON, atomic save, validation |
+| §8.4 ops | `factory_mcp/ops.py` | `repo_check`, `repo_status`, `add_repo`, `approve_issue`, `reload` |
+| §8.5 foreman | `foreman.py`, `documents.py` | routing uses per-repo workers; WorkOrders use per-repo protected paths |
+| §8.6 tools | `factory_mcp/tools.py` | five tools; `factory_status` summary gains `needsYou` (§13.3) |
+| §8.7 server | `factory_mcp/server.py` | builds `Ops` sharing the Foreman's GitHub client |
+| §8.8 tests | `tests/test_repos.py`, `tests/test_ops_tools.py`, `tests/test_mcp_server.py`, `tests/test_tenant.py`, `tests/test_ops.py` | §13.4 asserted: `repo_check` makes no GitHub writes and no audit rows |
+| §8.9 CLI | `scripts/factory` | `scripts/factory` was not on `main`; added as a thin MCP client (`tools`, `call`, `check`, `add-repo`) so there is one implementation |
+| §8.10 skill | `tenant/factory/agents.yaml` | the ordered procedure is the `factory-ops` system prompt; `skills.yaml` was not added because its OpenBot schema is not in this repo |
+| §8.11 / §9 | `scripts/openbot-grants.sh`, `tenant/factory/policy.json` | run on the owner machine; the `bot` grant body is assumed from §8.11 |
+
+Deviations worth knowing:
+
+- `factory_approve_issue` also calls `factory_intake`, so the WorkItem exists at once (the poller
+  would adopt it on the next tick anyway).
+- Trust falls back to the repo owner when no trusted author is configured.
+- Repo-level audit rows use `workitem_id = NULL`; `Store.history(None)` now returns them.
+- The worker clone is `--filter=blob:none` with a 25 s limit (non-negotiable 4: no tool call
+  blocks > 30 s); a timeout cleans up and asks for a retry.
+
+Still to do on the owner machine: §12 Phase 0 grants/policy, `scripts/openbot-grants.sh`, set
+`FACTORY_CHECKOUT_ROOT`, move `agent-relay` into `repos.json` (`scripts/factory add-repo
+Ami-Khokhar/agent-relay`), restart factory-mcp, then walk §13 in Telegram.

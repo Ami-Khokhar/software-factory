@@ -92,9 +92,10 @@ class Store:
                              (now(), workitem_id, action, json.dumps(detail, sort_keys=True)))
 
     def history(self, workitem_id):
+        """The audit rows of one WorkItem; `None` gives the rows about no WorkItem (repo ops)."""
         with self._lock:
             rows = self._db.execute(
-                "SELECT at, action, detail FROM audit WHERE workitem_id = ? ORDER BY seq",
+                "SELECT at, action, detail FROM audit WHERE workitem_id IS ? ORDER BY seq",
                 (workitem_id,)).fetchall()
         return [{"at": at, "action": action, "detail": json.loads(detail)} for at, action, detail in rows]
 

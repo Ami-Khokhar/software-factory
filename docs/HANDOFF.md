@@ -140,7 +140,7 @@ Each edit has a positive and a negative instance in `tests/fixtures/edit*.json`.
 | `job_blocked` (what you must supply + ≥2 attempts) | WorkItem `human_waiting` or `blocked` (D5); the attempts come from `factory_tick` history |
 | `job_checkpoint` | Records the last tick summary; real state is in `factory-mcp` |
 | **Governance gateway** (CEL, audit, fail-closed) | Allows only `factory-mcp` tools; denies everything else for factory Bots |
-| **Coworkers** | **Foreman** Bot (calls `factory_*`), **Planner** Bot (goal → issue proposal) |
+| **Coworkers** | **Foreman** Bot (calls `factory_*`), **Planner** Bot (goal → issue proposal), **Factory Ops** Bot (repo check/enable, issue start); **Day Desk** is the front door and hands off to them (`plan.md`) |
 | **Channels** (app, Telegram) | Escalation + ops console |
 | **Routines** | `factory_tick` every 15 min (OpenBot floor) |
 | **MCP servers** | `factory-mcp` only |
@@ -154,6 +154,11 @@ Each edit has a positive and a negative instance in `tests/fixtures/edit*.json`.
 | `factory_tick` | write | Reconcile one or all WorkItems against GitHub + relay, then take the **one** legal next action. Idempotent. |
 | `factory_resolve_human` | write | Record the human's answer and move `human_waiting`/`blocked` → `ready`, `changes_requested` or `reviewing` |
 | `factory_propose_issue` | write | Planner only: open an issue labelled `factory:proposed` (a human adds `factory:ready`) |
+| `factory_repos` | read | The enabled repos |
+| `factory_repo_check` | read | Sanity checklist for a repo (gate config, verify tool, token, labels, …); changes nothing |
+| `factory_repo_status` | read | Configured repos with risk, workers, trusted authors, WorkItem counts |
+| `factory_add_repo` | write | factory-ops only: enable a repo that passes the check (clone, labels, `repos.json`); `confirm` required |
+| `factory_approve_issue` | write | factory-ops only: a person's go — add `factory:ready` to a trusted author's issue and take it in; `confirm` required |
 
 There is no merge tool. There is no free-form "dispatch" or "open PR" tool: those actions happen
 only inside `factory_tick` when the state machine allows them.

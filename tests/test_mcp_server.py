@@ -1,14 +1,16 @@
 """Speak Streamable HTTP to a real factory-mcp server on an ephemeral port."""
 import json
+import tempfile
 import threading
 import unittest
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from factory_mcp.config import Config
 from factory_mcp.server import make_server
 from factory_mcp.store import Store
-from tests.fakes import workitem
+from tests.fakes import FakeGitHub, FakeRelay, workitem
 
 TOKEN = "test-token"
 
@@ -54,6 +56,13 @@ class McpServerTest(unittest.TestCase):
         tools = {t["name"]: t for t in self.rpc("tools/list")["result"]["tools"]}
         self.assertEqual(tools["factory_status"]["annotations"], {"readOnlyHint": True})
         self.assertEqual(tools["factory_status"]["inputSchema"]["type"], "object")
+        reads = {name for name, t in tools.items() if t["annotations"]["readOnlyHint"]}
+        self.assertEqual(reads, {"factory_status", "factory_repos", "factory_repo_check",
+                                 "factory_repo_status"})
+        self.assertEqual(set(tools) - reads, {"factory_intake", "factory_tick", "factory_resolve_human",
+                                              "factory_propose_issue", "factory_add_repo",
+                                              "factory_approve_issue"})
+        self.assertFalse([name for name in tools if "merge" in name])
 
     def test_status_call_is_audited(self):
         self.store.put(workitem())
@@ -75,6 +84,50 @@ class McpServerTest(unittest.TestCase):
         self.assertEqual(self.post(body, {"Authorization": "Bearer wrong"})[0], 401)
         self.assertEqual(self.post(body, {"Origin": "http://evil.example"})[0], 403)
         self.assertEqual(self.post(body, method="GET")[0], 405)
+
+
+class DayDeskFlowTest(McpServerTest):
+    """plan.md §13: check a repo, enable it, approve an issue, and the factory starts it."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store, self.github = Store(":memory:"), FakeGitHub()
+        self.github.add_repo("o/new")
+        config = Config(mcp_token=TOKEN, repos=frozenset(), port=0, checkout_root=self.tmp.name,
+                        repos_file=str(Path(self.tmp.name) / "repos.json"), workers=(("pi", "local"),))
+        clone = lambda url, token, dest: Path(dest, ".git").mkdir(parents=True)  # noqa: E731
+        self.server = make_server(config, self.store, self.github, FakeRelay(),
+                                  ops={"probe": lambda image, tool: True, "clone": clone})
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_port}/mcp"
+
+    def tearDown(self):
+        super().tearDown()
+        self.tmp.cleanup()
+
+    def call(self, name, **arguments):
+        result = self.rpc("tools/call", {"name": name, "arguments": arguments})["result"]
+        return result["isError"], json.loads(result["content"][0]["text"])
+
+    def test_check_enable_approve_start(self):
+        failed, check = self.call("factory_repo_check", repo="o/new")
+        self.assertEqual((failed, check["ok"]), (False, True))
+        failed, _ = self.call("factory_add_repo", repo="o/new", confirm=False, by="amteshwar")
+        self.assertTrue(failed)
+        failed, added = self.call("factory_add_repo", repo="o/new", confirm=True, by="amteshwar")
+        self.assertFalse(failed, added)
+        self.assertEqual(self.call("factory_repos")[1], {"repos": ["o/new"]})
+
+        self.github.add_issue("o/new", 3, labels=("factory:proposed",), author="o")
+        failed, started = self.call("factory_approve_issue", repo="o/new", issue=3, confirm=True,
+                                    by="amteshwar")
+        self.assertFalse(failed, started)
+        self.assertEqual(started["workItem"]["state"], "ready")
+        self.assertEqual(self.server.foreman.tick("o/new#3")["to"], "implementing")
+        self.assertEqual(self.call("factory_status")[1]["needsYou"], [])
+        audited = [h["action"] for h in self.store.history(None)]
+        self.assertIn("repo:added", audited)
+        self.assertIn("tool:factory_add_repo", audited)
 
 
 if __name__ == "__main__":

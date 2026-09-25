@@ -2,5 +2,5 @@ channels:
   - id: factory
     name: Factory
     description: Goals in, reviewed and merged PRs out. Escalations land here.
-    permitted_agents: [factory-foreman, factory-planner]
+    permitted_agents: [factory-foreman, factory-planner, factory-ops]
     allowed_groups: [owners]

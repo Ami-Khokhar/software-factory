@@ -1,4 +1,5 @@
 """GitHub REST over urllib. Only the calls the Foreman needs; every return value is plain JSON."""
+import base64
 import json
 import re
 import urllib.error
@@ -81,3 +82,45 @@ class GitHub:
     def create_pull(self, repo, head, base, title, body):
         return self._request("POST", f"{self.api}/repos/{repo}/pulls",
                              {"head": head, "base": base, "title": title, "body": body})[0]
+
+    def _get_or_none(self, url):
+        try:
+            return self._request("GET", url)[0]
+        except GitHubError as err:
+            if err.status == 404:
+                return None
+            raise
+
+    def contents(self, repo, path):
+        """The contents API entry for a file, or None if it does not exist."""
+        return self._get_or_none(f"{self.api}/repos/{repo}/contents/{urllib.parse.quote(path)}")
+
+    def contents_text(self, repo, path):
+        entry = self.contents(repo, path)
+        if not isinstance(entry, dict) or "content" not in entry:
+            return None
+        return base64.b64decode(entry["content"]).decode("utf-8", "replace")
+
+    def labels(self, repo):
+        return self._get_all(f"/repos/{repo}/labels")
+
+    def create_label(self, repo, name, color="0E8A16", description=""):
+        """Create a label; one that already exists (422) is not an error."""
+        try:
+            return self._request("POST", f"{self.api}/repos/{repo}/labels",
+                                 {"name": name, "color": color, "description": description})[0]
+        except GitHubError as err:
+            if err.status == 422 and "already_exists" in str(err):
+                return None
+            raise
+
+    def add_labels(self, repo, number, labels):
+        return self._request("POST", f"{self.api}/repos/{repo}/issues/{number}/labels",
+                             {"labels": list(labels)})[0]
+
+    def default_branch(self, repo):
+        return self.repository(repo)["default_branch"]
+
+    def branch_protection(self, repo, branch):
+        """The protection rules of a branch, or None if it is not protected."""
+        return self._get_or_none(f"{self.api}/repos/{repo}/branches/{branch}/protection")

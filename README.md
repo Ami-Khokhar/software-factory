@@ -40,6 +40,27 @@ FACTORY_MCP_TOKEN=<secret> FACTORY_REPOS=owner/repo FACTORY_GITHUB_TOKEN=<token>
 | `FACTORY_POLL_SECONDS` | Background tick interval, default 60; `0` leaves ticking to the OpenBot routine |
 | `FACTORY_GATE_WAIT_SECONDS` | No gate verdict on the PR head for this long sends it to a person, default 7200 |
 | `FACTORY_GITHUB_API` | GitHub REST base URL, default `https://api.github.com` (GitHub Enterprise, rehearsal) |
+| `FACTORY_REPOS_FILE` | Repo manifest, default `~/.config/factory-mcp/repos.json` (see below) |
+| `FACTORY_TRUSTED_AUTHORS` | Logins whose issues may be started; default the repo owner |
+| `FACTORY_CHECKOUT_ROOT` | Worker checkouts live at `<root>/<owner>/<repo>`; required to enable a repo |
+| `FACTORY_WORKER_IMAGE` | Image the verify tool is probed in, default `factory-worker:latest`; empty skips the probe |
+
+## Repos: the manifest
+
+Which repos the factory works on is declared in `repos.json`
+([example](docs/repos.example.json)). `factory_add_repo` writes it after `factory_repo_check`
+passes; you can also edit it by hand. A repo's own entry wins over the manifest `defaults`, which
+win over the env; `FACTORY_REPOS` and `FACTORY_LOCAL_ONLY_REPOS` still add repos while you migrate.
+
+```bash
+scripts/factory check owner/repo      # the checklist, with a fix for each failing check
+scripts/factory add-repo owner/repo   # asks, then enables it
+scripts/factory tools                 # every tool and its effect
+```
+
+Creating a repo, installing the pr-gatekeeper workflow and adding the repo to the GitHub token
+stay human. `scripts/openbot-grants.sh` offers the read tools to Day Desk and the repo/start tools
+to the Factory Ops Bot.
 
 `python3 scripts/rehearsal.py <agent-relay checkout> [--lose-store]` runs one issue from
 `factory:ready` to `closed` with the real relay and a stand-in GitHub.

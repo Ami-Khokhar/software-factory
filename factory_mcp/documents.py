@@ -16,7 +16,7 @@ def workorder(wi, kind, attempt, config, base_sha=None, findings=()):
             "headSha": wi.get("headSha") if kind == "fix" else None, "goal": wi["goal"],
             "acceptance": wi["acceptance"],
             "constraints": {"maxChangedLines": 600, "maxChangedFiles": 20,
-                            "protectedPaths": list(config.protected_paths)},
+                            "protectedPaths": list(config.protected_for(wi["repo"]))},
             "findingsToAddress": list(findings), "requiredEvidence": ["tests-pass"],
             "budget": {"maxPasses": config.max_passes, "wallMs": config.wall_ms},
             "idempotencyKey": key, "createdAt": now()}

@@ -4,10 +4,13 @@
     "contains(tool.name, \"merge\") || contains(mcp.tool, \"merge\")",
     "mcp.server == \"factory-mcp\" && initiator.kind == \"routine\" && mcp.tool != \"factory_tick\" && mcp.tool != \"factory_status\"",
     "bot.id == \"factory-planner\" && mcp.tool != \"factory_propose_issue\" && mcp.tool != \"factory_status\"",
-    "bot.id != \"factory-planner\" && mcp.tool == \"factory_propose_issue\""
+    "bot.id != \"factory-planner\" && mcp.tool == \"factory_propose_issue\"",
+    "bot.id != \"factory-ops\" && (mcp.tool == \"factory_add_repo\" || mcp.tool == \"factory_approve_issue\")"
   ],
   "allow": [
     "mcp.server == \"factory-mcp\" && (bot.id == \"factory-foreman\" || bot.id == \"factory-planner\")",
-    "bot.id == \"factory-foreman\" && mcp.server == \"routines\" && initiator.kind == \"person\""
+    "bot.id == \"factory-foreman\" && mcp.server == \"routines\" && initiator.kind == \"person\"",
+    "mcp.server == \"factory-mcp\" && bot.id == \"factory-ops\" && (mcp.tool == \"factory_repos\" || mcp.tool == \"factory_repo_check\" || mcp.tool == \"factory_repo_status\" || mcp.tool == \"factory_add_repo\" || mcp.tool == \"factory_approve_issue\" || mcp.tool == \"factory_status\")",
+    "mcp.server == \"factory-mcp\" && bot.id == \"day-desk\" && (mcp.tool == \"factory_status\" || mcp.tool == \"factory_repos\" || mcp.tool == \"factory_repo_check\" || mcp.tool == \"factory_repo_status\")"
   ]
 }
