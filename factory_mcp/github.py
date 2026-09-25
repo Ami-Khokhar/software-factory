@@ -1,4 +1,5 @@
 """GitHub REST over urllib. Only the calls the Foreman needs; every return value is plain JSON."""
+import base64
 import json
 import re
 import urllib.error
@@ -60,6 +61,16 @@ class GitHub:
 
     def repository(self, repo):
         return self._request("GET", f"{self.api}/repos/{repo}")[0]
+
+    def file(self, repo, path):
+        """A file's text on the default branch, or None if there is no such file."""
+        try:
+            doc = self._request("GET", f"{self.api}/repos/{repo}/contents/{urllib.parse.quote(path)}")[0]
+        except GitHubError as err:
+            if err.status == 404:
+                return None
+            raise
+        return base64.b64decode(doc["content"]).decode("utf-8", "replace")
 
     def branch_head(self, repo, branch):
         """The commit a branch points at, or None if it does not exist."""

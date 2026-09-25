@@ -31,6 +31,8 @@ class FakeGitHub:
         self.issues, self.pulls, self.issue_comments, self.runs = {}, [], {}, {}
         self.posted = []  # (repo, number, body) of every comment the Foreman wrote
         self.branches, self.files = {}, {}  # (repo, branch) -> sha; (repo, sha) -> changed files
+        self.repos = {}  # repo -> fields that differ from a pushable repo; None: GitHub has no such repo
+        self.contents = {}  # (repo, path) -> file text on the default branch
 
     def add_issue(self, repo, number, labels=("factory:ready",), body=ISSUE_BODY, state="open", author=None):
         self.issues[(repo, number)] = {"number": number, "title": f"Goal {number}", "body": body,
@@ -70,7 +72,14 @@ class FakeGitHub:
         return list(self.runs.get((repo, sha), []))
 
     def repository(self, repo):
-        return {"full_name": repo, "default_branch": "main"}
+        from factory_mcp.github import GitHubError
+        if self.repos.get(repo, {}) is None:
+            raise GitHubError(404, "Not Found")
+        return dict({"full_name": repo, "default_branch": "main", "archived": False,
+                     "permissions": {"push": True}}, **self.repos.get(repo, {}))
+
+    def file(self, repo, path):
+        return self.contents.get((repo, path))
 
     def branch_head(self, repo, branch):
         return self.branches.get((repo, branch), "base0" if branch == "main" else None)

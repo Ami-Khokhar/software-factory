@@ -1,4 +1,5 @@
-"""factory_mcp.github against a local HTTP server: auth header, Link pagination, errors."""
+"""factory_mcp.github against a local HTTP server: auth header, Link pagination, files, errors."""
+import base64
 import json
 import threading
 import unittest
@@ -20,7 +21,10 @@ class Api(BaseHTTPRequestHandler):
             page = 2 if "page=2" in self.path else 1
             body, link = ([{"id": page}], f'<{base}/repos/o/r/issues/5/comments?page=2>; rel="next"'
                           if page == 1 else "")
-        elif self.path == "/repos/o/r/issues/404":
+        elif self.path == "/repos/o/r/contents/.github/pr-gatekeeper.json":
+            text = base64.encodebytes(b'{"verify": "make test"}').decode()  # GitHub wraps it in lines
+            body, link = {"type": "file", "encoding": "base64", "content": text}, ""
+        elif self.path in ("/repos/o/r/issues/404", "/repos/o/r/contents/.github/missing.json"):
             body, link, status = {"message": "Not Found"}, "", 404
         else:
             body, link = {"number": 1}, ""
@@ -50,6 +54,10 @@ class GitHubClientTest(unittest.TestCase):
         self.assertEqual(len(Api.seen), 2)
         self.assertTrue(all(auth == "Bearer tok" for _, auth in Api.seen))
         self.assertIn("per_page=100", Api.seen[0][0])
+
+    def test_a_file_is_its_decoded_text_or_none(self):
+        self.assertEqual(self.github.file("o/r", ".github/pr-gatekeeper.json"), '{"verify": "make test"}')
+        self.assertIsNone(self.github.file("o/r", ".github/missing.json"))
 
     def test_errors_carry_status(self):
         with self.assertRaises(GitHubError) as caught:

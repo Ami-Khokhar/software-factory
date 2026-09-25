@@ -76,7 +76,8 @@ class PackageTest(unittest.TestCase):
         mentioned = set(re.findall(r"factory_[a-z_]+", (TENANT / "agents.yaml").read_text()
                                    + (TENANT / "policy.json").read_text()
                                    + (TENANT / "skills.yaml").read_text()))
-        self.assertEqual(mentioned, real)
+        # Tools added since serve the Hermes front door (#25); OpenBot is retired in #37.
+        self.assertLessEqual(mentioned, real)
 
     def test_skills_name_real_tools_and_every_skill_has_a_bot(self):
         text = (TENANT / "skills.yaml").read_text()
