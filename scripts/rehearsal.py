@@ -3,7 +3,9 @@
 
 Runs the real agent-relay (from a checkout) with a scripted worker that edits a real git repo,
 the real factory-mcp server over MCP HTTP, and a stand-in GitHub REST API backed by a bare repo.
-The harness plays pr-gatekeeper: one CHANGES round, then MERGE.
+Like worker/runner.py, the worker commits locally, never pushes, and hands back a patch Result;
+factory-mcp pushes the patch to the bare repo (FACTORY_GIT_URL), as it pushes to GitHub in
+production. The harness plays pr-gatekeeper: one CHANGES round, then MERGE.
 
     python3 scripts/rehearsal.py /path/to/agent-relay [--lose-store]
 
@@ -37,21 +39,20 @@ text = sys.argv[-1]
 order = json.loads(text.split("WorkOrder:\n", 1)[1])
 branch = "factory/" + order["workItemId"].rsplit("#", 1)[1]
 def git(*args):
-    return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout.strip()
+    return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout
 started = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 git("fetch", "-q", "origin")
+base = order["headSha"] if order["kind"] == "fix" else order["baseSha"]
+git("checkout", "-q", "-B", branch, base)
 if order["kind"] == "fix":
-    git("checkout", "-q", "-B", branch, order["headSha"])
     open("test_app.py", "a").write("\n    def test_names_factory(self):\n        self.assertIn(\"factory\", greet())\n")
 else:
-    git("checkout", "-q", "-B", branch, "origin/main")
     open("app.py", "w").write('def greet():\n    return "hello, factory"\n')
 git("commit", "-q", "-am", order["kind"] + ": " + order["goal"])
-git("push", "-q", "-f", "origin", branch)
 tests = subprocess.run([sys.executable, "-m", "unittest", "test_app"], capture_output=True, text=True)
 print("worker log line that is not JSON")
 print(json.dumps({"schemaVersion": "factory.result/v1", "workOrderId": order["id"], "status": "completed",
-    "artifact": {"branch": branch, "commitSha": git("rev-parse", "HEAD")},
+    "patch": {"format": "unified", "diff": git("diff", "--binary", base, "HEAD"), "baseSha": base},
     "evidence": [{"kind": "test", "command": "python3 -m unittest test_app", "exit": tests.returncode,
                   "tail": tests.stderr[-200:]}],
     "startedAt": started, "finishedAt": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")}))
@@ -250,7 +251,8 @@ def main(relay_checkout, lose_store=False):
             os.environ, FACTORY_MCP_TOKEN=token, FACTORY_REPOS=REPO, FACTORY_GITHUB_API=github_url,
             FACTORY_GITHUB_TOKEN="gh-token", FACTORY_RELAY_URL=f"http://127.0.0.1:{relay_port}",
             FACTORY_WORKERS="scripted:local", FACTORY_POLL_SECONDS="0", FACTORY_PORT=str(mcp_port),
-            FACTORY_DB=db), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            FACTORY_DB=db, FACTORY_GIT_URL=bare), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True)
 
     factory = start_factory()
     try:
@@ -296,9 +298,13 @@ def main(relay_checkout, lose_store=False):
         tick_until("closed")
         status = mcp.tool("factory_status")
         one = mcp.tool("factory_status", id=wid)
-        print("autonomy:", status["autonomy"], "worker passes:", one["passes"])
+        authors = set(git("log", "--format=%an", f"main..{one['workItem']['branch']}",
+                          cwd=bare).splitlines())
+        print("autonomy:", status["autonomy"], "worker passes:", one["passes"],
+              "branch commits by:", sorted(authors))
         auth = {a for _, _, a in github.requests}
         assert auth == {"Bearer gh-token"}, auth
+        assert authors == {"factory-mcp"}, authors  # the worker hands back a patch; factory-mcp pushes
         if not lose_store:  # the history that proves "no human commit" died with the store
             assert status["autonomy"]["rate"] == 1.0, status
         print("REHEARSAL PASSED")
