@@ -65,16 +65,20 @@ class Foreman:
         return found
 
     def tick(self, workitem_id=None):
-        """Reconcile one WorkItem, or rebuild from GitHub and reconcile every live one."""
+        """Reconcile one WorkItem, or rebuild from GitHub and reconcile every live one. A WorkItem
+        whose repo left FACTORY_REPOS is left as it is, and carries on if the repo comes back."""
         if workitem_id is not None:
-            if self.store.get(workitem_id) is None:
+            wi = self.store.get(workitem_id)
+            if wi is None:
                 raise ToolError(f"No WorkItem {workitem_id}")
+            if wi["repo"] not in self.config.repos:
+                raise ToolError(f"{wi['repo']} is not in FACTORY_REPOS; the factory leaves it alone")
             before, wi = self.tick_one(workitem_id)
             return {"id": workitem_id, "from": before, "to": wi["state"], "workItem": wi}
         rebuilt = self.rebuild()
         ticked = []
         for wi in self.store.all():
-            if wi["state"] not in workitem.TERMINAL:
+            if wi["state"] not in workitem.TERMINAL and wi["repo"] in self.config.repos:
                 try:
                     before, after = self.tick_one(wi["id"])
                 except Exception as exc:  # noqa: BLE001 - one bad WorkItem must not starve the rest
