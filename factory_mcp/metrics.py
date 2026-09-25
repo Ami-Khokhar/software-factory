@@ -1,4 +1,4 @@
-"""Ops numbers computed from the audit history: escalation and the autonomy rate (HANDOFF §7)."""
+"""Ops numbers computed from the audit history: escalation and the autonomy rate."""
 import json
 
 from .workitem import UNGATED

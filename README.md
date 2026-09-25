@@ -1,17 +1,20 @@
 # software-factory
 
-A human states a goal; the factory drives it to a reviewed, merged PR and escalates to a
-human only on true exceptions.
+A person states a goal as a GitHub issue with checkable acceptance criteria. The factory drives
+it to a reviewed, merged pull request, and asks the person only when it is stuck.
 
-- **Control plane:** OpenBot (jobs, governance, audit, HITL, routines).
-- **Execution bus:** [agent-relay](https://github.com/Ami-Khokhar/agent-relay) (workers: pi, codex, opencode, …).
+- **Front door:** Day Desk, one Hermes agent in Telegram ([`tenant/hermes/`](tenant/hermes/)), and
+  the `factory` command.
+- **Foreman:** factory-mcp, in this repo. It owns every WorkItem's state and makes every decision.
+- **Workers:** [agent-relay](https://github.com/Ami-Khokhar/agent-relay) runs a coding harness in a
+  Docker sandbox ([`worker/`](worker/)).
 - **Gate and merge authority:** pr-gatekeeper.
 - **Source of truth:** GitHub.
 
-To use it, read [`docs/RUNBOOK.md`](docs/RUNBOOK.md) (the `factory` command, daily use, what to
-trust). To build on it, start with [`docs/HANDOFF.md`](docs/HANDOFF.md). Contracts are in [`schemas/`](schemas/) and
-explained in [`docs/contracts.md`](docs/contracts.md). Decisions are in
-[`docs/decisions.md`](docs/decisions.md).
+To run the factory, read [`docs/RUNBOOK.md`](docs/RUNBOOK.md). To change it, read
+[`AGENTS.md`](AGENTS.md) first, then [`docs/architecture.md`](docs/architecture.md). The contracts
+are in [`schemas/`](schemas/), explained in [`docs/contracts.md`](docs/contracts.md), and the
+decisions are in [`docs/decisions.md`](docs/decisions.md).
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py'
@@ -49,4 +52,4 @@ FACTORY_MCP_TOKEN=<secret> FACTORY_REPOS=owner/repo FACTORY_GITHUB_TOKEN=<token>
 `factory:ready` to `closed` with the real relay and a stand-in GitHub.
 
 The OpenBot tenant package is in `tenant/factory/`; install it with `scripts/install-tenant.sh`
-(see `docs/HANDOFF.md` §14).
+(see `docs/RUNBOOK.md`, OpenBot).
