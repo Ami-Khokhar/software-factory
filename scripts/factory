@@ -278,7 +278,8 @@ def cmd_update(_):
     if tests.returncode != 0:
         git("checkout", "-q", "-f", branch)
         git("reset", "-q", "--hard", old)
-        die(f"update: tests fail at {new[:7]}; factory-mcp stays on {old[:7]}")
+        why = "\n".join((tests.stdout + tests.stderr).strip().splitlines()[-20:])
+        die(f"update: tests fail at {new[:7]}; factory-mcp stays on {old[:7]}\n{why}")
     if git("diff", "--quiet", old, new, "--", "worker/Dockerfile").returncode != 0:
         run("docker", "build", "-q", "-t", "factory-worker:latest", str(HERE / "worker"))
     restart_factory_mcp()

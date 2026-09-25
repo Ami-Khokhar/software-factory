@@ -129,7 +129,9 @@ nothing from you. `factory start` checks all three.
 
 To deploy a new version, run `factory update`. It fast-forwards the deployed checkout (and moves
 it to `main` when its branch is merged), runs the tests there, and restarts factory-mcp only if
-they pass. A failing test keeps the old version running.
+they pass. A failing test keeps the old version running, and `factory update` prints why. The
+tests need the packages in `requirements.txt`, installed once for the Python that runs `factory`:
+`python3 -m pip install -r requirements.txt`.
 
 ## When something looks wrong
 

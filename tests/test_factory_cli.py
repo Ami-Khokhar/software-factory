@@ -67,7 +67,7 @@ class UpdateTest(unittest.TestCase):
         old = self.head()
         self.commit("tests/test_ok.py", PASS.replace("True)", "False)"))
         git(self.dev, "push", "-q", "origin", "HEAD:main")
-        with self.assertRaisesRegex(SystemExit, "tests fail"):
+        with self.assertRaisesRegex(SystemExit, r"tests fail[\s\S]*False is not true"):  # and why
             cli.cmd_update([])
         self.assertEqual((self.head(), self.restarts), (old, []))
 
