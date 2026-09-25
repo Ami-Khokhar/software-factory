@@ -4,6 +4,7 @@
   factory new <owner/repo> <title> "<claim> | <check>" ["<claim> | <check>" ...] [-d <description>]
   factory add-repo <owner/repo>           check a repo and enable it (it needs pr-gatekeeper)
   factory status [<owner/repo#n>]
+  factory watch                           print each WorkItem that newly waits on you (Hermes cron)
   factory retry  <owner/repo#n> <note>    try again; the note goes to the worker as a finding
   factory regate <owner/repo#n> <note>    you pushed a fix yourself; the gate reviews it again
   factory close  <owner/repo#n> <note>    give up on this WorkItem
@@ -70,12 +71,12 @@ def call(tool, arguments=None):
     token = read_env(CONFIG / "secrets").get("FACTORY_MCP_TOKEN")
     if not token:
         die(f"no FACTORY_MCP_TOKEN in {CONFIG / 'secrets'}")
-    caroot = run("mkcert", "-CAROOT").stdout.strip()
-    context = ssl.create_default_context(cafile=os.path.join(caroot, "rootCA.pem"))
     try:
         sock = socket.create_connection(("127.0.0.1", PORT), timeout=60)
     except OSError:
         die(f"factory-mcp is not running on port {PORT} (start it with: factory start)")
+    caroot = run("mkcert", "-CAROOT").stdout.strip()
+    context = ssl.create_default_context(cafile=os.path.join(caroot, "rootCA.pem"))
     connection = http.client.HTTPSConnection(HOST, PORT, context=context)
     connection.sock = context.wrap_socket(sock, server_hostname=HOST)
     body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -89,6 +90,25 @@ def call(tool, arguments=None):
     if reply["result"].get("isError"):
         die(value.get("error", value))
     return value
+
+
+def cmd_watch(_):
+    """For a Hermes no-agent cron job (ADR-0013): print each WorkItem that newly waits on the owner,
+    once. Printing nothing sends nothing. When factory-mcp does not answer, the exit is non-zero,
+    which Hermes delivers as an error alert."""
+    seen_file = STATE / "watch.json"
+    try:
+        seen = json.loads(seen_file.read_text())
+    except (OSError, ValueError):
+        seen = {}
+    waiting = {wi["id"]: [wi["state"], wi.get("blockedOn")] for wi in call("factory_status")["workItems"]
+               if wi["state"] in ("human_waiting", "blocked")}
+    for workitem_id, (state, reason) in sorted(waiting.items()):
+        if seen.get(workitem_id) != [state, reason]:
+            print(f"{workitem_id} is {state}: {reason}\n"
+                  "Reply to this message with retry, regate or close, and a note.")
+    STATE.mkdir(parents=True, exist_ok=True)
+    seen_file.write_text(json.dumps(waiting))
 
 
 def cmd_new(args):
@@ -300,6 +320,8 @@ def main(argv):
         cmd_add_repo(args)
     elif command == "status":
         cmd_status(args)
+    elif command == "watch":
+        cmd_watch(args)
     elif command in ("retry", "regate", "close"):
         cmd_resolve(command, args)
     elif command == "stop":

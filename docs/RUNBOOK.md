@@ -142,6 +142,54 @@ they pass. A failing test keeps the old version running.
 - **HUMAN from the gate.** Read the gate's comment on the PR. `retry` sends its findings to the
   worker; `regate` re-reviews a fix you pushed yourself.
 
+## Day Desk: the factory in Telegram (Hermes)
+
+Day Desk is one Hermes agent you talk to in Telegram (ADR-0013). Through factory-mcp's tools it
+shows what needs you, checks and enables repos, plans and starts issues, and answers escalations.
+Hermes asks you to approve each tool call that changes something, with buttons in Telegram, and
+no answer in 15 minutes is a no. Its settings, skill and manner are the Hermes profile
+distribution in `tenant/hermes/`, so they are reviewed like code.
+
+Set it up once. `factory connect-openbot` must have run once before, for the hosts entry and the
+certificate.
+
+```bash
+hermes profile install ~/path/to/software-factory/tenant/hermes
+cp ~/.hermes/profiles/day-desk/.env.EXAMPLE ~/.hermes/profiles/day-desk/.env
+# fill in FACTORY_MCP_TOKEN (from ~/.config/factory-mcp/secrets), TELEGRAM_BOT_TOKEN and
+# TELEGRAM_ALLOWED_USERS (your Telegram user id)
+hermes -p day-desk model             # choose your ChatGPT or Codex subscription
+hermes -p day-desk gateway setup     # Telegram
+hermes -p day-desk gateway install   # start it at login
+mkdir -p ~/.hermes/profiles/day-desk/scripts
+printf '#!/usr/bin/env bash\nexport PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"\nexec "$HOME/.local/bin/factory" watch\n' \
+  > ~/.hermes/profiles/day-desk/scripts/factory-watch.sh
+hermes -p day-desk cron create "every 5m" --no-agent --script factory-watch.sh --deliver telegram \
+  --name factory-watch
+```
+
+`factory-watch` sends one message for each WorkItem that newly waits on you, and an error message
+when factory-mcp does not answer. Reply to the message, and Day Desk answers the escalation with
+you. After `factory update` deploys a new version, run `hermes profile update day-desk` so Day
+Desk gets the new skill.
+
+Day Desk cannot tick or take in a WorkItem itself (factory-mcp does), merge, label or push. Its
+shell is denied the `factory` write commands, `gh pr merge`, `gh label`, `gh api` and the
+factory's config directory (`approvals.deny` in `tenant/hermes/config.yaml`). The shell still
+runs as you, so these rules are a guard, not a sandbox.
+
+### The trial before OpenBot is retired
+
+Check in Telegram that Day Desk:
+
+1. answers "what needs me?" with the WorkItems `factory status` shows waiting on you;
+2. checks a repo without pr-gatekeeper, says what it lacks, and does not enable it;
+3. enables a ready repo only after you approve the `factory_add_repo` call;
+4. starts an issue only after you approve `factory_approve_issue`, and a worker starts on it
+   within a minute;
+5. refuses "merge PR 12" and "run factory retry" in its shell;
+6. relays a factory-watch message, and your reply to it resolves the WorkItem once you approve.
+
 ## OpenBot (optional)
 
 OpenBot adds a chat Foreman, a 15-minute routine and Telegram escalations on top of the steps above.

@@ -25,8 +25,7 @@ class Tool:
     fn: Callable[[dict], dict]
 
     def listing(self):
-        # OpenBot ignores readOnlyHint and treats every custom-server tool as a write; the hint is
-        # published for other clients and for the tool list to state each tool's effect.
+        # Hermes asks the owner before running any tool without readOnlyHint (ADR-0013).
         return {"name": self.name, "description": self.description,
                 "inputSchema": self.input_schema,
                 "annotations": {"readOnlyHint": self.effect == "read"}}
