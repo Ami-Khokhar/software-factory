@@ -8,14 +8,19 @@ repos.json lists the repos a factory tool enabled; FACTORY_REPOS lists the other
 factory-mcp reads it at start. A person may read or edit it; an edit takes effect at the next start.
 """
 import json
+import os
 import re
+import tempfile
 from pathlib import Path
 
 from .github import GitHubError
+from .workitem import PROPOSED, READY
 
 NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 ENTRY_KEYS = {"name", "added_by", "added_at"}
 GATE_CONFIG, GATE_WORKFLOW = ".github/pr-gatekeeper.json", ".github/workflows/pr-gatekeeper.yml"
+LABELS = ((READY, "0E8A16", "software-factory may work on this issue"),
+          (PROPOSED, "C5DEF5", "proposed by the Planner; add factory:ready to accept"))
 
 
 def _result(check_id, ok, detail, fix):
@@ -89,3 +94,19 @@ def load(path):
     if found:
         raise ValueError(f"{path}: " + "; ".join(found))
     return doc["repos"]
+
+
+def add(path, name, by, at):
+    """Add `name` to the repos.json at `path` unless it is there. True if it was added."""
+    entries = load(path)
+    if any(entry["name"].lower() == name.lower() for entry in entries):
+        return False
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", dir=target.parent, prefix=".repos-", suffix=".json",
+                                     delete=False) as handle:  # then a rename: never half a file
+        json.dump({"version": 1, "repos": entries + [{"name": name, "added_by": by, "added_at": at}]},
+                  handle, indent=2)
+        handle.write("\n")
+    os.replace(handle.name, target)
+    return True

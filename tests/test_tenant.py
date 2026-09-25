@@ -53,6 +53,8 @@ class PolicyTest(unittest.TestCase):
             (("factory-foreman", "routines", "create_routine", "job"), False),
             (("factory-foreman",), False),  # a computer action
             (("factory-planner", "factory-mcp", "factory_propose_issue"), True),
+            (("factory-foreman", "factory-mcp", "factory_add_repo"), False),  # a yes in Hermes (#30)
+            (("factory-foreman", "factory-mcp", "factory_approve_issue"), False),
             (("factory-planner", "factory-mcp", "factory_tick"), False),
             (("someone-else", "factory-mcp", "factory_status"), False),
         ]

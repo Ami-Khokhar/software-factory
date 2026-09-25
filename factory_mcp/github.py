@@ -92,6 +92,18 @@ class GitHub:
         return self._request("PATCH", f"{self.api}/repos/{repo}/issues/{number}",
                              {"state": "closed", "state_reason": "completed"})[0]
 
+    def create_label(self, repo, name, color, description):
+        """Create a label. One that exists already is left as it is."""
+        try:
+            self._request("POST", f"{self.api}/repos/{repo}/labels",
+                          {"name": name, "color": color, "description": description})
+        except GitHubError as err:
+            if err.status != 422 or "already_exists" not in str(err):
+                raise
+
+    def add_labels(self, repo, number, labels):
+        return self._request("POST", f"{self.api}/repos/{repo}/issues/{number}/labels", {"labels": labels})[0]
+
     def create_issue(self, repo, title, body, labels):
         return self._request("POST", f"{self.api}/repos/{repo}/issues",
                              {"title": title, "body": body, "labels": labels})[0]

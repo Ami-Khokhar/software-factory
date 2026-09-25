@@ -95,9 +95,12 @@ The repo needs pr-gatekeeper with working secrets, and a `.github/pr-gatekeeper.
 factory add-repo <owner>/<repo>
 ```
 
-It clones the worker checkout under `FACTORY_CHECKOUT_ROOT`, creates the labels, adds the repo to
-`FACTORY_REPOS`, and restarts factory-mcp. If `verify` needs a tool the sandbox image lacks, add
-it to `worker/Dockerfile`, then run `docker build -t factory-worker:latest worker/`.
+It runs `factory_repo_check` and prints each check, with a fix for each one that fails. When all
+pass, `factory_add_repo` clones the worker checkout under `FACTORY_CHECKOUT_ROOT`, creates the
+labels and adds the repo to `~/.config/factory-mcp/repos.json`. The factory works on it at once;
+nothing restarts. If `verify` needs a tool the sandbox image lacks, the first worker pass fails
+with `verify exited 127`: add the tool to `worker/Dockerfile`, then run
+`docker build -t factory-worker:latest worker/`.
 
 To take a repo away from the factory, remove it from `FACTORY_REPOS` and restart factory-mcp. Its
 WorkItems stay as they are: no worker starts and no PR opens for them, and they carry on if the

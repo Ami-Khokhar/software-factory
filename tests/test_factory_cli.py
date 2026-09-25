@@ -1,4 +1,5 @@
-"""scripts/factory update: deploys a branch only when its tests pass, and follows it to main once merged."""
+"""scripts/factory: `update` deploys a branch only when its tests pass, and follows it to main once
+merged; `add-repo` asks factory-mcp, as Day Desk does."""
 import importlib.machinery
 import importlib.util
 import os
@@ -87,6 +88,33 @@ class UpdateTest(unittest.TestCase):
             cli.cmd_update([])
         self.assertIn("# local edit", (self.deploy / "tests" / "test_ok.py").read_text())
 
+
+
+class AddRepoTest(unittest.TestCase):
+    def add_repo(self, ready):
+        """The tools add-repo called, and how it exited. It must run no command of its own."""
+        calls = []
+
+        def call(tool, arguments=None):
+            calls.append(tool)
+            return {"repo": "o/r", "ready": ready, "added": True,
+                    "checks": [{"id": "gate_workflow", "ok": ready, "detail": "d", "fix": "f"}]}
+
+        with mock.patch.object(cli, "call", call), mock.patch("builtins.print"), \
+                mock.patch.object(cli, "run", side_effect=AssertionError("add-repo ran a command")):
+            try:
+                cli.cmd_add_repo(["o/r"])
+            except SystemExit as stopped:
+                return calls, str(stopped)
+        return calls, None
+
+    def test_a_ready_repo_is_enabled_through_the_tools(self):
+        self.assertEqual(self.add_repo(ready=True), (["factory_repo_check", "factory_add_repo"], None))
+
+    def test_a_failing_check_stops_it_before_the_repo_is_enabled(self):
+        calls, stopped = self.add_repo(ready=False)
+        self.assertEqual(calls, ["factory_repo_check"])
+        self.assertIn("o/r is not ready", stopped)
 
 if __name__ == "__main__":
     unittest.main()

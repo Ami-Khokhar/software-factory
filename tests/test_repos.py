@@ -1,5 +1,6 @@
 """Factory repos: the check before a repo is enabled, and repos.json (ADR-0014)."""
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,7 +9,7 @@ from factory_mcp import tools
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
-from factory_mcp.repos import GATE_CONFIG, GATE_WORKFLOW, check
+from factory_mcp.repos import GATE_CONFIG, GATE_WORKFLOW, check, load
 from factory_mcp.store import Store
 from tests.fakes import FakeGitHub, FakeRelay
 
@@ -61,6 +62,46 @@ class RepoCheckTest(unittest.TestCase):
         with self.assertRaisesRegex(ToolError, "owner/repo"):
             found["factory_repo_check"].fn({"repo": "o/r/../x"})
         self.assertEqual(found["factory_status"].fn({})["repos"], [REPO])
+
+
+class EnableRepoTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        root = Path(self.dir.name)
+        subprocess.run(["git", "init", "-q", "--bare", str(root / "remote.git")], check=True)
+        self.manifest, self.checkout = root / "config" / "repos.json", root / "work" / "o" / "r"
+        self.github = gated(FakeGitHub())
+        self.foreman = Foreman(Store(":memory:"), self.github, Config(
+            mcp_token="t", repos=frozenset(), repos_file=str(self.manifest),
+            checkout_root=str(root / "work"), git_url=str(root / "remote.git")), FakeRelay())
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_a_repo_that_fails_a_check_is_refused_and_nothing_changes(self):
+        self.github.contents[(REPO, GATE_WORKFLOW)] = None
+        with self.assertRaisesRegex(ToolError, "o/r is not ready: o/r has no .github/workflows/"):
+            self.foreman.add_repo(REPO, "amteshwar")
+        self.assertEqual((self.github.labels, self.manifest.exists(), self.checkout.exists()), ({}, False, False))
+        self.assertNotIn(REPO, self.foreman.config.repos)
+
+    def test_enabling_takes_effect_at_once_and_twice_is_once(self):
+        self.assertEqual(self.foreman.add_repo(REPO, "amteshwar"),
+                         {"repo": REPO, "added": True, "checkout": str(self.checkout)})
+        self.assertTrue((self.checkout / ".git").is_dir())
+        self.assertEqual(self.github.labels[REPO], {"factory:ready", "factory:proposed"})
+        self.assertIn(REPO, self.foreman.config.repos)  # no restart
+        self.assertEqual([(e["name"], e["added_by"]) for e in load(str(self.manifest))], [(REPO, "amteshwar")])
+
+        (self.checkout / "kept").write_text("a second clone would fail on this directory")
+        self.assertFalse(self.foreman.add_repo(REPO, "amteshwar")["added"])
+        self.assertEqual(len(load(str(self.manifest))), 1)
+
+    def test_it_needs_a_manifest_to_write(self):
+        self.foreman.config = Config(mcp_token="t", repos=frozenset())
+        with self.assertRaisesRegex(ToolError, "FACTORY_REPOS_FILE is not set"):
+            self.foreman.add_repo(REPO, "amteshwar")
+        self.assertEqual(self.github.labels, {})
 
 
 class ManifestTest(unittest.TestCase):

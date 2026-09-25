@@ -1,4 +1,5 @@
-"""factory_mcp.github against a local HTTP server: auth header, Link pagination, files, errors."""
+"""factory_mcp.github against a local HTTP server: auth header, Link pagination, files, labels,
+errors."""
 import base64
 import json
 import threading
@@ -28,6 +29,21 @@ class Api(BaseHTTPRequestHandler):
             body, link, status = {"message": "Not Found"}, "", 404
         else:
             body, link = {"number": 1}, ""
+        self.reply(status, body, link)
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["content-length"])))
+        Api.seen.append((self.path, body))
+        if self.path == "/repos/o/r/labels" and body["name"] == "factory:ready":
+            self.reply(422, {"message": "Validation Failed", "errors": [{"code": "already_exists"}]})
+        elif self.path == "/repos/o/r/labels" and body["color"] == "not-a-color":
+            self.reply(422, {"message": "Validation Failed", "errors": [{"code": "invalid"}]})
+        elif self.path == "/repos/o/r/labels":
+            self.reply(201, body)
+        else:
+            self.reply(200, [{"name": name} for name in body["labels"]])
+
+    def reply(self, status, body, link=""):
         self.send_response(status)
         data = json.dumps(body).encode()
         self.send_header("content-type", "application/json")
@@ -58,6 +74,16 @@ class GitHubClientTest(unittest.TestCase):
     def test_a_file_is_its_decoded_text_or_none(self):
         self.assertEqual(self.github.file("o/r", ".github/pr-gatekeeper.json"), '{"verify": "make test"}')
         self.assertIsNone(self.github.file("o/r", ".github/missing.json"))
+
+    def test_a_label_that_exists_already_is_not_an_error(self):
+        self.github.create_label("o/r", "factory:ready", "0E8A16", "go")
+        self.github.create_label("o/r", "factory:proposed", "C5DEF5", "maybe")
+        self.assertEqual(Api.seen[-1], ("/repos/o/r/labels", {"name": "factory:proposed", "color": "C5DEF5",
+                                                             "description": "maybe"}))
+        with self.assertRaisesRegex(GitHubError, "invalid"):
+            self.github.create_label("o/r", "factory:x", "not-a-color", "x")
+        self.assertEqual(self.github.add_labels("o/r", 7, ["factory:ready"]), [{"name": "factory:ready"}])
+        self.assertEqual(Api.seen[-1], ("/repos/o/r/issues/7/labels", {"labels": ["factory:ready"]}))
 
     def test_errors_carry_status(self):
         with self.assertRaises(GitHubError) as caught:
