@@ -88,8 +88,10 @@ What the design does not protect against:
 
 ## Adding a repo
 
-The repo needs pr-gatekeeper with working secrets, and a `.github/pr-gatekeeper.json` with a
-`verify` command. Then:
+The repo needs pr-gatekeeper with working secrets, a `.github/pr-gatekeeper.json` with a `verify`
+command, and an `AGENTS.md` that carries the factory standard (ADR-0015): copy `templates/AGENTS.md`
+from this repo, fill in its top sections, and merge that PR yourself, because `AGENTS.md` is a
+protected path. Then:
 
 ```bash
 factory add-repo <owner>/<repo>

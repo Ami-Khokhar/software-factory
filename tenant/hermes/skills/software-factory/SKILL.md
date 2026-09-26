@@ -28,7 +28,8 @@ what factory_status returns.
 
 ## Plan work
 
-Turn the owner's goal into issues the factory can finish:
+Turn the owner's goal into issues the factory can finish, as the Plan rules of the factory
+standard in the repo's AGENTS.md ask:
 
 - Each issue fits one PR: at most 600 changed lines and 20 files. Split a bigger goal into issues
   that each make sense alone.

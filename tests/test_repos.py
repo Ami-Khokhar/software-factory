@@ -10,7 +10,7 @@ from factory_mcp import tools
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
-from factory_mcp.repos import GATE_CONFIG, GATE_WORKFLOW, check, load
+from factory_mcp.repos import GATE_CONFIG, GATE_WORKFLOW, TEMPLATE, check, load
 from factory_mcp.store import Store
 from tests.fakes import FakeGitHub, FakeRelay
 
@@ -19,7 +19,10 @@ REPO = "o/r"
 
 
 def gated(github, repo=REPO, config='{"verify": "make test"}'):
-    github.contents.update({(repo, GATE_CONFIG): config, (repo, GATE_WORKFLOW): "on: pull_request"})
+    """A repo with the gate installed and the factory standard in its AGENTS.md, written with
+    Windows line endings, which the check ignores."""
+    github.contents.update({(repo, GATE_CONFIG): config, (repo, GATE_WORKFLOW): "on: pull_request",
+                            (repo, "AGENTS.md"): TEMPLATE.read_text().replace("\n", "\r\n")})
     return github
 
 
@@ -27,7 +30,8 @@ class RepoCheckTest(unittest.TestCase):
     def test_a_repo_with_the_gate_passes_every_check(self):
         checks = check(gated(FakeGitHub()), REPO)
         self.assertEqual([(c["id"], c["ok"], c["fix"]) for c in checks],
-                         [("repo", True, None), ("gate_config", True, None), ("gate_workflow", True, None)])
+                         [("repo", True, None), ("gate_config", True, None), ("gate_workflow", True, None),
+                          ("agents_md", True, None)])
         self.assertEqual(checks[1]["detail"], "verify: make test")
 
     def test_each_gap_fails_its_check_and_says_how_to_fix_it(self):
@@ -42,7 +46,13 @@ class RepoCheckTest(unittest.TestCase):
                  ("a gate config that is not JSON", "contents", {(REPO, GATE_CONFIG): "verify: make"},
                   "gate_config", "has no verify command"),
                  ("no gate workflow", "contents", {(REPO, GATE_WORKFLOW): None}, "gate_workflow",
-                  "has no .github/workflows/pr-gatekeeper.yml")]
+                  "has no .github/workflows/pr-gatekeeper.yml"),
+                 ("no AGENTS.md", "contents", {(REPO, "AGENTS.md"): None}, "agents_md", "o/r has no AGENTS.md"),
+                 ("an AGENTS.md without the standard", "contents", {(REPO, "AGENTS.md"): "# Notes\n"},
+                  "agents_md", "has no factory-standard block"),
+                 ("an old copy of the standard", "contents",
+                  {(REPO, "AGENTS.md"): TEMPLATE.read_text().replace("Fail loudly.", "Fail quietly.")},
+                  "agents_md", "differs from software-factory's templates/AGENTS.md")]
         for case, attribute, changes, check_id, detail in cases:
             with self.subTest(case):
                 github = gated(FakeGitHub())
