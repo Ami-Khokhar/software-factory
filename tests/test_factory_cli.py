@@ -1,14 +1,18 @@
 """scripts/factory: `update` deploys a branch only when its tests pass, and follows it to main once
-merged; `add-repo` asks factory-mcp, as Day Desk does; `watch` reports each escalation once."""
+merged; `add-repo` asks factory-mcp, as Day Desk does; `watch` reports each escalation once; `stop`
+sends the relay its token."""
 import contextlib
 import importlib.machinery
 import importlib.util
 import io
+import json
 import os
 import socket
 import subprocess
 import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
@@ -159,6 +163,70 @@ class WatchTest(unittest.TestCase):
                 mock.patch.object(cli, "read_env", lambda path: {"FACTORY_MCP_TOKEN": "t"}), \
                 self.assertRaisesRegex(SystemExit, "factory-mcp is not running"):
             cli.cmd_watch([])
+
+
+class Relay(BaseHTTPRequestHandler):
+    """agent-relay's task API: one running task for each of two agents."""
+    seen = []  # (method, path, Authorization header or None)
+
+    def log_message(self, *args):
+        pass
+
+    def reply(self, body):
+        data = json.dumps(body).encode()
+        self.send_response(200)
+        self.send_header("content-length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        Relay.seen.append(("GET", self.path, self.headers.get("Authorization")))
+        self.reply({"tasks": [{"id": "t1", "agentId": "worker"}, {"id": "t2", "agentId": "other"}]})
+
+    def do_DELETE(self):
+        Relay.seen.append(("DELETE", self.path, self.headers.get("Authorization")))
+        self.reply({"id": self.path.rsplit("/", 1)[-1], "status": "cancelled"})
+
+
+class StopTest(unittest.TestCase):
+    def setUp(self):
+        Relay.seen = []
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Relay)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.config, self.token_file = Path(tmp.name), Path(tmp.name, "relay-token")
+        idle = subprocess.CompletedProcess([], 1, "", "")  # no service, listener or container
+        for p in (mock.patch.object(cli, "RELAY", f"http://127.0.0.1:{server.server_port}"),
+                  mock.patch.object(cli, "SETTINGS", {"FACTORY_WORKERS": "worker:local"}),
+                  mock.patch.object(cli, "CONFIG", self.config),
+                  mock.patch.object(cli, "run", lambda *cmd, check=False: idle),
+                  mock.patch.dict(os.environ, {"AGENT_RELAY_TOKEN_FILE": str(self.token_file)})):
+            p.start()
+            self.addCleanup(p.stop)
+        os.environ.pop("AGENT_RELAY_TOKEN", None)  # the patch restores it
+
+    def stop(self):
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            cli.cmd_stop([])
+        return printed.getvalue()
+
+    def test_stop_sends_the_relay_token_from_its_file(self):
+        self.token_file.write_text("file-token\n")
+        self.assertIn("cancelled worker task t1", self.stop())
+        self.assertEqual(Relay.seen, [("GET", "/v1/tasks?status=running", "Bearer file-token"),
+                                      ("DELETE", "/v1/tasks/t1", "Bearer file-token")])
+
+    def test_stop_sends_the_token_factory_serve_gives_factory_mcp(self):
+        (self.config / "secrets").write_text("AGENT_RELAY_TOKEN=secret-token\n")
+        self.token_file.write_text("file-token\n")
+        printed = self.stop()
+        self.assertEqual({auth for _, _, auth in Relay.seen}, {"Bearer secret-token"})
+        self.assertNotIn("secret-token", printed)
+
 
 if __name__ == "__main__":
     unittest.main()

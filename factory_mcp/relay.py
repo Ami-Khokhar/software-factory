@@ -1,11 +1,29 @@
 """agent-relay's HTTP API (src/server.py): submit, read and cancel tasks. Never waits."""
 import json
+import os
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 
 class RelayError(Exception):
     pass
+
+
+def token():
+    """The relay's API token, found as agent-relay's own MCP client finds it: AGENT_RELAY_TOKEN,
+    else the file at AGENT_RELAY_TOKEN_FILE (default ~/.config/agent-relay/token), which the relay
+    writes on its first start. Read on every call: launchd starts the relay and factory-mcp
+    together, so the file may appear after factory-mcp starts. None when neither exists, for a
+    relay that takes no token. Never logged, printed or put in an error."""
+    value = os.environ.get("AGENT_RELAY_TOKEN", "").strip()
+    if value:
+        return value
+    path = os.environ.get("AGENT_RELAY_TOKEN_FILE") or Path.home() / ".config" / "agent-relay" / "token"
+    try:
+        return Path(path).read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
 
 
 class Relay:
@@ -14,8 +32,10 @@ class Relay:
 
     def _call(self, method, path, body=None):
         data = None if body is None else json.dumps(body).encode()
-        request = urllib.request.Request(f"{self.url}{path}", data,
-                                         {"content-type": "application/json"}, method=method)
+        headers = {"content-type": "application/json"}
+        if secret := token():
+            headers["Authorization"] = f"Bearer {secret}"
+        request = urllib.request.Request(f"{self.url}{path}", data, headers, method=method)
         try:
             with urllib.request.urlopen(request, timeout=20) as response:
                 return json.loads(response.read())

@@ -1,15 +1,19 @@
 """factory_mcp.relay against a local HTTP server standing in for agent-relay's task API."""
 import json
+import os
 import socket
+import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from unittest import mock
 
 from factory_mcp.relay import Relay, RelayError
 
 
 class Api(BaseHTTPRequestHandler):
-    bodies, tasks = [], {}
+    bodies, tasks, auth = [], {}, []  # auth: each request's Authorization header, or None
 
     def log_message(self, *args):
         pass
@@ -23,6 +27,7 @@ class Api(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
+        Api.auth.append(self.headers.get("Authorization"))
         body = json.loads(self.rfile.read(int(self.headers["content-length"])))
         Api.bodies.append((self.path, body))
         if body["agentId"] == "broken":
@@ -31,13 +36,21 @@ class Api(BaseHTTPRequestHandler):
         return self.reply(202, Api.tasks["t1"])
 
     def do_GET(self):
+        Api.auth.append(self.headers.get("Authorization"))
         task = Api.tasks.get(self.path.rsplit("/", 1)[-1])
         return self.reply(200, task) if task else self.reply(404, {"error": "unknown task"})
 
 
 class RelayClientTest(unittest.TestCase):
     def setUp(self):
-        Api.bodies, Api.tasks = [], {}
+        Api.bodies, Api.tasks, Api.auth = [], {}, []
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.token_file = Path(tmp.name, "token")  # absent until a test writes it
+        env = mock.patch.dict(os.environ, {"AGENT_RELAY_TOKEN_FILE": str(self.token_file)})
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("AGENT_RELAY_TOKEN", None)  # the patch restores it
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Api)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.relay = Relay(f"http://127.0.0.1:{self.server.server_port}")
@@ -69,6 +82,28 @@ class RelayClientTest(unittest.TestCase):
             closed = probe.getsockname()[1]
         with self.assertRaisesRegex(RelayError, "relay unreachable"):
             Relay(f"http://127.0.0.1:{closed}").get("t1")
+
+    def submit_and_get(self):
+        """The Authorization header of one submit and one get."""
+        del Api.auth[:]
+        self.relay.submit("pi", "x", "k", 1000)
+        self.relay.get("t1")
+        return Api.auth
+
+    def test_the_token_in_AGENT_RELAY_TOKEN_is_sent_on_submit_and_get(self):
+        os.environ["AGENT_RELAY_TOKEN"] = "env-token"
+        self.token_file.write_text("file-token\n")  # the variable wins, as it does in the relay
+        self.assertEqual(self.submit_and_get(), ["Bearer env-token"] * 2)
+
+    def test_a_token_file_written_after_the_client_was_made_is_sent(self):
+        """launchd starts the relay and factory-mcp together; the relay writes the file on start."""
+        self.assertEqual(self.submit_and_get(), [None, None])
+        self.token_file.write_text("file-token\n")
+        self.assertEqual(self.submit_and_get(), ["Bearer file-token"] * 2)
+
+    def test_no_token_and_no_token_file_sends_no_header(self):
+        """An older relay takes no token and keeps working."""
+        self.assertEqual(self.submit_and_get(), [None, None])
 
 
 if __name__ == "__main__":
