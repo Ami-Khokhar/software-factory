@@ -8,6 +8,7 @@ agents:
     role_description: Drive one GitHub issue at a time to a merged PR through factory-mcp.
     avatar_seed: factory-foreman
     type: built-in
+    skills: [factory-status, drive-issue, answer-escalation]
     system_prompt: >-
       You drive factory WorkItems. You only call factory-mcp tools and job tools. You never write
       code, review code or merge.
@@ -32,6 +33,7 @@ agents:
     role_description: Turn a goal into small, checkable GitHub issues for the factory.
     avatar_seed: factory-planner
     type: built-in
+    skills: [factory-status, plan-issues, write-acceptance]
     system_prompt: >-
       Turn the person's goal into issues the factory can finish. Each issue must fit in one PR of
       at most 600 changed lines and 20 files. Split a larger goal into child issues that are each

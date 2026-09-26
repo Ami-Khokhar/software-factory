@@ -29,11 +29,13 @@ class FakeGitHub:
 
     def __init__(self):
         self.issues, self.pulls, self.issue_comments, self.runs = {}, [], {}, {}
+        self.posted = []  # (repo, number, body) of every comment the Foreman wrote
         self.branches, self.files = {}, {}  # (repo, branch) -> sha; (repo, sha) -> changed files
 
-    def add_issue(self, repo, number, labels=("factory:ready",), body=ISSUE_BODY, state="open"):
+    def add_issue(self, repo, number, labels=("factory:ready",), body=ISSUE_BODY, state="open", author=None):
         self.issues[(repo, number)] = {"number": number, "title": f"Goal {number}", "body": body,
-                                       "state": state, "labels": [{"name": n} for n in labels]}
+                                       "state": state, "labels": [{"name": n} for n in labels],
+                                       "user": {"login": author or repo.split("/")[0]}}
 
     def add_pr(self, repo, number, branch, sha, state="open", merged=False):
         self.pulls.append({"repo": repo, "number": number, "state": state,
@@ -84,6 +86,13 @@ class FakeGitHub:
     def changed_files(self, repo, base, head):
         return self.files[(repo, head)]
 
+    def comment(self, repo, number, body):
+        self.posted.append((repo, number, body))
+        return {"id": len(self.posted), "body": body}
+
+    def close_issue(self, repo, number):
+        self.issues[(repo, number)]["state"] = "closed"
+
     def create_issue(self, repo, title, body, labels):
         number = 200 + len(self.issues)
         self.add_issue(repo, number, labels=labels, body=body)
@@ -102,14 +111,14 @@ class FakeRelay:
     def __init__(self):
         self.tasks, self.by_request, self.down = {}, {}, False
 
-    def submit(self, agent_id, text, request_id, timeout_ms):
+    def submit(self, agent_id, text, request_id, timeout_ms, cwd=None):
         from factory_mcp.relay import RelayError
         if self.down:
             raise RelayError("relay unreachable: connection refused")
         if request_id not in self.by_request:
             task_id = f"task-{len(self.tasks) + 1}"
             self.tasks[task_id] = {"id": task_id, "agentId": agent_id, "input": text, "status": "running",
-                                   "sessionId": f"s-{task_id}", "timeoutMs": timeout_ms}
+                                   "sessionId": f"s-{task_id}", "timeoutMs": timeout_ms, "cwd": cwd}
             self.by_request[request_id] = task_id
         return self.tasks[self.by_request[request_id]]
 

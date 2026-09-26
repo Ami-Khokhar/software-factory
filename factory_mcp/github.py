@@ -74,6 +74,13 @@ class GitHub:
         """[{filename, additions, deletions, status}] between base and head (three-dot)."""
         return self._request("GET", f"{self.api}/repos/{repo}/compare/{base}...{head}")[0]["files"]
 
+    def comment(self, repo, number, body):
+        return self._request("POST", f"{self.api}/repos/{repo}/issues/{number}/comments", {"body": body})[0]
+
+    def close_issue(self, repo, number):
+        return self._request("PATCH", f"{self.api}/repos/{repo}/issues/{number}",
+                             {"state": "closed", "state_reason": "completed"})[0]
+
     def create_issue(self, repo, title, body, labels):
         return self._request("POST", f"{self.api}/repos/{repo}/issues",
                              {"title": title, "body": body, "labels": labels})[0]

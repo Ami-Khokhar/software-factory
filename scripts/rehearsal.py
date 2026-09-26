@@ -97,6 +97,8 @@ class GitHub:
             return 200, {"full_name": REPO, "default_branch": "main"}
         if match := re.fullmatch(r"/issues/(\d+)", rest):
             issue = self.issues.get(int(match.group(1)))
+            if issue and method == "PATCH":
+                issue.update(state=body["state"])
             return (200, issue) if issue else (404, {"message": "Not Found"})
         if rest == "/issues" and method == "GET":
             label = query["labels"][0]
@@ -105,7 +107,8 @@ class GitHub:
         if rest == "/issues" and method == "POST":
             number = 1 + max(self.issues)
             self.issues[number] = {"number": number, "title": body["title"], "body": body["body"],
-                                   "state": "open", "labels": [{"name": n} for n in body["labels"]]}
+                                   "state": "open", "labels": [{"name": n} for n in body["labels"]],
+                                   "user": {"login": REPO.split("/")[0]}}
             return 201, self.issues[number]
         if match := re.fullmatch(r"/issues/(\d+)/comments", rest):
             return 200, self.comments.get(int(match.group(1)), [])
@@ -142,7 +145,7 @@ class GitHub:
     def merge(self, pr):
         view = self.pulls[pr - 100]
         view.update(state="closed", merged_at="2026-09-24T12:00:00Z", sha=self.head(view["branch"]))
-        self.issues[7]["state"] = "closed"  # "Closes #7" in the PR body
+        # The gate merges with its workflow token, so GitHub leaves #7 open; factory-mcp closes it.
 
 
 def serve_github(github):
@@ -163,7 +166,7 @@ def serve_github(github):
             self.end_headers()
             self.wfile.write(data)
 
-        do_GET = do_POST = handle_any
+        do_GET = do_POST = do_PATCH = handle_any
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -225,7 +228,7 @@ def main(relay_checkout, lose_store=False):
 
     github = GitHub(bare)
     github.issues[7] = {"number": 7, "title": "Fix the greeting", "body": ISSUE, "state": "open",
-                        "labels": [{"name": "factory:ready"}]}
+                        "labels": [{"name": "factory:ready"}], "user": {"login": REPO.split("/")[0]}}
     github_url = serve_github(github)
 
     relay_port, mcp_port, token = free_port(), free_port(), "rehearsal-token"

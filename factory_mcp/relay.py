@@ -26,11 +26,13 @@ class Relay:
         except urllib.error.URLError as err:
             raise RelayError(f"relay unreachable: {err.reason}") from None
 
-    def submit(self, agent_id, text, request_id, timeout_ms):
+    def submit(self, agent_id, text, request_id, timeout_ms, cwd=None):
         """POST /v1/tasks. A repeated request_id returns the existing task (relay idempotency).
-        The task runs in the agent's own cwd from the relay registry."""
-        return self._call("POST", "/v1/tasks", {"agentId": agent_id, "input": text,
-                                                "requestId": request_id, "timeoutMs": timeout_ms})
+        The task runs in `cwd` (checked against the agent's allowedRoots), else the agent's cwd."""
+        body = {"agentId": agent_id, "input": text, "requestId": request_id, "timeoutMs": timeout_ms}
+        if cwd:
+            body["cwd"] = cwd
+        return self._call("POST", "/v1/tasks", body)
 
     def get(self, task_id):
         """The task, or None when the relay no longer knows it (it keeps tasks in memory)."""
