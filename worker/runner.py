@@ -152,8 +152,8 @@ class Sandbox:
                "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "1024",
                "--memory", "6g", "--cpus", "4", "-v", f"{mount}:/work", "-w", "/work"]
         if with_agent_dir:
-            # The credentials directory is 0700 on the host. Match its owner for the harness so
-            # Freebuff can write its session data without making the credential world-readable.
+            # The 0600 credential copy is in a 0700 scratch dir owned by the host user. Match
+            # that owner so the harness can read it inside the container.
             cmd += ["--user", f"{os.getuid()}:{os.getgid()}",
                     "-v", f"{self.agent_dir}:{CONTAINER_CONFIG_DIR}",
                     "-e", f"HOME={CONTAINER_HOME}"]

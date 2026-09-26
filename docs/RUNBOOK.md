@@ -94,7 +94,8 @@ Sign in with `freebuff` on the owner machine first. The worker runner copies onl
 `~/.config/manicode/credentials.json` into each disposable container; it never mounts the host's
 Freebuff sessions or GitHub credential. Build the image with
 `docker build -t factory-worker:latest worker/`. The image pins Freebuff 0.0.203 and uses GLM 5.3
-Flash. In `~/.config/agent-relay/agents.json`, register a command agent like this (replace the
+Flash. Later, `factory update` rebuilds the image when `worker/Dockerfile` or `worker/freebuff.py`
+changes. In `~/.config/agent-relay/agents.json`, register a command agent like this (replace the
 two host paths):
 
 ```json

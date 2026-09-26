@@ -191,6 +191,9 @@ def run(prompt, timeout, source_home=None):
         raise HarnessError("timeout must be positive")
     if not prompt.strip():
         raise HarnessError("prompt must not be empty")
+    if any((ord(char) < 32 and char not in "\n\t") or 127 <= ord(char) < 160
+           for char in prompt):
+        raise HarnessError("WorkOrder contains terminal control characters")
     home = isolated_home(source_home)
     process = None
     deadline = time.monotonic() + timeout

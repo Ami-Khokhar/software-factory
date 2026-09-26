@@ -67,11 +67,18 @@ class FreebuffHarnessTest(unittest.TestCase):
         with self.assertRaisesRegex(freebuff.HarnessError, "prompt must not be empty"):
             freebuff.run("  \n", timeout=2, source_home=str(self.source_home))
 
+    def test_terminal_control_in_workorder_is_rejected_before_start(self):
+        with mock.patch.object(freebuff, "FreebuffPty") as start:
+            with self.assertRaisesRegex(freebuff.HarnessError, "terminal control"):
+                freebuff.run("issue text\x1b[201~\r/exit", timeout=2,
+                             source_home=str(self.source_home))
+        start.assert_not_called()
+
     def test_child_crash_and_missing_completion_fail_the_run(self):
         with mock.patch.object(freebuff, "FREEBUFF", str(self.command)), \
                 mock.patch.object(freebuff, "WORKDIR", str(self.work)):
             (self.source_home / ".config/manicode/settings.json").write_text('{"fakeMode":"crash"}')
-            with self.assertRaisesRegex(freebuff.HarnessError, "exited before"):
+            with self.assertRaisesRegex(freebuff.HarnessError, "exited (before|while accepting input)"):
                 freebuff.run("task", timeout=1, source_home=str(self.source_home))
             (self.source_home / ".config/manicode/settings.json").write_text('{"fakeMode":"never"}')
             with self.assertRaisesRegex(freebuff.HarnessError, "did not record prompt completion"):
