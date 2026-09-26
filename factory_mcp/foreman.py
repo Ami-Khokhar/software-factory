@@ -27,7 +27,7 @@ class Foreman:
         self._skipped = set()  # rebuild refusals already logged by this process
 
     def intake(self, repo, number):
-        self._allowlisted(repo)
+        repo = self._allowlisted(repo)
         existing = self.store.get(workitem.workitem_id(repo, number))
         if existing:
             return existing
@@ -40,8 +40,11 @@ class Foreman:
         return wi
 
     def _allowlisted(self, repo):
-        if repo not in self.config.repos:
+        """The allowlist's spelling of `repo`, so one repo has one WorkItem id."""
+        listed = self.config.listed(repo)
+        if listed is None:
             raise ToolError(f"{repo} is not in FACTORY_REPOS or repos.json")
+        return listed
 
     def _issue(self, repo, number):
         try:
@@ -64,7 +67,10 @@ class Foreman:
 
     def approve_issue(self, repo, number, by):
         """A person's go on an issue: label it factory:ready and take it in. Idempotent."""
-        self._allowlisted(repo)
+        repo = self._allowlisted(repo)
+        existing = self.store.get(workitem.workitem_id(repo, number))
+        if existing and existing["state"] in workitem.TERMINAL:
+            raise ToolError(f"{existing['id']} is {existing['state']}; open a new issue for more work")
         issue = self._issue(repo, number)
         self._admit(repo, issue)  # refuse before labelling: a rebuild adopts any factory:ready issue
         if workitem.READY not in workitem.labels(issue):
@@ -77,11 +83,16 @@ class Foreman:
         entry in repos.json (ADR-0014). A failing check refuses it, changing nothing. Idempotent."""
         if not repos.NAME.match(repo):
             raise ToolError(f"{repo!r} is not a repo name in the form owner/repo")
+        if not self.config.repos_file:
+            raise ToolError("FACTORY_REPOS_FILE is not set, so there is no repos.json to add the repo to")
+        if not self.config.checkout_root:
+            raise ToolError("FACTORY_CHECKOUT_ROOT is not set, so there is no place for the worker checkout")
         failed = [c for c in repos.check(self.github, repo) if not c["ok"]]
         if failed:
             raise ToolError(f"{repo} is not ready: " + " ".join(f"{c['detail']}. {c['fix']}" for c in failed))
-        if not self.config.repos_file:
-            raise ToolError("FACTORY_REPOS_FILE is not set, so there is no repos.json to add the repo to")
+        # One spelling per repo: the allowlist's if it lists the repo, else GitHub's
+        listed = self.config.listed(repo)
+        repo = listed or self.github.repository(repo)["full_name"]
         checkout = self.config.checkout(repo)
         if checkout and not os.path.isdir(os.path.join(checkout, ".git")):
             try:
@@ -90,8 +101,9 @@ class Foreman:
                 raise ToolError(f"the worker checkout for {repo} was not cloned: {exc}") from None
         for name, color, text in repos.LABELS:
             self.github.create_label(repo, name, color, text)
-        added = repos.add(self.config.repos_file, repo, by, now())  # the record of who and when
-        self.config = dataclasses.replace(self.config, repos=self.config.repos | {repo})
+        added = not listed and repos.add(self.config.repos_file, repo, by, now())  # who and when
+        if added:
+            self.config = dataclasses.replace(self.config, repos=self.config.repos | {repo})
         return {"repo": repo, "added": added, "checkout": checkout}
 
     def rebuild(self):
@@ -119,7 +131,7 @@ class Foreman:
             wi = self.store.get(workitem_id)
             if wi is None:
                 raise ToolError(f"No WorkItem {workitem_id}")
-            if wi["repo"] not in self.config.repos:
+            if self.config.listed(wi["repo"]) is None:
                 raise ToolError(f"{wi['repo']} is not in FACTORY_REPOS or repos.json; the factory "
                                 "leaves it alone")
             before, wi = self.tick_one(workitem_id)
@@ -127,7 +139,7 @@ class Foreman:
         rebuilt = self.rebuild()
         ticked = []
         for wi in self.store.all():
-            if wi["state"] not in workitem.TERMINAL and wi["repo"] in self.config.repos:
+            if wi["state"] not in workitem.TERMINAL and self.config.listed(wi["repo"]):
                 try:
                     before, after = self.tick_one(wi["id"])
                 except Exception as exc:  # noqa: BLE001 - one bad WorkItem must not starve the rest
@@ -234,7 +246,7 @@ class Foreman:
                 "exhausted")
         failed = {h["detail"].get("worker") for h in self.store.history(wi["id"])
                   if h["action"] == "attempt_failed"}
-        worker = routing.route(self.config.workers, wi["repo"] in self.config.local_only_repos, failed)
+        worker = routing.route(self.config.workers, self.config.local_only(wi["repo"]), failed)
         if worker is None:
             return self._write(wi, dict(wi, state="human_waiting", blockedOn=(
                 f"{wi['repo']} is local-only and FACTORY_WORKERS has no local worker")), "no_worker")
@@ -359,7 +371,7 @@ class Foreman:
 
     def propose_issue(self, repo, title, body):
         """Planner: open an issue labelled factory:proposed. A person adds factory:ready."""
-        self._allowlisted(repo)
+        repo = self._allowlisted(repo)
         criteria, missing = workitem.parse_acceptance(body)
         if missing or not criteria:
             raise ToolError("The body needs an '## Acceptance' list of "

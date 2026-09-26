@@ -16,7 +16,7 @@ from pathlib import Path
 from .github import GitHubError
 from .workitem import PROPOSED, READY
 
-NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+NAME = re.compile(r"^(?!\.\.?/)[A-Za-z0-9_.-]+/(?!\.\.?$)[A-Za-z0-9_.-]+$")  # not "." or ".."
 ENTRY_KEYS = {"name", "added_by", "added_at"}
 GATE_CONFIG, GATE_WORKFLOW = ".github/pr-gatekeeper.json", ".github/workflows/pr-gatekeeper.yml"
 LABELS = ((READY, "0E8A16", "software-factory may work on this issue"),
