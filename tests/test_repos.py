@@ -128,6 +128,14 @@ class EnableRepoTest(unittest.TestCase):
         self.assertEqual(([e["name"] for e in load(str(self.manifest))], self.foreman.config.repos),
                          ([REPO], frozenset({REPO})))
 
+    def test_a_repo_a_person_put_in_the_manifest_is_not_added_again(self):
+        """A person may edit repos.json while factory-mcp runs; a second entry would stop the next start."""
+        self.manifest.parent.mkdir(parents=True)
+        self.manifest.write_text(json.dumps({"version": 1, "repos": [{"name": "O/r"}]}))
+        self.assertEqual(self.foreman.add_repo(REPO, "amteshwar")["added"], False)
+        self.assertEqual([e["name"] for e in load(str(self.manifest))], ["O/r"])
+        self.assertEqual(self.foreman.config.repos, frozenset({"O/r"}))  # and it works at once
+
     def test_a_repo_in_factory_repos_keeps_that_spelling_and_stays_out_of_the_manifest(self):
         self.foreman.config = dataclasses.replace(self.foreman.config, repos=frozenset({"O/r"}))
         self.assertEqual(self.foreman.add_repo(REPO, "amteshwar"),
