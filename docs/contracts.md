@@ -7,7 +7,7 @@ four documents are the only things that cross a boundary.
 Status: **v1**. The controller is `factory-mcp` in this repo (ADR-0012). A field
 or state is in a schema only if the factory writes it and something acts on it.
 
-See also: [`architecture.html`](architecture.html) · [`decisions.md`](decisions.md).
+See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md).
 
 ## The four documents
 
