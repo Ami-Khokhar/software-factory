@@ -7,6 +7,7 @@ from pathlib import Path
 import yaml
 
 from factory_mcp import tools
+from factory_mcp.config import Config
 
 PROFILE = Path(__file__).resolve().parent.parent / "tenant" / "hermes"
 CONFIG = yaml.safe_load((PROFILE / "config.yaml").read_text())
@@ -14,6 +15,9 @@ SERVER = CONFIG["mcp_servers"]["factory"]
 
 
 class ProfileTest(unittest.TestCase):
+    def test_day_desk_reaches_factory_mcp_where_it_listens_by_default(self):
+        self.assertEqual(SERVER["url"], f"http://127.0.0.1:{Config(mcp_token='t', repos=frozenset()).port}/mcp")
+
     def test_day_desk_sees_the_tools_it_needs_and_asks_before_each_write(self):
         """Hermes asks the owner before any tool on an untrusted server that is not marked
         read-only (tests/test_mcp_server.py checks the marks). A new tool is added here on purpose."""
