@@ -61,14 +61,14 @@ def run(*cmd, check=False):
     return subprocess.run(cmd, capture_output=True, text=True, check=check)
 
 
-def call(tool, arguments=None):
+def call(tool, arguments=None, timeout=60):
     """One tools/call to factory-mcp on this machine. The token is read here and never printed."""
     token = read_env(CONFIG / "secrets").get("FACTORY_MCP_TOKEN")
     if not token:
         die(f"no FACTORY_MCP_TOKEN in {CONFIG / 'secrets'}")
     body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": {"name": tool, "arguments": arguments or {}}}
-    connection = http.client.HTTPConnection("127.0.0.1", PORT, timeout=60)
+    connection = http.client.HTTPConnection("127.0.0.1", PORT, timeout=timeout)
     try:
         connection.request("POST", "/mcp", json.dumps(body),
                            {"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
@@ -135,7 +135,8 @@ def cmd_add_repo(args):
               + ("" if check["ok"] else f"\n     fix: {check['fix']}"))
     if not checked["ready"]:
         die(f"{repo} is not ready; fix the checks above and run this again")
-    added = call("factory_add_repo", {"repo": repo, "by": SETTINGS.get("FACTORY_OWNER") or os.environ.get("USER", "")})
+    added = call("factory_add_repo", {"repo": repo, "by": SETTINGS.get("FACTORY_OWNER") or os.environ.get("USER", "")},
+                 timeout=960)  # the worker checkout is cloned first
     print(f"{repo} is {'enabled' if added['added'] else 'already enabled'}. Label an issue factory:ready, "
           f"or run: factory new {repo} ...")
 
@@ -290,7 +291,8 @@ def cmd_update(_):
     if tests.returncode != 0:
         git("checkout", "-q", "-f", branch)
         git("reset", "-q", "--hard", old)
-        die(f"update: tests fail at {new[:7]}; factory-mcp stays on {old[:7]}")
+        why = "\n".join((tests.stdout + tests.stderr).strip().splitlines()[-20:])
+        die(f"update: tests fail at {new[:7]}; factory-mcp stays on {old[:7]}\n{why}")
     if git("diff", "--quiet", old, new, "--", "worker/Dockerfile").returncode != 0:
         run("docker", "build", "-q", "-t", "factory-worker:latest", str(HERE / "worker"))
     restart_factory_mcp()
