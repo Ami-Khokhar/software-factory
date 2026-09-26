@@ -21,7 +21,7 @@ front door. A model never decides a state transition or a merge (ADR-0010, ADR-0
 | `tenant/hermes/` | Day Desk, the Hermes profile distribution |
 | `templates/AGENTS.md` | The factory standard, for every repo the factory works on |
 | `docs/` | `architecture.md` (how it works), `RUNBOOK.md` (how to run it), `contracts.md`, `decisions.md` |
-| `tests/` | The unittest suites; `fakes.py` holds the fakes for GitHub and the relay |
+| `tests/` | The unittest suites; `fakes.py` holds the fakes for GitHub, the relay and the patch push |
 
 Read `docs/architecture.md` before you change `factory_mcp/` or `worker/`.
 
@@ -42,8 +42,9 @@ python3 scripts/rehearsal.py <agent-relay checkout>      # one issue end to end,
   purpose.
 - A contract change updates the schema, the code that writes and reads it, `docs/contracts.md`
   and, when stored WorkItems change, the migration in `factory_mcp/store.py`.
-- `tests/fakes.py` fakes GitHub and the relay with the real clients' methods. The clients
-  themselves are tested against local HTTP servers, and git work runs against local bare repos.
+- `tests/fakes.py` fakes GitHub and the relay with the real clients' methods, and the patch push
+  (`FakeGit`) with `patches.apply`'s signature. The clients themselves are tested against local
+  HTTP servers, and git work runs against local bare repos.
 
 ## Pull requests
 

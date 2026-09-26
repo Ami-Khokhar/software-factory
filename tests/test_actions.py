@@ -66,6 +66,13 @@ class ActionsTest(unittest.TestCase):
         self.assertEqual(self.tick()["state"], "pr_open")  # no gate yet; no second PR
         self.assertEqual(len(self.github.pulls), 1)
 
+    def test_a_patch_is_applied_on_the_commit_it_names(self):
+        """worker/runner.py names the commit the harness built on; the WorkOrder's base is the fallback."""
+        wi, task = self.dispatched()
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"], base_sha="b7"))
+        self.assertEqual(self.tick()["state"], "pr_open")
+        self.assertEqual(self.git.pushes[0]["base"], "b7")
+
     def test_duplicate_tick_is_a_no_op(self):
         wi, _ = self.dispatched()
         self.assertEqual(self.tick()["stateVersion"], wi["stateVersion"])

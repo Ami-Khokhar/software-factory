@@ -174,11 +174,12 @@ class FakeGit:
         return self
 
 
-def result_line(order_id, diff="diff --git a/src/app.py b/src/app.py\n", fmt="unified"):
+def result_line(order_id, diff="diff --git a/src/app.py b/src/app.py\n", fmt="unified", base_sha=None):
     """A worker's task output: what it printed, then its Result, which hands back a patch."""
     import json
+    patch = {"format": fmt, "diff": diff, **({"baseSha": base_sha} if base_sha else {})}
     return "working...\n" + json.dumps({
         "schemaVersion": "factory.result/v1", "workOrderId": order_id, "status": "completed",
-        "patch": {"format": fmt, "diff": diff},
+        "patch": patch,
         "evidence": [{"kind": "test", "command": "python3 -m unittest", "exit": 0, "tail": "OK"}],
         "startedAt": "2026-09-24T00:00:00Z", "finishedAt": "2026-09-24T00:10:00Z"})

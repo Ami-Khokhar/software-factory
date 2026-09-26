@@ -73,10 +73,15 @@ def _text(value):
     return isinstance(value, str) and bool(value)
 
 
+def _integer(value):
+    # JSON Schema's integer: 0 and 0.0 are, and False is not (in Python False == 0, so a boolean exit
+    # would count as passing tests)
+    return type(value) is int or (type(value) is float and value.is_integer())
+
+
 def _evidence_ok(e):
-    # type(...) is int: in Python False == 0, and a boolean exit must not count as passing tests
     return (isinstance(e, dict) and set(e) <= EVIDENCE_KEYS and e.get("kind") in EVIDENCE_KIND.values()
-            and _text(e.get("command")) and type(e.get("exit")) is int
+            and _text(e.get("command")) and _integer(e.get("exit"))
             and isinstance(e.get("tail"), (str, type(None))))
 
 
@@ -100,7 +105,7 @@ def check_result(result, order):
     for key in ("startedAt", "finishedAt"):
         if not isinstance(result.get(key), str):
             errors.append(f"{key} is missing")
-    evidence = result.get("evidence") or []
+    evidence = result.get("evidence", [])
     if not isinstance(evidence, list) or not all(_evidence_ok(e) for e in evidence):
         return errors + ["evidence entries need kind, command, an integer exit and a text tail, "
                          "and nothing else"]
