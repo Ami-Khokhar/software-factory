@@ -175,10 +175,9 @@ when factory-mcp does not answer. Reply to the message, and Day Desk answers the
 you. After `factory update` deploys a new version, run `hermes profile update day-desk` so Day
 Desk gets the new skill.
 
-Day Desk cannot tick or take in a WorkItem itself (factory-mcp does), merge, label or push. Its
-shell is denied the `factory` write commands, `gh pr merge`, `gh label`, `gh api` and the
-factory's config directory (`approvals.deny` in `tenant/hermes/config.yaml`). The shell still
-runs as you, so these rules are a guard, not a sandbox.
+Day Desk has no shell, file tools, browser or subagents (`agent.disabled_toolsets` in
+`tenant/hermes/config.yaml`): all it can change, it changes through a factory tool you approve.
+It cannot tick or take in a WorkItem itself (factory-mcp does), merge, label or push.
 
 ### The trial before OpenBot is retired
 
@@ -189,7 +188,9 @@ Check in Telegram that Day Desk:
 3. enables a ready repo only after you approve the `factory_add_repo` call;
 4. starts an issue only after you approve `factory_approve_issue`, and a worker starts on it
    within a minute;
-5. refuses "merge PR 12" and "run factory retry" in its shell;
+5. cannot run `ls` or read `~/.hermes/profiles/day-desk/.env` when asked to: it has no tool
+   for either. If it can, the gateway ignored `disabled_toolsets`; stop it (`hermes -p day-desk
+   gateway stop`) until that is fixed;
 6. relays a factory-watch message, and your reply to it resolves the WorkItem once you approve.
 
 ## OpenBot (optional)
