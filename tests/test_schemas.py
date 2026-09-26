@@ -56,6 +56,12 @@ CASES = [
     ("evidence without a command", result(evidence=[{"kind": "test", "exit": 0}]), False),
     ("evidence of an unknown kind", result(evidence=[dict(PASSING, kind="vibes")]), False),
     ("evidence with an unknown field", result(evidence=[dict(PASSING, seconds=3)]), False),
+    ("an exit that is a boolean", result(evidence=[dict(PASSING, exit=False)]), False),
+    ("a tail that is not text", result(evidence=[dict(PASSING, tail=5)]), False),
+    ("an artifact beside a patch that is not an object", result(patch="junk"), False),
+    ("a patch beside an artifact that is not an object",
+     result(artifact="x", patch={"format": "unified", "diff": "d"}), False),
+    ("an error that is not text", result(status="failed", artifact=..., error=7), False),
 ]
 
 
