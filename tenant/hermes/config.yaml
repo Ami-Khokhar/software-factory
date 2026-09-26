@@ -18,26 +18,14 @@ mcp_servers:
         - factory_propose_issue
         - factory_resolve_human
 
+agent:
+  # Day Desk works only through the factory tools. A shell, file tools or a subagent would run as
+  # the owner: they could read the factory's token from the profile's .env and call any tool with
+  # no approval, or open issues and push. factory-watch runs as a no-agent script and needs none.
+  disabled_toolsets: [terminal, code_execution, file, browser, computer_use, delegation]
+
 approvals:
-  mode: smart
   timeout: 900  # no answer in 15 minutes is a no
-  smart_policy: |
-    ESCALATE any command that pushes with git, changes a GitHub repository, issue, label or pull
-    request, or stops, starts or restarts a service.
-  deny:  # the shell must not do what the factory tools guard, merge, or read the factory's secrets
-    - "*factory call*"
-    - "*factory new*"
-    - "*factory add-repo*"
-    - "*factory retry*"
-    - "*factory regate*"
-    - "*factory close*"
-    - "*factory update*"
-    - "*gh pr merge*"
-    - "*gh issue edit*"
-    - "*gh label*"
-    - "*gh api*"
-    - "*.config/factory-mcp*"
-    - "*FACTORY_MCP_TOKEN*"
 
 curator:
   enabled: false  # the skill is reviewed code in the factory repo; `hermes profile update` restores it

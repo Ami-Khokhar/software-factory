@@ -65,6 +65,27 @@ def parse_result(output):
     return None
 
 
+def _text(value):
+    return isinstance(value, str) and bool(value)
+
+
+def _evidence_ok(e):
+    # type(...) is int: in Python False == 0, and a boolean exit must not count as passing tests
+    return (isinstance(e, dict) and set(e) <= EVIDENCE_KEYS and e.get("kind") in EVIDENCE_KIND.values()
+            and _text(e.get("command")) and type(e.get("exit")) is int
+            and isinstance(e.get("tail"), (str, type(None))))
+
+
+def _artifact_ok(artifact):
+    return (isinstance(artifact, dict) and set(artifact) <= ARTIFACT_KEYS
+            and _text(artifact.get("branch")) and _text(artifact.get("commitSha")))
+
+
+def _patch_ok(patch):
+    return (isinstance(patch, dict) and set(patch) <= PATCH_KEYS and patch.get("format") in ("unified", "mbox")
+            and _text(patch.get("diff")) and isinstance(patch.get("baseSha"), (str, type(None))))
+
+
 def check_result(result, order):
     """Why this Result cannot be accepted for this WorkOrder (the result.schema.json rules plus
     the WorkOrder's required evidence). Empty means acceptable."""
@@ -81,26 +102,21 @@ def check_result(result, order):
         if not isinstance(result.get(key), str):
             errors.append(f"{key} is missing")
     evidence = result.get("evidence") or []
-    if not isinstance(evidence, list) or not all(
-            isinstance(e, dict) and e.get("kind") in EVIDENCE_KIND.values()
-            and isinstance(e.get("command"), str) and e["command"]
-            and isinstance(e.get("exit"), int) and set(e) <= EVIDENCE_KEYS for e in evidence):
-        return errors + ["evidence entries need kind, command and an integer exit, and nothing else"]
+    if not isinstance(evidence, list) or not all(_evidence_ok(e) for e in evidence):
+        return errors + ["evidence entries need kind, command, an integer exit and a text tail, "
+                         "and nothing else"]
+    if not isinstance(result.get("error"), (str, type(None))):
+        errors.append("error must be text")
     if result.get("status") == "failed" and not result.get("error"):
         errors.append("a failed Result needs an error")
-    if result.get("status") != "completed":
-        return errors
     artifact, patch = result.get("artifact"), result.get("patch")
-    if isinstance(artifact, dict):
-        if not (isinstance(artifact.get("branch"), str) and artifact["branch"]
-                and isinstance(artifact.get("commitSha"), str) and artifact["commitSha"]
-                and set(artifact) <= ARTIFACT_KEYS):
-            errors.append("artifact needs branch and commitSha, and nothing else")
-    elif isinstance(patch, dict):
-        if patch.get("format") not in ("unified", "mbox") or not patch.get("diff") \
-                or not set(patch) <= PATCH_KEYS:
-            errors.append("patch needs format unified|mbox and a diff, and at most a baseSha")
-    else:
+    if artifact is not None and not _artifact_ok(artifact):
+        errors.append("artifact needs branch and commitSha, and nothing else")
+    if patch is not None and not _patch_ok(patch):
+        errors.append("patch needs format unified|mbox and a diff, and at most a baseSha")
+    if result.get("status") != "completed" or errors:
+        return errors
+    if artifact is None and patch is None:
         errors.append("a completed Result needs an artifact or a patch")
     for required in order["requiredEvidence"]:
         kind = EVIDENCE_KIND[required]
