@@ -29,20 +29,19 @@ FACTORY_MCP_TOKEN=<secret> FACTORY_REPOS=owner/repo FACTORY_GITHUB_TOKEN=<token>
 
 | Variable | Meaning |
 |---|---|
-| `FACTORY_MCP_TOKEN` | Required. Bearer token OpenBot sends (the credential field when adding the server) |
+| `FACTORY_MCP_TOKEN` | Required. The bearer token every client sends: Day Desk's `.env` and the `factory` command's secrets file hold it |
 | `FACTORY_REPOS` | Comma-separated repo allowlist |
 | `FACTORY_REPOS_FILE` | `repos.json`, the repos a factory tool enabled; they join the allowlist (ADR-0014). `factory serve` sets `~/.config/factory-mcp/repos.json` |
 | `FACTORY_GITHUB_TOKEN` | GitHub REST token (fine-grained: issues, pull requests, contents) |
 | `FACTORY_RELAY_URL` | agent-relay HTTP API, default `http://127.0.0.1:43124` |
 | `FACTORY_DB` | SQLite path, default `~/.local/state/factory-mcp/factory.sqlite3` |
-| `FACTORY_HOST`, `FACTORY_PORT` | Listen address, default `127.0.0.1:43125` |
-| `FACTORY_TLS_CERT`, `FACTORY_TLS_KEY` | Serve https; OpenBot refuses plain-http custom servers |
+| `FACTORY_PORT` | The port on 127.0.0.1, default 43125. factory-mcp speaks plain HTTP, so it listens on loopback only |
 | `FACTORY_WORKERS` | Relay agents with locality, preferred first, e.g. `codex:hosted,pi-glm:local` |
 | `FACTORY_LOCAL_ONLY_REPOS` | Repos whose work may only go to `local` workers |
 | `FACTORY_MAX_PASSES`, `FACTORY_WALL_MS` | WorkOrder budget: worker passes per WorkItem (4), wall time per pass (20 min) |
 | `FACTORY_GIT_URL` | Where patch Results are pushed, default `https://github.com/{repo}.git` |
 | `FACTORY_OWNER` | GitHub login that owns escalations, default the repo owner |
-| `FACTORY_POLL_SECONDS` | Background tick interval, default 60; `0` leaves ticking to the OpenBot routine |
+| `FACTORY_POLL_SECONDS` | Background tick interval, default 60; `0` turns it off, and only `factory_tick` ticks |
 | `FACTORY_GATE_WAIT_SECONDS` | No gate verdict on the PR head for this long sends it to a person, default 7200 |
 | `FACTORY_GITHUB_API` | GitHub REST base URL, default `https://api.github.com` (GitHub Enterprise, rehearsal) |
 | `FACTORY_CHECKOUT_ROOT` | Worker checkouts live at `<root>/<owner>/<repo>`; sent to the relay as the task cwd |
@@ -50,6 +49,3 @@ FACTORY_MCP_TOKEN=<secret> FACTORY_REPOS=owner/repo FACTORY_GITHUB_TOKEN=<token>
 
 `python3 scripts/rehearsal.py <agent-relay checkout> [--lose-store]` runs one issue from
 `factory:ready` to `closed` with the real relay and a stand-in GitHub.
-
-The OpenBot tenant package is in `tenant/factory/`; install it with `scripts/install-tenant.sh`
-(see `docs/RUNBOOK.md`, OpenBot).

@@ -1,11 +1,10 @@
 """Streamable HTTP for MCP: JSON-RPC over POST /mcp, application/json responses, no SSE.
 
-OpenBot's client (@modelcontextprotocol/sdk StreamableHTTPClientTransport) accepts a JSON body for
-a request, 202 for a notification, and 405 for the optional GET stream.
+Clients (Hermes, the factory CLI) get a JSON body for a request, 202 for a notification, and 405
+for the optional GET stream. factory-mcp listens on loopback, and every call carries the token.
 """
 import hmac
 import json
-import ssl
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -46,8 +45,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path.split("?")[0] != "/mcp":
             return self._send(404, {"error": "not_found"})
-        # OpenBot calls from its server and sends no Origin; a browser always does. Refusing it
-        # closes DNS rebinding, which the specification requires servers to guard against.
+        # MCP clients send no Origin; a browser always does. Refusing it closes DNS rebinding,
+        # which the specification requires servers to guard against.
         if "Origin" in self.headers:
             return self._send(403, {"error": "origin_not_allowed"})
         expected = f"Bearer {self.server.config.mcp_token}".encode()
@@ -72,7 +71,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def make_server(config, store, github=None, relay=None):
-    server = ThreadingHTTPServer((config.host, config.port), Handler)
+    server = ThreadingHTTPServer(("127.0.0.1", config.port), Handler)  # plain HTTP: loopback only
     server.daemon_threads = True
     server.config = config
     foreman = Foreman(store, github or GitHub(config.github_token, config.github_api), config,
@@ -81,15 +80,11 @@ def make_server(config, store, github=None, relay=None):
     server.tools = tools.build(store, foreman)
     server.audit = lambda name, args, ok: store.log(
         f"tool:{name}", {"args": args, "ok": ok}, workitem_id=args.get("id"))
-    if config.tls_cert:
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(config.tls_cert, config.tls_key or None)
-        server.socket = context.wrap_socket(server.socket, server_side=True)
     return server
 
 
 def poll(foreman, store, seconds):
-    """Tick everything every few seconds. OpenBot's 15-minute routine stays the backstop (F5)."""
+    """Tick everything every few seconds."""
     while True:
         time.sleep(seconds)
         try:
@@ -105,6 +100,5 @@ def main():
     if config.poll_seconds > 0:
         threading.Thread(target=poll, args=(server.foreman, store, config.poll_seconds),
                          daemon=True).start()
-    scheme = "https" if config.tls_cert else "http"
-    print(f"factory-mcp on {scheme}://{config.host}:{server.server_port}/mcp", flush=True)
+    print(f"factory-mcp on http://127.0.0.1:{server.server_port}/mcp", flush=True)
     server.serve_forever()

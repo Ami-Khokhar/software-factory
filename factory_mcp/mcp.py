@@ -1,6 +1,6 @@
 """The MCP protocol: one JSON-RPC 2.0 message in, one response (or None) out. No I/O here.
 
-Only what OpenBot's client uses is implemented: initialize, ping, tools/list and tools/call.
+Only what the clients use is implemented: initialize, ping, tools/list and tools/call.
 """
 import json
 from dataclasses import dataclass

@@ -12,7 +12,6 @@
   factory start                           start Docker, the relay and factory-mcp
   factory logs                            follow the factory-mcp log
   factory update                          deploy this checkout's branch if its tests pass
-  factory connect-openbot                 the one-time OpenBot step: hosts name and token (asks for sudo)
   factory call <tool> [<json arguments>]  one raw factory-mcp tool call
   factory serve                           run factory-mcp in the foreground (the launchd entry)
 
@@ -22,9 +21,6 @@ FACTORY_GITHUB_TOKEN comes from `gh auth token` unless the secrets file sets it.
 import http.client
 import json
 import os
-import re
-import socket
-import ssl
 import subprocess
 import sys
 import time
@@ -35,7 +31,6 @@ CONFIG = Path.home() / ".config" / "factory-mcp"
 STATE = Path.home() / ".local" / "state" / "factory-mcp"
 LABEL = "com.software-factory.factory-mcp"
 RELAY_LABEL = "com.agent-relay"
-HOST = "factory.lan.example"
 HERE = Path(os.path.realpath(__file__)).parent.parent
 
 
@@ -67,22 +62,18 @@ def run(*cmd, check=False):
 
 
 def call(tool, arguments=None, timeout=60):
-    """One tools/call over the https MCP endpoint. The token is read here and never printed."""
+    """One tools/call to factory-mcp on this machine. The token is read here and never printed."""
     token = read_env(CONFIG / "secrets").get("FACTORY_MCP_TOKEN")
     if not token:
         die(f"no FACTORY_MCP_TOKEN in {CONFIG / 'secrets'}")
-    try:
-        sock = socket.create_connection(("127.0.0.1", PORT), timeout=timeout)
-    except OSError:
-        die(f"factory-mcp is not running on port {PORT} (start it with: factory start)")
-    caroot = run("mkcert", "-CAROOT").stdout.strip()
-    context = ssl.create_default_context(cafile=os.path.join(caroot, "rootCA.pem"))
-    connection = http.client.HTTPSConnection(HOST, PORT, context=context)
-    connection.sock = context.wrap_socket(sock, server_hostname=HOST)
     body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": {"name": tool, "arguments": arguments or {}}}
-    connection.request("POST", "/mcp", json.dumps(body),
-                       {"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    connection = http.client.HTTPConnection("127.0.0.1", PORT, timeout=timeout)
+    try:
+        connection.request("POST", "/mcp", json.dumps(body),
+                           {"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    except ConnectionRefusedError:
+        die(f"factory-mcp is not running on port {PORT} (start it with: factory start)")
     reply = json.loads(connection.getresponse().read())
     if "error" in reply:
         die(json.dumps(reply["error"]))
@@ -287,22 +278,6 @@ def cmd_update(_):
     print(f"update: deployed {new[:7]} (was {old[:7]})")
 
 
-def cmd_connect_openbot(_):
-    """The one step OpenBot needs from a person, because it takes sudo and a token (RUNBOOK)."""
-    if not re.search(rf"^\s*127\.0\.0\.1\s.*\b{re.escape(HOST)}\b", Path("/etc/hosts").read_text(), re.M):
-        print(f"Adding 127.0.0.1 {HOST} to /etc/hosts. sudo asks for your password.")
-        subprocess.run(["sudo", "sh", "-c", f"echo '127.0.0.1 {HOST}' >> /etc/hosts"], check=True)
-    token = read_env(CONFIG / "secrets").get("FACTORY_MCP_TOKEN")
-    if not token:
-        die("no FACTORY_MCP_TOKEN in ~/.config/factory-mcp/secrets")
-    subprocess.run(["pbcopy"], input=token, text=True, check=True)
-    print("In OpenBot, open Admin > Plugins and add a custom MCP server:")
-    print("  id:    factory-mcp")
-    print(f"  URL:   https://{HOST}:{PORT}/mcp")
-    print("  token: paste it (it is on your clipboard)")
-    run("open", "http://localhost:3010")
-
-
 def cmd_serve(_):
     env = dict(os.environ, **SETTINGS, **read_env(CONFIG / "secrets"))
     env.setdefault("FACTORY_REPOS_FILE", str(CONFIG / "repos.json"))
@@ -338,8 +313,6 @@ def main(argv):
         cmd_serve(args)
     elif command == "update":
         cmd_update(args)
-    elif command == "connect-openbot":
-        cmd_connect_openbot(args)
     else:
         print(__doc__.strip())
         sys.exit(2)

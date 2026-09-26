@@ -14,10 +14,7 @@ class Config:
     relay_url: str = "http://127.0.0.1:43124"
     github_token: str = ""
     github_api: str = "https://api.github.com"
-    host: str = "127.0.0.1"
-    port: int = 43125
-    tls_cert: str = ""
-    tls_key: str = ""
+    port: int = 43125  # on 127.0.0.1 only: factory-mcp speaks plain HTTP
     workers: tuple = (("codex", "hosted"),)  # (relay agentId, "local"|"hosted"), preferred first
     local_only_repos: frozenset = frozenset()
     git_url: str = "https://github.com/{repo}.git"
@@ -53,8 +50,7 @@ class Config:
         env = os.environ if env is None else env
         token = env.get("FACTORY_MCP_TOKEN", "")
         if not token:
-            # OpenBot always sends a bearer token to a custom MCP server, and an open Foreman
-            # would let anything on the network drive the factory.
+            # An open Foreman would let anything that reaches the port drive the factory.
             raise ValueError("FACTORY_MCP_TOKEN is required")
         repos_file = env.get("FACTORY_REPOS_FILE", "")
         repos = frozenset(r.strip() for r in env.get("FACTORY_REPOS", "").split(",") if r.strip()) \
@@ -73,10 +69,7 @@ class Config:
             relay_url=(env.get("FACTORY_RELAY_URL") or defaults.relay_url).rstrip("/"),
             github_token=env.get("FACTORY_GITHUB_TOKEN", ""),
             github_api=(env.get("FACTORY_GITHUB_API") or defaults.github_api).rstrip("/"),
-            host=env.get("FACTORY_HOST") or defaults.host,
             port=int(env.get("FACTORY_PORT") or defaults.port),
-            tls_cert=env.get("FACTORY_TLS_CERT", ""),
-            tls_key=env.get("FACTORY_TLS_KEY", ""),
             workers=tuple(tuple(w.strip().split(":", 1)) for w in env["FACTORY_WORKERS"].split(",")
                           if w.strip()) if env.get("FACTORY_WORKERS") else defaults.workers,
             local_only_repos=frozenset(r.strip() for r in env.get("FACTORY_LOCAL_ONLY_REPOS", "")
