@@ -67,7 +67,7 @@ last steps, and what it needs from you.
 
 | Part | It can | It cannot |
 |---|---|---|
-| Worker (pi, GLM 5.3 Flash) | Edit and commit in a throwaway container that holds a fresh copy of one repo and its model key | Push, open PRs, read your files, or use your GitHub account: it has no GitHub credential, and its copy has no remote |
+| Worker (Freebuff, GLM 5.3 Flash) | Edit and commit in a throwaway container that holds a fresh copy of one repo and a copy of Freebuff's login credential | Push, open PRs, read your files, or use your GitHub account: it has no GitHub credential, and its copy has no remote |
 | worker/runner.py | Run the repo's gate `verify` command from the base commit, in the same sandbox | Accept a patch whose tests fail |
 | factory-mcp | Push `factory/<issue>` and open the PR. It refuses a patch that touches a protected path (`.github/`, `AGENTS.md`) before the push, then checks the pushed branch and the size limits | Merge. There is no merge tool |
 | pr-gatekeeper | Review and merge, or ask for changes, or send the PR to a person (HUMAN) | Be bypassed by the factory: a HUMAN verdict waits for you |
@@ -87,6 +87,36 @@ What the design does not protect against:
   independent backstop (ADR-0008). Turn it on where your plan allows it.
 
 ## Adding a repo
+
+### Freebuff worker
+
+Sign in with `freebuff` on the owner machine first. The worker runner copies only
+`~/.config/manicode/credentials.json` into each disposable container; it never mounts the host's
+Freebuff sessions or GitHub credential. Build the image with
+`docker build -t factory-worker:latest worker/`. The image pins Freebuff 0.0.203 and uses GLM 5.3
+Flash. In `~/.config/agent-relay/agents.json`, register a command agent like this (replace the
+two host paths):
+
+```json
+{
+  "id": "freebuff-factory",
+  "name": "Freebuff (GLM 5.3 Flash), sandboxed factory worker",
+  "command": "python3",
+  "args": ["/absolute/path/to/software-factory/worker/runner.py", "--",
+           "python3", "/usr/local/bin/factory-freebuff"],
+  "cwd": "/absolute/path/to/factory-work",
+  "allowedRoots": ["/absolute/path/to/factory-work"],
+  "timeoutMs": 1500000,
+  "inheritEnv": ["HOME", "PATH"]
+}
+```
+
+Set `FACTORY_WORKERS=freebuff-factory:local` in `~/.config/factory-mcp/env` and restart
+factory-mcp; reload agent-relay's registry if it is already running. Freebuff has no headless
+CLI mode in this version. The adapter drives its terminal UI and requires its local
+`Main prompt finished` log entry for the submitted task. If that interaction changes, the pass
+fails and the WorkItem follows the usual retry/block path. The runner still requires a patch and
+passes the repo's base-commit `verify` command before factory-mcp pushes anything.
 
 The repo needs pr-gatekeeper with working secrets, a `.github/pr-gatekeeper.json` with a `verify`
 command, and an `AGENTS.md` that carries the factory standard (ADR-0015): copy `templates/AGENTS.md`
@@ -128,7 +158,7 @@ nothing from you. `factory start` checks all three.
 | WorkItem store and audit log | `~/.local/state/factory-mcp/factory.sqlite3` |
 | Logs | `~/.local/state/factory-mcp/server.log`, `~/.local/state/agent-relay/relay.log` |
 | Worker checkouts | `$FACTORY_CHECKOUT_ROOT/<owner>/<repo>` |
-| Worker definition | `pi-glm-factory` in `~/.config/agent-relay/agents.json` |
+| Worker definition | `freebuff-factory` in `~/.config/agent-relay/agents.json` |
 | launchd services | `com.agent-relay`, `com.software-factory.factory-mcp` in `~/Library/LaunchAgents` |
 
 To deploy a new version, run `factory update`. It fast-forwards the deployed checkout (and moves
