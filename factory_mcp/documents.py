@@ -7,6 +7,7 @@ EVIDENCE_KIND = {"tests-pass": "test", "lint-pass": "lint", "typecheck-pass": "t
                  "build-pass": "build", "scan-clean": "scan", "proof-commands": "proof"}
 RESULT_KEYS = {"schemaVersion", "workOrderId", "status", "artifact", "patch", "evidence", "usage",
                "session", "error", "notes", "startedAt", "finishedAt"}
+EVIDENCE_KEYS = {"kind", "command", "exit", "tail"}
 
 
 def workorder(wi, kind, attempt, config, base_sha=None, findings=()):
@@ -82,8 +83,8 @@ def check_result(result, order):
     if not isinstance(evidence, list) or not all(
             isinstance(e, dict) and e.get("kind") in EVIDENCE_KIND.values()
             and isinstance(e.get("command"), str) and e["command"]
-            and isinstance(e.get("exit"), int) for e in evidence):
-        return errors + ["evidence entries need kind, command and an integer exit"]
+            and isinstance(e.get("exit"), int) and set(e) <= EVIDENCE_KEYS for e in evidence):
+        return errors + ["evidence entries need kind, command and an integer exit, and nothing else"]
     if result.get("status") in ("failed", "timed_out") and not result.get("error"):
         errors.append("a failed Result needs an error")
     if result.get("status") != "completed":

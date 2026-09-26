@@ -93,7 +93,7 @@ Do not relitigate these; if one is wrong, stop and report it.
 6. Generalize `WorkItem.relayTaskId` → **`provider` + `providerTaskId` + `sessionHandle` +
    `sessionNative` + `sessionUrl`**.
 
-Each edit has a positive and a negative instance in `tests/fixtures/edit*.json`.
+`tests/test_schemas.py` holds the code to these contracts.
 
 ---
 
