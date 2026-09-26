@@ -102,7 +102,8 @@ class Foreman:
         for name, color, text in repos.LABELS:
             self.github.create_label(repo, name, color, text)
         added = not listed and repos.add(self.config.repos_file, repo, by, now())  # who and when
-        if added:
+        if not listed:  # works at once, in the spelling repos.json holds (a person may have added it)
+            repo = next(e["name"] for e in repos.load(self.config.repos_file) if e["name"].lower() == repo.lower())
             self.config = dataclasses.replace(self.config, repos=self.config.repos | {repo})
         return {"repo": repo, "added": added, "checkout": checkout}
 
