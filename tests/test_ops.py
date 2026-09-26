@@ -1,12 +1,13 @@
-"""Escalations and the person's answer to them, proposing issues, the cost ledger and the autonomy rate."""
+"""Escalations and the person's answer to them, proposing issues, worker passes and the autonomy rate."""
 import json
 import unittest
 from pathlib import Path
 
+from factory_mcp import tools
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
-from factory_mcp.metrics import autonomy, cost, escalation
+from factory_mcp.metrics import autonomy, escalation
 from factory_mcp.store import Store
 from tests.fakes import FakeGitHub, FakeRelay, ISSUE_BODY, result_line
 
@@ -28,8 +29,7 @@ class ResolveHumanTest(unittest.TestCase):
     def block(self):
         for _ in range(2):
             wi = self.tick()
-            output = json.dumps({"usage": {"tokens": 1000, "usd": 0.25}})
-            self.relay.finish(wi["providerTaskId"], output=output)
+            self.relay.finish(wi["providerTaskId"], output="no result here")
             wi = self.tick()
         self.assertEqual(wi["state"], "blocked")
         return wi
@@ -41,7 +41,8 @@ class ResolveHumanTest(unittest.TestCase):
         asked = escalation(wi, history)
         self.assertEqual(len(asked["tried"]), 2)
         self.assertIn("factory_resolve_human", asked["needFromYou"])
-        self.assertEqual(cost(history, 2), {"passes": 2, "tokens": 2000, "usd": 0.5})
+        status = tools.build(self.foreman.store, self.foreman)["factory_status"].fn({"id": ID})
+        self.assertEqual(status["passes"], 2)
 
         wi = self.foreman.resolve_human(ID, "retry", "Registry path fixed on the runner", "amteshwar")
         self.assertEqual((wi["state"], wi["attempts"], wi["blockedOn"]), ("ready", [], None))

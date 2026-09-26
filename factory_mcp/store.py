@@ -1,7 +1,8 @@
 """The WorkItem store (SQLite) and the audit log.
 
 A WorkItem is stored as its whole JSON document. `stateVersion` is optimistic concurrency: a write
-must name the version it read, and it stores version + 1.
+must name the version it read, and it stores version + 1. `PRAGMA user_version` counts the migrations
+a store has had.
 """
 import json
 import sqlite3
@@ -36,6 +37,8 @@ CREATE TABLE IF NOT EXISTS workorders (
   doc TEXT NOT NULL
 );
 """
+# Migration 1: WorkItem fields the contract no longer has (#27).
+REMOVED_FIELDS = ("parentGoalId", "baseSha", "provider", "sessionHandle", "sessionNative", "sessionUrl")
 
 
 def now():
@@ -53,6 +56,17 @@ class Store:
         self._db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self._lock = threading.Lock()
         self._db.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self):
+        """Bring WorkItems written by an older factory-mcp up to the contract. Safe to re-run."""
+        if self._db.execute("PRAGMA user_version").fetchone()[0] >= 1:
+            return
+        for workitem_id, doc in self._db.execute("SELECT id, doc FROM workitems").fetchall():
+            wi = {key: value for key, value in json.loads(doc).items() if key not in REMOVED_FIELDS}
+            self._db.execute("UPDATE workitems SET doc = ? WHERE id = ?",
+                             (json.dumps(wi, sort_keys=True), workitem_id))
+        self._db.execute("PRAGMA user_version = 1")
 
     def close(self):
         self._db.close()

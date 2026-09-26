@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://factory.local/schemas/verdict.schema.json",
   "title": "Verdict",
-  "description": "A normalized, forge-neutral gate decision. pr-gatekeeper currently renders this as a GitHub review + comment + label + check + dispatch; the controller consumes THIS document, never the rendered form.",
+  "description": "pr-gatekeeper's decision on one PR head, normalized from the marker JSON in its PR comment (factory_mcp/verdict.py). The Foreman acts on this document, never on the comment's prose.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,57 +12,23 @@
     "round",
     "headSha",
     "outcome",
-    "reasons",
+    "findings",
     "publishedAt"
   ],
   "properties": {
     "schemaVersion": { "const": "factory.verdict/v1" },
     "repo": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
     "prNumber": { "type": "integer", "minimum": 1 },
-    "workItemId": { "type": ["string", "null"] },
     "round": { "type": "integer", "minimum": 0 },
     "headSha": {
       "type": "string",
       "minLength": 1,
       "description": "The commit this verdict applies to. The controller must reject a verdict whose headSha is not the current WorkItem headSha."
     },
-    "baseSha": { "type": ["string", "null"] },
     "outcome": { "enum": ["MERGE", "CHANGES", "HUMAN"] },
-    "reasons": { "type": "array", "items": { "type": "string" } },
-    "reviewer": {
-      "anyOf": [
-        { "type": "null" },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "provider": { "type": ["string", "null"] },
-            "model": { "type": ["string", "null"] },
-            "verdict": { "enum": ["approve", "changes", "invalid", "skipped"] }
-          }
-        }
-      ]
-    },
     "findings": {
       "type": "array",
       "items": { "$ref": "#/$defs/finding" }
-    },
-    "criteria": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/criterion" }
-    },
-    "gates": {
-      "anyOf": [
-        { "type": "null" },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "verify": { "type": ["string", "null"] },
-            "probe": { "type": ["string", "null"] }
-          }
-        }
-      ]
     },
     "publishedAt": { "type": "string", "format": "date-time" }
   },
@@ -70,31 +36,18 @@
     "finding": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["severity", "problem"],
+      "required": ["fingerprint", "severity", "problem"],
       "properties": {
         "fingerprint": {
-          "type": ["string", "null"],
+          "type": "string",
+          "minLength": 1,
           "description": "Stable identity of the problem, used for same-problem round counting."
         },
         "severity": { "enum": ["blocking", "minor"] },
         "path": { "type": ["string", "null"] },
         "line": { "type": ["integer", "null"] },
         "problem": { "type": "string", "minLength": 1 },
-        "fix": { "type": ["string", "null"] },
-        "verified": {
-          "type": ["boolean", "null"],
-          "description": "Verifier's confirmation. Unconfirmed findings are downgraded to minor."
-        }
-      }
-    },
-    "criterion": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["claim", "met"],
-      "properties": {
-        "claim": { "type": "string", "minLength": 1 },
-        "met": { "type": "boolean" },
-        "evidence": { "type": ["string", "null"] }
+        "fix": { "type": ["string", "null"] }
       }
     }
   }

@@ -60,7 +60,7 @@ def facts(pr=None, verdict=None, gate=None, issue_state="open", labels=("factory
             "verdicts": [verdict] if verdict else [], "gate": gate}
 
 
-PR = {"number": 5, "state": "open", "merged": False, "headSha": "s2", "baseSha": "b"}
+PR = {"number": 5, "state": "open", "merged": False, "headSha": "s2"}
 DONE = {"status": "completed", "conclusion": "failure"}
 
 

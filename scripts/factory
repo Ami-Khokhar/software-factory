@@ -155,7 +155,7 @@ def cmd_status(args):
         if d.get("escalation"):
             print(f"  needs you: {d['escalation']['reason']}")
             print(f'  answer with: factory retry|regate|close {wi["id"]} "<note>"')
-        print(f"  worker passes: {d['cost']['passes']}")
+        print(f"  worker passes: {d['passes']}")
         for h in [h for h in d["history"] if not h["action"].startswith("tool:")][-8:]:
             print(f"  {h['at']}  {h['action']}  {json.dumps(h['detail'])[:110]}")
         return

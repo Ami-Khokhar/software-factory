@@ -54,7 +54,6 @@ print(json.dumps({"schemaVersion": "factory.result/v1", "workOrderId": order["id
     "artifact": {"branch": branch, "commitSha": git("rev-parse", "HEAD")},
     "evidence": [{"kind": "test", "command": "python3 -m unittest test_app", "exit": tests.returncode,
                   "tail": tests.stderr[-200:]}],
-    "usage": {"tokens": 1200, "usd": 0.01, "provider": "scripted", "model": None},
     "startedAt": started, "finishedAt": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")}))
 '''
 
@@ -297,7 +296,7 @@ def main(relay_checkout, lose_store=False):
         tick_until("closed")
         status = mcp.tool("factory_status")
         one = mcp.tool("factory_status", id=wid)
-        print("autonomy:", status["autonomy"], "cost:", one["cost"])
+        print("autonomy:", status["autonomy"], "worker passes:", one["passes"])
         auth = {a for _, _, a in github.requests}
         assert auth == {"Bearer gh-token"}, auth
         if not lose_store:  # the history that proves "no human commit" died with the store

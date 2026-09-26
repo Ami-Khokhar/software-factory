@@ -242,10 +242,8 @@ issued/planned ─label factory:ready─► ready ─► dispatching ─► impl
 | any non-terminal | issue closed, PR not merged | `cancelled` |
 | any non-terminal | dispatched WorkOrders ≥ `budget.maxPasses` | `exhausted` |
 | `human_waiting`, `blocked` | `factory_resolve_human`: `retry` / `regate` / `close` | `ready` or `changes_requested` / `reviewing` / `cancelled` |
-| any | unrecoverable fault (repo left the allowlist, issue deleted) | `failed` |
 
-`intent` is a Planner goal that has no issue yet; `factory-mcp` never stores it. Terminal:
-`merged` (until the issue closes), `closed`, `cancelled`, `exhausted`, `failed`.
+Terminal: `closed`, `cancelled`, `exhausted`. `merged` waits for the issue to close.
 
 Guards (each one a test): lease per WorkItem; idempotency key per side effect
 (`<workitem>:r<round>:<kind>:a<attempt>`, also the relay `requestId`); stale verdict (wrong

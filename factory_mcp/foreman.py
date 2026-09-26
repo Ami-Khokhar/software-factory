@@ -197,9 +197,7 @@ class Foreman:
         task = self.relay.submit(wi["worker"], documents.worker_input(order, wi["branch"]),
                                  order["idempotencyKey"], order["budget"]["wallMs"],
                                  cwd=self.config.checkout(wi["repo"]))
-        return self._write(wi, dict(wi, state="implementing", provider="agent-relay",
-                                    providerTaskId=task["id"], sessionHandle=task.get("sessionId"),
-                                    sessionNative=False),
+        return self._write(wi, dict(wi, state="implementing", providerTaskId=task["id"]),
                            "submitted", task=task["id"])
 
     def poll(self, wi):
@@ -215,8 +213,6 @@ class Foreman:
         if result is None and task.get("outputTruncated"):
             return self.fail(wi, order, f"{task['agentId']}: the relay truncated the output before "
                              "the Result line; raise AGENT_RELAY_MAX_OUTPUT_BYTES or quiet the harness")
-        if isinstance(result, dict) and isinstance(result.get("usage"), dict):
-            self.store.log("usage", result["usage"], wi["id"])  # the cost ledger, pass or fail
         errors = documents.check_result(result, order)
         if not errors and result["status"] != "completed":
             errors = [f"worker reported {result['status']}: {result.get('error')}"]
@@ -234,9 +230,6 @@ class Foreman:
         sha = artifact["commitSha"]
         self.store.log("result", {"workOrder": order["id"], "commitSha": sha}, wi["id"])
         done = dict(wi, headSha=sha, attempts=[], activeWorkOrderId=None, providerTaskId=None)
-        if result.get("session"):  # the harness's own session, resumable by a later fix
-            done.update(sessionHandle=result["session"].get("handle"),
-                        sessionNative=result["session"].get("native"))
         if wi.get("prNumber"):
             return self._write(wi, dict(done, state="reviewing"), "pushed")
         pr = self.open_pr(wi, order, files, result["evidence"], task["agentId"])

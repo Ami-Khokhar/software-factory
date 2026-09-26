@@ -4,8 +4,8 @@ The frozen interfaces of the software factory. Cells exchange **documents, never
 vendor SDKs** — that is what keeps the line harness- and model-agnostic. These
 four documents are the only things that cross a boundary.
 
-Status: **frozen v1** with the six Phase 0′ edits applied. The controller is
-`factory-mcp` in this repo (ADR-0012).
+Status: **v1**. The controller is `factory-mcp` in this repo (ADR-0012). A field
+or state is in a schema only if the factory writes it and something acts on it.
 
 See also: [`architecture.html`](architecture.html) · [`decisions.md`](decisions.md).
 
@@ -40,25 +40,25 @@ See also: [`architecture.html`](architecture.html) · [`decisions.md`](decisions
 ## Design rules baked into the schemas
 
 - **The artifact is the handoff.** A `Result` with `status: completed` **must**
-  carry `artifact` (branch + commit) or `patch` (format + diff, for hosted
-  providers that return a diff) and evidence. Free-text `notes` are for
-  humans; the control path must never parse them. This is what makes any
-  harness that can commit a first-class worker.
+  carry `artifact` (a pushed branch + commit) or `patch` (format + diff, which
+  is what `worker/runner.py` returns) and a passing test in its evidence. The
+  Result is the last JSON line of the relay task's output; the Foreman reads
+  nothing else the worker prints. This is what makes any harness that can
+  commit a first-class worker.
 - **`Verdict.headSha` is mandatory.** A verdict only applies to the exact commit
   it names. Acting on an older SHA is the stale-review bug, so it is
   structurally rejectable.
 - **`WorkItem.stateVersion` is optimistic concurrency.** Every durable write
   increments it; a transition that writes on a stale version loses.
-- **`human_waiting` is not terminal.** `merged`, `closed`, and `cancelled` are.
-  HUMAN is an action queue with a path back.
+- **`human_waiting` is not terminal.** `closed`, `cancelled` and `exhausted`
+  are; `merged` waits for the issue to close. HUMAN is an action queue with a
+  path back.
 - **Acceptance is checkable.** Each `acceptance` item has a `claim` and a
   `doneWhen`: a check read back from the produced artifact, never from effort.
 - **`blocked` carries evidence.** A WorkItem in `blocked` must have `blockedOn`
-  and at least two `attempts`, mirroring OpenBot's `job_blocked`.
+  and at least two `attempts`, so the escalation shows what was tried.
 - **Budgets have two ceilings.** `WorkOrder.budget` requires `maxPasses` and
   `wallMs`. Reaching `maxPasses` moves the WorkItem to `exhausted`.
-- **Provider-neutral task fields.** `provider`, `providerTaskId`,
-  `sessionHandle`, `sessionNative`, `sessionUrl` replace `relayTaskId`.
 - **`blockers[].fingerprint` is the identity of "the same problem."** Round
   counting is per unresolved problem, not per gate round (see
   [decisions.md](decisions.md), ADR-0005).
@@ -70,21 +70,20 @@ See also: [`architecture.html`](architecture.html) · [`decisions.md`](decisions
 ## State machine
 
 ```
-intent → issued → planned → ready → dispatching → implementing → pr_open
-                                     ▲                                │
-                                     │                                ▼
-                              changes_requested ◀────────────── reviewing
-                                     │                                │
-                                     │                                ▼
-                                     │                          merge_pending
-                                     │                                │
-                                     │                                ▼
-                          human_waiting ──► (ready | closed)     merged → closed
+issued → planned → ready → dispatching → implementing → pr_open
+                            ▲                                │
+                            │                                ▼
+                     changes_requested ◀────────────── reviewing
+                            │                                │
+                            │                                ▼
+                            │                          merge_pending
+                            │                                │
+                            │                                ▼
+                 human_waiting ──► (ready | closed)     merged → closed
 ```
 
-Operational fault states: `blocked`, `failed`. Budget ceiling: `exhausted`.
-Terminal states: `merged`, `closed`, `cancelled`, `exhausted`. **`human_waiting` is not
-terminal.**
+Fault state: `blocked`. Budget ceiling: `exhausted`. Terminal states: `closed`,
+`cancelled`, `exhausted`. **`human_waiting` is not terminal.**
 
 ## Controller obligations (the guards)
 
@@ -103,14 +102,20 @@ must hold before the controller is allowed to write:
 5. **`merge_pending` before `merged`.** Only observe `merged` after GitHub
    confirms the merge on the reviewed SHA; running a merge and observing a merge
    are different facts.
-6. **Acceptance, not just merge.** `closed` requires the issue's acceptance
-   criteria to be checked, not merely a merged PR.
+6. **Acceptance travels with the work.** The WorkOrder and the PR body carry
+   the issue's acceptance criteria, and the gate reviews the PR against them.
+   The Foreman does not re-check them after the merge: `closed` means the PR
+   merged and the issue closed, and a merge without the gate's MERGE verdict is
+   recorded in `terminalReason`.
 
 ## Versioning
 
-- The `schemaVersion` const is the version. Additive, backward-compatible
-  changes keep `v1`; any breaking change becomes `v2` and both may coexist
-  during migration.
+- The `schemaVersion` const is the version. Every producer and consumer of
+  these documents is in this repo and ships with it, so a change keeps `v1`
+  when every producer here meets it; the tests prove they do. A breaking change
+  to a document produced outside this repo would become `v2`.
+- `factory_mcp/store.py` migrates stored WorkItems when the store opens, so a
+  removed field does not linger in them.
 - A consumer must reject a document with an unknown `schemaVersion` rather than
   guess.
 

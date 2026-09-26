@@ -2,14 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://factory.local/schemas/result.schema.json",
   "title": "Result",
-  "description": "A worker's artifact handoff. The control path consumes the artifact (branch + commit, or a patch, plus evidence), never the free-text notes. This is what makes the factory harness-agnostic: any harness that can commit is a valid worker.",
+  "description": "A worker's artifact handoff: a pushed branch or a patch, plus evidence. It is the last JSON line of the relay task's output; the Foreman reads nothing else the worker prints. This is what makes the factory harness-agnostic: any harness that can commit is a valid worker.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "workOrderId", "status", "startedAt", "finishedAt"],
   "properties": {
     "schemaVersion": { "const": "factory.result/v1" },
     "workOrderId": { "type": "string", "minLength": 1 },
-    "status": { "enum": ["completed", "failed", "timed_out", "cancelled"] },
+    "status": { "enum": ["completed", "failed"] },
     "artifact": {
       "anyOf": [
         { "type": "null" },
@@ -19,8 +19,7 @@
           "required": ["branch", "commitSha"],
           "properties": {
             "branch": { "type": "string", "minLength": 1 },
-            "commitSha": { "type": "string", "minLength": 1 },
-            "filesChanged": { "type": "array", "items": { "type": "string" } }
+            "commitSha": { "type": "string", "minLength": 1 }
           }
         }
       ]
@@ -47,39 +46,7 @@
       "type": "array",
       "items": { "$ref": "#/$defs/evidence" }
     },
-    "usage": {
-      "anyOf": [
-        { "type": "null" },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "tokens": { "type": ["integer", "null"] },
-            "usd": { "type": ["number", "null"] },
-            "provider": { "type": ["string", "null"] },
-            "model": { "type": ["string", "null"] }
-          }
-        }
-      ]
-    },
-    "session": {
-      "anyOf": [
-        { "type": "null" },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "handle": { "type": "string" },
-            "native": { "type": "boolean" }
-          }
-        }
-      ]
-    },
     "error": { "type": ["string", "null"] },
-    "notes": {
-      "type": ["string", "null"],
-      "description": "Free text for humans. NONE of the control path may parse this."
-    },
     "startedAt": { "type": "string", "format": "date-time" },
     "finishedAt": { "type": "string", "format": "date-time" }
   },
@@ -94,10 +61,7 @@
       }
     },
     {
-      "if": {
-        "properties": { "status": { "enum": ["failed", "timed_out"] } },
-        "required": ["status"]
-      },
+      "if": { "properties": { "status": { "const": "failed" } }, "required": ["status"] },
       "then": { "required": ["error"], "properties": { "error": { "type": "string", "minLength": 1 } } }
     }
   ],
@@ -107,7 +71,7 @@
       "additionalProperties": false,
       "required": ["kind", "command", "exit"],
       "properties": {
-        "kind": { "enum": ["test", "lint", "typecheck", "build", "scan", "proof"] },
+        "kind": { "enum": ["test"] },
         "command": { "type": "string", "minLength": 1 },
         "exit": { "type": "integer" },
         "tail": { "type": ["string", "null"] }

@@ -1,8 +1,11 @@
+"""The SQLite store: WorkItems survive a restart, a stale write loses, old stores are migrated."""
+import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 
-from factory_mcp.store import Conflict, Store
+from factory_mcp.store import SCHEMA, Conflict, Store
 from tests.fakes import workitem
 
 
@@ -36,6 +39,21 @@ class StoreTest(unittest.TestCase):
         with self.assertRaises(Conflict):
             store.put(workitem())
         self.assertEqual(store.get("o/r#1")["state"], "ready")
+        store.close()
+
+    def test_opening_an_old_store_drops_the_removed_fields(self):
+        """A store written before #27 holds WorkItems with fields the schema now rejects."""
+        Path(self.path).parent.mkdir(parents=True)
+        old = sqlite3.connect(self.path)
+        old.executescript(SCHEMA)
+        doc = dict(workitem(), stateVersion=3, provider="agent-relay", sessionHandle="s-1",
+                   sessionNative=False, baseSha="b0")
+        old.execute("INSERT INTO workitems VALUES (?, 3, ?)", (doc["id"], json.dumps(doc)))
+        old.commit()
+        old.close()
+
+        store = Store(self.path)
+        self.assertEqual(store.get("o/r#1"), dict(workitem(), stateVersion=3))
         store.close()
 
 
