@@ -39,6 +39,14 @@ class TrustedAuthorsTest(unittest.TestCase):
         self.assertFalse(config.trusts(REPO, "o"))
         self.assertTrue(Config(mcp_token="t", repos=frozenset({REPO})).trusts(REPO, "o"))
 
+    def test_logins_ignore_case(self):
+        """GitHub treats Ami-Khokhar and ami-khokhar as one login."""
+        repo = "Ami-Khokhar/r"
+        self.assertTrue(Config(mcp_token="t", repos=frozenset({repo})).trusts(repo, "ami-khokhar"))
+        config = Config(mcp_token="t", repos=frozenset({repo}), trusted_authors=frozenset({"Bob"}))
+        self.assertTrue(config.trusts(repo, "BOB"))
+        self.assertFalse(config.trusts(repo, "bobby"))
+
 
 class OneWorkerPerCheckoutTest(unittest.TestCase):
     def test_second_issue_in_a_repo_waits_for_the_first(self):

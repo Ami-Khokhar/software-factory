@@ -301,6 +301,7 @@ def cmd_connect_openbot(_):
 
 def cmd_serve(_):
     env = dict(os.environ, **SETTINGS, **read_env(CONFIG / "secrets"))
+    env.setdefault("FACTORY_REPOS_FILE", str(CONFIG / "repos.json"))
     if not env.get("FACTORY_MCP_TOKEN"):
         die(f"no FACTORY_MCP_TOKEN in {CONFIG / 'secrets'}")
     if not env.get("FACTORY_GITHUB_TOKEN"):

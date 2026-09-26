@@ -28,6 +28,7 @@ FACTORY_MCP_TOKEN=<secret> FACTORY_REPOS=owner/repo FACTORY_GITHUB_TOKEN=<token>
 |---|---|
 | `FACTORY_MCP_TOKEN` | Required. Bearer token OpenBot sends (the credential field when adding the server) |
 | `FACTORY_REPOS` | Comma-separated repo allowlist |
+| `FACTORY_REPOS_FILE` | `repos.json`, the repos a factory tool enabled; they join the allowlist (ADR-0014). `factory serve` sets `~/.config/factory-mcp/repos.json` |
 | `FACTORY_GITHUB_TOKEN` | GitHub REST token (fine-grained: issues, pull requests, contents) |
 | `FACTORY_RELAY_URL` | agent-relay HTTP API, default `http://127.0.0.1:43124` |
 | `FACTORY_DB` | SQLite path, default `~/.local/state/factory-mcp/factory.sqlite3` |
