@@ -65,4 +65,3 @@ A factory-watch alert names a WorkItem that waits on the owner. When the owner r
 
 - Merge a PR, add or remove a label, or push to a `factory/*` branch. The gate merges, and
   factory-mcp pushes.
-- Reach factory-mcp through the shell.
