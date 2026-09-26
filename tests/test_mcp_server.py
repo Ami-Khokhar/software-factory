@@ -56,7 +56,7 @@ class McpServerTest(unittest.TestCase):
         tools = self.rpc("tools/list")["result"]["tools"]
         reads = {t["name"] for t in tools if t["annotations"]["readOnlyHint"] is True}
         writes = {t["name"] for t in tools if t["annotations"]["readOnlyHint"] is False}
-        self.assertEqual(reads, {"factory_status"})
+        self.assertEqual(reads, {"factory_status", "factory_repo_check"})
         self.assertEqual(writes, {"factory_intake", "factory_tick", "factory_resolve_human",
                                   "factory_propose_issue"})
         self.assertTrue(all(t["inputSchema"]["type"] == "object" for t in tools))

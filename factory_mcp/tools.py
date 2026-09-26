@@ -1,5 +1,5 @@
 """The factory tools OpenBot's Bots may call. Each one declares its effect."""
-from . import metrics
+from . import metrics, repos
 from .mcp import Tool, ToolError
 
 
@@ -10,7 +10,8 @@ def build(store, foreman):
             workitems = store.all()
             return {"workItems": [
                 {key: wi.get(key) for key in ("id", "state", "prNumber", "blockedOn", "updatedAt")}
-                for wi in workitems], "autonomy": metrics.autonomy(workitems, store.history)}
+                for wi in workitems], "autonomy": metrics.autonomy(workitems, store.history),
+                "repos": sorted(foreman.config.repos)}
         wi = store.get(workitem_id)
         if wi is None:
             raise ToolError(f"No WorkItem {workitem_id}")
@@ -18,12 +19,28 @@ def build(store, foreman):
         return {"workItem": wi, "escalation": metrics.escalation(wi, history),
                 "passes": len(store.workorders(workitem_id)), "history": history}
 
+    def repo_check(args):
+        repo = args["repo"]
+        if not repos.NAME.match(repo):
+            raise ToolError(f"{repo!r} is not a repo name in the form owner/repo")
+        checks = repos.check(foreman.github, repo)
+        return {"repo": repo, "enabled": repo in foreman.config.repos,
+                "ready": all(c["ok"] for c in checks), "checks": checks}
+
     tools = [
         Tool("factory_status",
-             "Show one WorkItem with its history, or a summary of all WorkItems when no id is given.",
+             "Show one WorkItem with its history, or, when no id is given, a summary of all "
+             "WorkItems and the repos the factory works on.",
              {"type": "object", "properties": {"id": {"type": "string", "description": "owner/repo#issue"}},
               "additionalProperties": False},
              "read", status),
+        Tool("factory_repo_check",
+             "Check what a GitHub repo needs before the factory can work on it: the factory's token "
+             "can push to it, and pr-gatekeeper is installed with a verify command. Each failed "
+             "check says how to fix it. Changes nothing.",
+             {"type": "object", "required": ["repo"], "additionalProperties": False,
+              "properties": {"repo": {"type": "string", "description": "owner/repo"}}},
+             "read", repo_check),
         Tool("factory_intake",
              "Create a WorkItem from an open GitHub issue in an allowlisted repo. The issue needs an "
              "'## Acceptance' list of '- <claim> — done when: <check>' bullets. Idempotent.",
