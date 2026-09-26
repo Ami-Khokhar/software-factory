@@ -98,8 +98,8 @@ class AddRepoTest(unittest.TestCase):
         """The tools add-repo called, and how it exited. It must run no command of its own."""
         calls = []
 
-        def call(tool, arguments=None):
-            calls.append(tool)
+        def call(tool, arguments=None, timeout=60):
+            calls.append((tool, timeout))
             return {"repo": "o/r", "ready": ready, "added": True,
                     "checks": [{"id": "gate_workflow", "ok": ready, "detail": "d", "fix": "f"}]}
 
@@ -112,11 +112,13 @@ class AddRepoTest(unittest.TestCase):
         return calls, None
 
     def test_a_ready_repo_is_enabled_through_the_tools(self):
-        self.assertEqual(self.add_repo(ready=True), (["factory_repo_check", "factory_add_repo"], None))
+        # enabling clones the worker checkout, which may take up to 900s
+        self.assertEqual(self.add_repo(ready=True),
+                         ([("factory_repo_check", 60), ("factory_add_repo", 960)], None))
 
     def test_a_failing_check_stops_it_before_the_repo_is_enabled(self):
         calls, stopped = self.add_repo(ready=False)
-        self.assertEqual(calls, ["factory_repo_check"])
+        self.assertEqual(calls, [("factory_repo_check", 60)])
         self.assertIn("o/r is not ready", stopped)
 
 

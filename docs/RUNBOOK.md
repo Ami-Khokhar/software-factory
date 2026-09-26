@@ -102,7 +102,8 @@ nothing restarts. If `verify` needs a tool the sandbox image lacks, the first wo
 with `verify exited 127`: add the tool to `worker/Dockerfile`, then run
 `docker build -t factory-worker:latest worker/`.
 
-To take a repo away from the factory, remove it from `FACTORY_REPOS` and restart factory-mcp. Its
+To take a repo away from the factory, remove it from `FACTORY_REPOS` or delete its entry in
+`repos.json`, whichever lists it, and restart factory-mcp. Its
 WorkItems stay as they are: no worker starts and no PR opens for them, and they carry on if the
 repo comes back. A worker already running finishes; its Result is read when the repo comes back.
 
@@ -136,7 +137,7 @@ tests need the packages in `requirements.txt`, installed once for the Python tha
 ## When something looks wrong
 
 - **Nothing happens to a labelled issue.** Check the author (only trusted authors), the repo (in
-  `FACTORY_REPOS`), and the `## Acceptance` format. `factory status` shows a refusal as
+  `FACTORY_REPOS` or `repos.json`), and the `## Acceptance` format. `factory status` shows a refusal as
   `rebuild_skipped`.
 - **Blocked: `verify exited 1`.** The repo's tests failed in the sandbox. Run the verify command
   yourself. If the tests fail on `main` too, fix `main` first.
