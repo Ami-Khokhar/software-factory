@@ -1,4 +1,5 @@
-"""Escalations and the person's answer to them, proposing issues, worker passes and the autonomy rate."""
+"""A person's acts: approving an issue, answering an escalation. Proposing issues, worker passes
+and the autonomy rate."""
 import json
 import unittest
 from pathlib import Path
@@ -101,6 +102,50 @@ class ResolveHumanTest(unittest.TestCase):
             self.foreman.propose_issue(REPO, "Vague", "## Acceptance\n- it works")
         with self.assertRaises(ToolError):
             self.foreman.propose_issue("other/repo", "Fail loud", ISSUE_BODY)
+
+
+class ApproveIssueTest(unittest.TestCase):
+    def setUp(self):
+        self.github = FakeGitHub()
+        self.foreman = Foreman(Store(":memory:"), self.github, Config(mcp_token="t", repos=frozenset({REPO})),
+                               FakeRelay())
+
+    def test_approving_labels_the_issue_and_takes_it_in_once(self):
+        self.github.add_issue(REPO, 7, labels=())
+        for _ in range(2):
+            wi = self.foreman.approve_issue(REPO, 7, "amteshwar")
+        self.assertEqual(wi["state"], "ready")
+        self.assertEqual(self.github.labelled, [(REPO, 7, ["factory:ready"])])
+        self.assertEqual([h["action"] for h in self.foreman.store.history(ID)], ["approved", "intake"])
+
+    def test_any_case_of_the_repo_name_is_the_one_workitem(self):
+        self.github.add_issue(REPO, 7, labels=())
+        self.assertEqual(self.foreman.approve_issue(REPO.upper(), 7, "amteshwar")["id"], ID)
+        self.assertEqual(self.foreman.intake("o/R", 7)["id"], ID)
+        self.assertEqual(len(self.foreman.store.all()), 1)
+
+    def test_a_finished_workitem_is_not_approved_again(self):
+        self.github.add_issue(REPO, 7, labels=())
+        wi = self.foreman.approve_issue(REPO, 7, "amteshwar")
+        self.foreman.store.put(dict(wi, state="exhausted"))
+        with self.assertRaisesRegex(ToolError, "o/r#7 is exhausted; open a new issue"):
+            self.foreman.approve_issue(REPO, 7, "amteshwar")
+        self.assertEqual(len(self.github.labelled), 1)
+
+    def test_what_intake_refuses_is_refused_before_the_label(self):
+        """A factory:ready label alone makes the next rebuild adopt the issue."""
+        self.github.add_issue(REPO, 7, labels=(), author="stranger")
+        self.github.add_issue(REPO, 8, labels=(), state="closed")
+        self.github.add_issue(REPO, 9, labels=(), body="No acceptance here.")
+        cases = [("an untrusted author", REPO, 7, "stranger, who is not a trusted author"),
+                 ("a closed issue", REPO, 8, "o/r#8 is closed"),
+                 ("no acceptance checks", REPO, 9, "needs an '## Acceptance' list"),
+                 ("an issue that does not exist", REPO, 404, "o/r#404 does not exist"),
+                 ("a repo off the allowlist", "o/other", 7, "o/other is not in FACTORY_REPOS or repos.json")]
+        for case, repo, number, reason in cases:
+            with self.subTest(case), self.assertRaisesRegex(ToolError, reason):
+                self.foreman.approve_issue(repo, number, "amteshwar")
+        self.assertEqual((self.github.labelled, self.foreman.store.all()), ([], []))
 
 
 class AutonomyTest(unittest.TestCase):

@@ -24,7 +24,7 @@ def build(store, foreman):
         if not repos.NAME.match(repo):
             raise ToolError(f"{repo!r} is not a repo name in the form owner/repo")
         checks = repos.check(foreman.github, repo)
-        return {"repo": repo, "enabled": repo in foreman.config.repos,
+        return {"repo": repo, "enabled": foreman.config.listed(repo) is not None,
                 "ready": all(c["ok"] for c in checks), "checks": checks}
 
     tools = [
@@ -41,6 +41,14 @@ def build(store, foreman):
              {"type": "object", "required": ["repo"], "additionalProperties": False,
               "properties": {"repo": {"type": "string", "description": "owner/repo"}}},
              "read", repo_check),
+        Tool("factory_add_repo",
+             "Enable a repo for the factory once a person agrees. It must pass factory_repo_check. "
+             "Clones the worker checkout, creates the factory labels and adds the repo to repos.json; "
+             "the factory works on it at once. Idempotent.",
+             {"type": "object", "required": ["repo", "by"], "additionalProperties": False,
+              "properties": {"repo": {"type": "string", "description": "owner/repo"},
+                             "by": {"type": "string", "minLength": 1, "description": "who agreed"}}},
+             "write", lambda args: foreman.add_repo(args["repo"], args["by"])),
         Tool("factory_intake",
              "Create a WorkItem from an open GitHub issue in an allowlisted repo. The issue needs an "
              "'## Acceptance' list of '- <claim> — done when: <check>' bullets. Idempotent.",
@@ -48,6 +56,15 @@ def build(store, foreman):
               "properties": {"repo": {"type": "string", "description": "owner/repo"},
                              "issue": {"type": "integer", "minimum": 1}}},
              "write", lambda args: {"workItem": foreman.intake(args["repo"], args["issue"])}),
+        Tool("factory_approve_issue",
+             "A person's go on an issue: label it factory:ready and take it in, so the factory starts "
+             "work on it. The issue must be open, opened by a trusted author, and have an "
+             "'## Acceptance' list of '- <claim> — done when: <check>' bullets. Idempotent.",
+             {"type": "object", "required": ["repo", "issue", "by"], "additionalProperties": False,
+              "properties": {"repo": {"type": "string", "description": "owner/repo"},
+                             "issue": {"type": "integer", "minimum": 1},
+                             "by": {"type": "string", "minLength": 1, "description": "who approved"}}},
+             "write", lambda args: {"workItem": foreman.approve_issue(args["repo"], args["issue"], args["by"])}),
         Tool("factory_tick",
              "Reconcile one WorkItem against GitHub and take the one legal next action. Without an "
              "id, first adopt open 'factory:ready' issues, then tick every live WorkItem. Idempotent.",

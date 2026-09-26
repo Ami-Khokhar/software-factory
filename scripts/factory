@@ -2,7 +2,7 @@
 """factory: operate the local software factory.
 
   factory new <owner/repo> <title> "<claim> | <check>" ["<claim> | <check>" ...] [-d <description>]
-  factory add-repo <owner/repo>           make a repo a factory target (it needs pr-gatekeeper)
+  factory add-repo <owner/repo>           check a repo and enable it (it needs pr-gatekeeper)
   factory status [<owner/repo#n>]
   factory retry  <owner/repo#n> <note>    try again; the note goes to the worker as a finding
   factory regate <owner/repo#n> <note>    you pushed a fix yourself; the gate reviews it again
@@ -18,7 +18,6 @@
 Settings: ~/.config/factory-mcp/env. Secrets: ~/.config/factory-mcp/secrets (FACTORY_MCP_TOKEN).
 FACTORY_GITHUB_TOKEN comes from `gh auth token` unless the secrets file sets it.
 """
-import base64
 import http.client
 import json
 import os
@@ -66,7 +65,7 @@ def run(*cmd, check=False):
     return subprocess.run(cmd, capture_output=True, text=True, check=check)
 
 
-def call(tool, arguments=None):
+def call(tool, arguments=None, timeout=60):
     """One tools/call over the https MCP endpoint. The token is read here and never printed."""
     token = read_env(CONFIG / "secrets").get("FACTORY_MCP_TOKEN")
     if not token:
@@ -74,7 +73,7 @@ def call(tool, arguments=None):
     caroot = run("mkcert", "-CAROOT").stdout.strip()
     context = ssl.create_default_context(cafile=os.path.join(caroot, "rootCA.pem"))
     try:
-        sock = socket.create_connection(("127.0.0.1", PORT), timeout=60)
+        sock = socket.create_connection(("127.0.0.1", PORT), timeout=timeout)
     except OSError:
         die(f"factory-mcp is not running on port {PORT} (start it with: factory start)")
     connection = http.client.HTTPSConnection(HOST, PORT, context=context)
@@ -115,36 +114,20 @@ def cmd_new(args):
 
 
 def cmd_add_repo(args):
-    """Make a repo a factory target: gate check, worker checkout, labels, FACTORY_REPOS, restart."""
+    """Check a repo and enable it, through the tools Day Desk uses, so the checks exist once."""
     if len(args) != 1 or args[0].count("/") != 1:
         die("usage: factory add-repo <owner/repo>")
     repo = args[0]
-    gate = run("gh", "api", f"repos/{repo}/contents/.github/pr-gatekeeper.json", "--jq", ".content")
-    if gate.returncode != 0:
-        die(f"{repo} has no .github/pr-gatekeeper.json: install pr-gatekeeper there first "
-            "(its verify command is what the worker must pass, and the gate is what merges)")
-    verify = json.loads(base64.b64decode(gate.stdout)).get("verify", "")
-    root = SETTINGS.get("FACTORY_CHECKOUT_ROOT") or die("FACTORY_CHECKOUT_ROOT is not set in the env file")
-    checkout = Path(root, *repo.split("/"))
-    if not (checkout / ".git").is_dir():
-        run("git", "clone", "-q", f"https://github.com/{repo}.git", str(checkout), check=True)
-        print(f"cloned the worker checkout: {checkout}")
-    for name, color, text in (("factory:ready", "0E8A16", "software-factory may work on this issue"),
-                              ("factory:proposed", "C5DEF5", "proposed by the Planner; add factory:ready to accept")):
-        run("gh", "label", "create", name, "-R", repo, "--color", color, "--description", text)
-    env = CONFIG / "env"
-    lines = env.read_text().splitlines()
-    repos = [r for r in (SETTINGS.get("FACTORY_REPOS") or "").split(",") if r]
-    if repo not in repos:
-        lines = [line for line in lines if not line.startswith("FACTORY_REPOS=")]
-        lines.append("FACTORY_REPOS=" + ",".join(repos + [repo]))
-        env.write_text("\n".join(lines) + "\n")
-        run("launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{LABEL}")
-        print(f"added {repo} to FACTORY_REPOS and restarted factory-mcp")
-    tool = verify.split("&&")[-1].split()[0] if verify.strip() else ""
-    if tool and run("docker", "run", "--rm", "factory-worker:latest", "sh", "-c", f"command -v {tool}").returncode:
-        print(f"warning: the sandbox image has no `{tool}`, which verify needs; add it to worker/Dockerfile")
-    print(f"{repo} is ready. Label an issue factory:ready, or run: factory new {repo} ...")
+    checked = call("factory_repo_check", {"repo": repo})
+    for check in checked["checks"]:
+        print(f"{'ok  ' if check['ok'] else 'FAIL'} {check['id']}: {check['detail']}"
+              + ("" if check["ok"] else f"\n     fix: {check['fix']}"))
+    if not checked["ready"]:
+        die(f"{repo} is not ready; fix the checks above and run this again")
+    added = call("factory_add_repo", {"repo": repo, "by": SETTINGS.get("FACTORY_OWNER") or os.environ.get("USER", "")},
+                 timeout=960)  # the worker checkout is cloned first
+    print(f"{repo} is {'enabled' if added['added'] else 'already enabled'}. Label an issue factory:ready, "
+          f"or run: factory new {repo} ...")
 
 
 def cmd_status(args):

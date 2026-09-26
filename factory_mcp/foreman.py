@@ -1,13 +1,15 @@
 """The Foreman: under a per-WorkItem lease, reconcile with GitHub, then act at most once."""
 import calendar
+import dataclasses
+import os
 import time
 import uuid
 
-from . import documents, patches, routing, workitem
+from . import documents, patches, repos, routing, workitem
 from .github import GitHubError
 from .mcp import ToolError
 from .relay import RelayError
-from .store import Conflict
+from .store import Conflict, now
 from .verdict import blocking
 
 # States that need a person. Entering one posts a comment on the issue, so the owner hears of it.
@@ -25,26 +27,85 @@ class Foreman:
         self._skipped = set()  # rebuild refusals already logged by this process
 
     def intake(self, repo, number):
-        if repo not in self.config.repos:
-            raise ToolError(f"{repo} is not in FACTORY_REPOS")
+        repo = self._allowlisted(repo)
         existing = self.store.get(workitem.workitem_id(repo, number))
         if existing:
             return existing
-        issue = self.github.issue(repo, number)
-        author = (issue.get("user") or {}).get("login")
-        if not self.config.trusts(repo, author):
-            raise ToolError(f"{repo}#{number} was opened by {author}, who is not a trusted author "
-                            "(FACTORY_TRUSTED_AUTHORS); a trusted person must open the issue")
-        try:
-            wi = workitem.intake(repo, issue)
-        except ValueError as exc:
-            raise ToolError(str(exc)) from None
+        wi = self._admit(repo, self._issue(repo, number))
         try:
             wi = self.store.put(wi)
         except Conflict:  # a concurrent tick took it in first
             return self.store.get(wi["id"])
         self.store.log("intake", {"state": wi["state"]}, wi["id"])
         return wi
+
+    def _allowlisted(self, repo):
+        """The allowlist's spelling of `repo`, so one repo has one WorkItem id."""
+        listed = self.config.listed(repo)
+        if listed is None:
+            raise ToolError(f"{repo} is not in FACTORY_REPOS or repos.json")
+        return listed
+
+    def _issue(self, repo, number):
+        try:
+            return self.github.issue(repo, number)
+        except GitHubError as exc:
+            if exc.status == 404:
+                raise ToolError(f"{repo}#{number} does not exist") from None
+            raise
+
+    def _admit(self, repo, issue):
+        """The new WorkItem for `issue`, or a ToolError saying why the factory may not take it."""
+        author = (issue.get("user") or {}).get("login")
+        if not self.config.trusts(repo, author):
+            raise ToolError(f"{repo}#{issue['number']} was opened by {author}, who is not a trusted "
+                            "author (FACTORY_TRUSTED_AUTHORS); a trusted person must open the issue")
+        try:
+            return workitem.intake(repo, issue)
+        except ValueError as exc:
+            raise ToolError(str(exc)) from None
+
+    def approve_issue(self, repo, number, by):
+        """A person's go on an issue: label it factory:ready and take it in. Idempotent."""
+        repo = self._allowlisted(repo)
+        existing = self.store.get(workitem.workitem_id(repo, number))
+        if existing and existing["state"] in workitem.TERMINAL:
+            raise ToolError(f"{existing['id']} is {existing['state']}; open a new issue for more work")
+        issue = self._issue(repo, number)
+        self._admit(repo, issue)  # refuse before labelling: a rebuild adopts any factory:ready issue
+        if workitem.READY not in workitem.labels(issue):
+            self.github.add_labels(repo, number, [workitem.READY])
+            self.store.log("approved", {"by": by}, workitem.workitem_id(repo, number))
+        return self.intake(repo, number)
+
+    def add_repo(self, repo, by):
+        """Enable a repo that passes the checks: its worker checkout, the factory labels, and an
+        entry in repos.json (ADR-0014). A failing check refuses it, changing nothing. Idempotent."""
+        if not repos.NAME.match(repo):
+            raise ToolError(f"{repo!r} is not a repo name in the form owner/repo")
+        if not self.config.repos_file:
+            raise ToolError("FACTORY_REPOS_FILE is not set, so there is no repos.json to add the repo to")
+        if not self.config.checkout_root:
+            raise ToolError("FACTORY_CHECKOUT_ROOT is not set, so there is no place for the worker checkout")
+        failed = [c for c in repos.check(self.github, repo) if not c["ok"]]
+        if failed:
+            raise ToolError(f"{repo} is not ready: " + " ".join(f"{c['detail']}. {c['fix']}" for c in failed))
+        # One spelling per repo: the allowlist's if it lists the repo, else GitHub's
+        listed = self.config.listed(repo)
+        repo = listed or self.github.repository(repo)["full_name"]
+        checkout = self.config.checkout(repo)
+        if checkout and not os.path.isdir(os.path.join(checkout, ".git")):
+            try:
+                patches.clone(self.config.git_url.format(repo=repo), self.config.github_token, checkout)
+            except patches.PatchError as exc:
+                raise ToolError(f"the worker checkout for {repo} was not cloned: {exc}") from None
+        for name, color, text in repos.LABELS:
+            self.github.create_label(repo, name, color, text)
+        added = not listed and repos.add(self.config.repos_file, repo, by, now())  # who and when
+        if not listed:  # works at once, in the spelling repos.json holds (a person may have added it)
+            repo = next(e["name"] for e in repos.load(self.config.repos_file) if e["name"].lower() == repo.lower())
+            self.config = dataclasses.replace(self.config, repos=self.config.repos | {repo})
+        return {"repo": repo, "added": added, "checkout": checkout}
 
     def rebuild(self):
         """Intake every open `factory:ready` issue the store does not know (D8: GitHub is the truth)."""
@@ -71,14 +132,15 @@ class Foreman:
             wi = self.store.get(workitem_id)
             if wi is None:
                 raise ToolError(f"No WorkItem {workitem_id}")
-            if wi["repo"] not in self.config.repos:
-                raise ToolError(f"{wi['repo']} is not in FACTORY_REPOS; the factory leaves it alone")
+            if self.config.listed(wi["repo"]) is None:
+                raise ToolError(f"{wi['repo']} is not in FACTORY_REPOS or repos.json; the factory "
+                                "leaves it alone")
             before, wi = self.tick_one(workitem_id)
             return {"id": workitem_id, "from": before, "to": wi["state"], "workItem": wi}
         rebuilt = self.rebuild()
         ticked = []
         for wi in self.store.all():
-            if wi["state"] not in workitem.TERMINAL and wi["repo"] in self.config.repos:
+            if wi["state"] not in workitem.TERMINAL and self.config.listed(wi["repo"]):
                 try:
                     before, after = self.tick_one(wi["id"])
                 except Exception as exc:  # noqa: BLE001 - one bad WorkItem must not starve the rest
@@ -185,7 +247,7 @@ class Foreman:
                 "exhausted")
         failed = {h["detail"].get("worker") for h in self.store.history(wi["id"])
                   if h["action"] == "attempt_failed"}
-        worker = routing.route(self.config.workers, wi["repo"] in self.config.local_only_repos, failed)
+        worker = routing.route(self.config.workers, self.config.local_only(wi["repo"]), failed)
         if worker is None:
             return self._write(wi, dict(wi, state="human_waiting", blockedOn=(
                 f"{wi['repo']} is local-only and FACTORY_WORKERS has no local worker")), "no_worker")
@@ -310,8 +372,7 @@ class Foreman:
 
     def propose_issue(self, repo, title, body):
         """Planner: open an issue labelled factory:proposed. A person adds factory:ready."""
-        if repo not in self.config.repos:
-            raise ToolError(f"{repo} is not in FACTORY_REPOS")
+        repo = self._allowlisted(repo)
         criteria, missing = workitem.parse_acceptance(body)
         if missing or not criteria:
             raise ToolError("The body needs an '## Acceptance' list of "

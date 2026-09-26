@@ -33,6 +33,8 @@ class FakeGitHub:
         self.branches, self.files = {}, {}  # (repo, branch) -> sha; (repo, sha) -> changed files
         self.repos = {}  # repo -> fields that differ from a pushable repo; None: GitHub has no such repo
         self.contents = {}  # (repo, path) -> file text on the default branch
+        self.labels = {}  # repo -> names of the labels the Foreman created
+        self.labelled = []  # (repo, number, labels) of every label the Foreman added to an issue
 
     def add_issue(self, repo, number, labels=("factory:ready",), body=ISSUE_BODY, state="open", author=None):
         self.issues[(repo, number)] = {"number": number, "title": f"Goal {number}", "body": body,
@@ -101,6 +103,14 @@ class FakeGitHub:
 
     def close_issue(self, repo, number):
         self.issues[(repo, number)]["state"] = "closed"
+
+    def create_label(self, repo, name, color, description):
+        self.labels.setdefault(repo, set()).add(name)
+
+    def add_labels(self, repo, number, labels):
+        self.labelled.append((repo, number, list(labels)))
+        self.issues[(repo, number)]["labels"] += [{"name": name} for name in labels]
+        return self.issues[(repo, number)]["labels"]
 
     def create_issue(self, repo, title, body, labels):
         number = 200 + len(self.issues)
