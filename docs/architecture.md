@@ -90,7 +90,8 @@ A tick comes from the background loop or from `factory_tick`.
    - `merged`: close the issue, because GitHub skips `Closes #n` when the gate's workflow token
      merges. Then `closed`.
 3. **Entering `human_waiting`, `blocked` or `exhausted`** comments on the issue and mentions the
-   owner. `factory watch` tells the owner in Telegram.
+   owner. `factory watch` also tells the owner in Telegram of `human_waiting` and `blocked`,
+   the states the owner can resolve; `exhausted` is final, so the issue comment is all it gets.
 
 ## State machine
 

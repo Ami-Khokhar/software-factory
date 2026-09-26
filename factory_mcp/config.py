@@ -28,6 +28,13 @@ class Config:
     trusted_authors: frozenset = frozenset()  # issue authors a worker may act for; empty: repo owner
     repos_file: str = ""  # repos.json (ADR-0014); empty: FACTORY_REPOS is the whole allowlist
 
+    def listed(self, repo):
+        """The allowlist's spelling of `repo`, or None. GitHub repo names ignore case."""
+        return next((name for name in self.repos if name.lower() == repo.lower()), None)
+
+    def local_only(self, repo):
+        return repo.lower() in {name.lower() for name in self.local_only_repos}
+
     def checkout(self, repo):
         """The worker checkout for `repo`, sent to the relay as the task cwd, or None."""
         return str(Path(self.checkout_root, *repo.split("/"))) if self.checkout_root else None
@@ -48,6 +55,12 @@ class Config:
         repos_file = env.get("FACTORY_REPOS_FILE", "")
         repos = frozenset(r.strip() for r in env.get("FACTORY_REPOS", "").split(",") if r.strip()) \
             | frozenset(entry["name"] for entry in manifest.load(repos_file))
+        spellings = {}
+        for name in sorted(repos):
+            if name.lower() in spellings:
+                raise ValueError(f"{spellings[name.lower()]} and {name} are one repo: list it once, "
+                                 "in FACTORY_REPOS or repos.json")
+            spellings[name.lower()] = name
         defaults = cls(mcp_token=token, repos=repos)
         return cls(
             mcp_token=token,

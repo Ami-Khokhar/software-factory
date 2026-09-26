@@ -1,5 +1,6 @@
 """The Foreman's actions and guards, driven tick by tick against fakes. Every WorkItem and WorkOrder
 it writes must validate against its schema."""
+import dataclasses
 import json
 import unittest
 from pathlib import Path
@@ -147,8 +148,10 @@ class ActionsTest(unittest.TestCase):
         self.assertEqual((pr["number"], len(self.github.pulls)), (55, 1))
 
     def test_a_repo_off_the_allowlist_is_left_alone(self):
-        """Taking a repo off FACTORY_REPOS stops the factory acting on it; putting it back resumes."""
-        allowlisted, off = self.foreman.config, Config(mcp_token="t", repos=frozenset())
+        """Taking a repo off FACTORY_REPOS stops the factory acting on it; putting it back resumes,
+        in any case: GitHub repo names ignore case."""
+        allowlisted = dataclasses.replace(self.foreman.config, repos=frozenset({REPO.upper()}))
+        off = Config(mcp_token="t", repos=frozenset())
         self.foreman.config = off
         self.foreman.tick()
         self.assertEqual((self.foreman.store.get(ID)["state"], self.relay.tasks), ("ready", {}))

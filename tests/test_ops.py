@@ -118,6 +118,20 @@ class ApproveIssueTest(unittest.TestCase):
         self.assertEqual(self.github.labelled, [(REPO, 7, ["factory:ready"])])
         self.assertEqual([h["action"] for h in self.foreman.store.history(ID)], ["approved", "intake"])
 
+    def test_any_case_of_the_repo_name_is_the_one_workitem(self):
+        self.github.add_issue(REPO, 7, labels=())
+        self.assertEqual(self.foreman.approve_issue(REPO.upper(), 7, "amteshwar")["id"], ID)
+        self.assertEqual(self.foreman.intake("o/R", 7)["id"], ID)
+        self.assertEqual(len(self.foreman.store.all()), 1)
+
+    def test_a_finished_workitem_is_not_approved_again(self):
+        self.github.add_issue(REPO, 7, labels=())
+        wi = self.foreman.approve_issue(REPO, 7, "amteshwar")
+        self.foreman.store.put(dict(wi, state="exhausted"))
+        with self.assertRaisesRegex(ToolError, "o/r#7 is exhausted; open a new issue"):
+            self.foreman.approve_issue(REPO, 7, "amteshwar")
+        self.assertEqual(len(self.github.labelled), 1)
+
     def test_what_intake_refuses_is_refused_before_the_label(self):
         """A factory:ready label alone makes the next rebuild adopt the issue."""
         self.github.add_issue(REPO, 7, labels=(), author="stranger")

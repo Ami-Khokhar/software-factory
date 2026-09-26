@@ -198,9 +198,10 @@ the tools a person uses, not `factory_tick` or `factory_intake`. A no-agent cron
 `factory watch`, reports each new escalation once and runs no model. factory-mcp still decides
 every transition and side effect (ADR-0010).
 
-**Consequence.** The owner's yes is Hermes's approval, not the model's word. Day Desk's shell runs
-as the owner, so its deny rules are a guard, not a boundary; the worker sandbox and the gate stay
-the boundaries (ADR-0007, ADR-0004). OpenBot keeps running until the trial in docs/RUNBOOK.md
+**Consequence.** The owner's yes is Hermes's approval, not the model's word. Day Desk has no
+shell, file or subagent tools: they would run as the owner with no approval, and could read the
+factory token and call any tool directly. The worker sandbox and the gate stay the boundaries
+(ADR-0007, ADR-0004). OpenBot keeps running until the trial in docs/RUNBOOK.md
 passes, and #37 then retires it.
 
 ---
