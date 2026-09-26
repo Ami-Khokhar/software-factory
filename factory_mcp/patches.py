@@ -51,15 +51,21 @@ def apply(url, token, branch, base_sha, patch, message, force, protected=()):
     with tempfile.TemporaryDirectory() as tmp:
         _git(["clone", "-q", "--no-checkout", url, "repo"], tmp, env)
         work = os.path.join(tmp, "repo")
-        _git(["checkout", "-q", "-B", branch, base_sha], work, env)
-        with open(os.path.join(tmp, "result.patch"), "w") as handle:
-            handle.write(patch["diff"])
+        # One commit id for the checkout and for the protected-path diff below: a name such as HEAD
+        # would mean the new commit by then, and the diff would be empty
+        base = _git(["rev-parse", "--verify", "--end-of-options", f"{base_sha}^{{commit}}"], work, env)
+        _git(["checkout", "-q", "-B", branch, base], work, env)
+        try:
+            with open(os.path.join(tmp, "result.patch"), "w", encoding="utf-8") as handle:
+                handle.write(patch["diff"])
+        except UnicodeEncodeError as exc:
+            raise PatchError(f"the patch is not UTF-8 text: {exc.reason}") from None
         if patch["format"] == "mbox":
             _git(["am", "-q", "../result.patch"], work, env)
         else:
             _git(["apply", "--index", "../result.patch"], work, env)
             _git(["commit", "-q", "-m", message], work, env)
-        touched = _git(["diff", "--name-only", "--no-renames", "-z", base_sha, "HEAD"], work, env)
+        touched = _git(["diff", "--name-only", "--no-renames", "-z", base, "HEAD"], work, env)
         refused = [name for name in touched.split("\0") if name and is_protected(name, protected)]
         if refused:
             raise PatchError(f"changes protected path {', '.join(refused)}")

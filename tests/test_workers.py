@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 
+from factory_mcp import patches
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.routing import route
@@ -153,6 +154,25 @@ class WorkerTest(unittest.TestCase):
         wi = foreman.tick(ID)["workItem"]
         self.assertIn("changes protected path .github/workflows/x.yml", wi["attempts"][0])
         self.assertIsNone(self.github.branch_head(REPO, "factory/7"))
+
+    def test_a_protected_path_is_refused_whatever_name_the_base_has(self):
+        """patches.apply resolves the base once: named HEAD, it would be the new commit by the check."""
+        git("checkout", "-q", "-B", "factory/7", "origin/main", cwd=self.work)
+        os.makedirs(os.path.join(self.work, ".github", "workflows"))
+        self.write(".github/workflows/x.yml", "on: push\n")
+        git("add", "-A", cwd=self.work)
+        patch = {"format": "unified", "diff": git("diff", "--cached", "origin/main", cwd=self.work) + "\n"}
+        for base in ("HEAD", "@"):
+            with self.subTest(base), self.assertRaisesRegex(patches.PatchError, "protected path .github/"):
+                patches.apply(self.bare, "", "factory/7", base, patch, "Add a workflow", force=True,
+                              protected=[".github/"])
+        self.assertEqual(git("branch", "--list", "factory/7", cwd=self.bare), "")  # never pushed
+
+    def test_a_patch_that_is_not_text_is_a_patch_error(self):
+        """poll turns a PatchError into a failed attempt; anything else leaves the WorkItem stuck."""
+        with self.assertRaisesRegex(patches.PatchError, "not UTF-8 text"):
+            patches.apply(self.bare, "", "factory/7", "main", {"format": "unified", "diff": "diff \ud800\n"},
+                          "Nothing", force=True)
 
     def test_local_only_repo(self):
         # FACTORY_LOCAL_ONLY_REPOS may spell the repo in another case: GitHub repo names ignore case

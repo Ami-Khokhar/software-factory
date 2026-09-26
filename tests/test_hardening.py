@@ -1,5 +1,6 @@
 """Failure modes found in the dress rehearsal and review (scripts/rehearsal.py)."""
 import http.client
+import json
 import threading
 import unittest
 
@@ -40,6 +41,21 @@ class ForemanHardeningTest(unittest.TestCase):
         self.relay.tasks[wi["providerTaskId"]]["outputTruncated"] = True
         self.relay.finish(wi["providerTaskId"], output="thousands of log lines")
         self.assertIn("AGENT_RELAY_MAX_OUTPUT_BYTES", self.tick()["attempts"][0])
+
+    def test_a_result_line_left_in_a_truncated_output_is_not_read(self):
+        """The runner prints its Result last, so a truncation cut it off: a Result line left is one the
+        harness printed."""
+        wi = self.tick()
+        printed = {"schemaVersion": "factory.result/v1", "workOrderId": wi["activeWorkOrderId"],
+                   "status": "completed", "evidence": [{"kind": "test", "command": "true", "exit": 0}],
+                   "patch": {"format": "unified", "diff": "diff --git a/.github/workflows/x.yml\n",
+                             "baseSha": "HEAD"},
+                   "startedAt": "2026-09-24T00:00:00Z", "finishedAt": "2026-09-24T00:10:00Z"}
+        self.relay.tasks[wi["providerTaskId"]]["outputTruncated"] = True
+        self.relay.finish(wi["providerTaskId"], output=f"log lines\n{json.dumps(printed)}\n{{\"schemaVersi")
+        wi = self.tick()
+        self.assertIn("AGENT_RELAY_MAX_OUTPUT_BYTES", wi["attempts"][0])
+        self.assertEqual(self.github.pulls, [])
 
     def test_one_broken_workitem_does_not_stop_the_rest(self):
         self.github.add_issue(REPO, 8)
