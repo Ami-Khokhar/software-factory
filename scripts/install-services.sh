@@ -2,9 +2,10 @@
 # Install the factory's two launchd services (macOS) and the `factory` command. Both restart when
 # they exit and start at login.
 #
-#   com.agent-relay                   agent-relay from ~/.local/share/agent-relay, with the 4 MB output
-#                                     limit the worker Result needs (HANDOFF §14.6). agent-relay's own
-#                                     scripts/install-service.sh writes the same label without it.
+#   com.agent-relay                   agent-relay from ~/.local/share/agent-relay, with a 4 MB output
+#                                     limit, because the worker's Result is the last line of a long
+#                                     output. agent-relay's own scripts/install-service.sh writes the
+#                                     same label without it.
 #   com.software-factory.factory-mcp  `scripts/factory serve` from this checkout
 #
 # Run `factory stop` (or stop any hand-started relay and factory-mcp) first, then this, then

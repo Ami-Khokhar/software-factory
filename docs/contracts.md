@@ -1,6 +1,6 @@
-# Factory contracts (Phase 0)
+# Factory contracts
 
-The frozen interfaces of the software factory. Cells exchange **documents, never
+The interfaces of the software factory. Cells exchange **documents, never
 vendor SDKs** — that is what keeps the line harness- and model-agnostic. These
 four documents are the only things that cross a boundary.
 
@@ -118,21 +118,3 @@ must hold before the controller is allowed to write:
   removed field does not linger in them.
 - A consumer must reject a document with an unknown `schemaVersion` rather than
   guess.
-
-## Phase 0 registry single-source-of-truth
-
-The agent registry is machine state, and it now has one home:
-**`~/.config/agent-relay/agents.json`** (the relay's resolution order already
-prefers it). Before this, the repo checkout and the installed clone each had
-their own `config/agents.json`, and the relay silently fell back to whichever
-ran — different worker pools depending on cwd.
-
-- Canonical file: `~/.config/agent-relay/agents.json` (7 agents).
-- Both checkout fallbacks are aligned to it; originals kept as
-  `config/agents.json.bak-phase0`.
-- Proof: both checkouts report the same `/v1/agents` and log the same registry
-  path.
-
-Follow-up (not Phase 0): the silent fallback in `default_config_path()` is the
-drift generator — it should warn or fail loud when the user registry is absent.
-That is a normal agent-relay change, and a good first dogfood PR.

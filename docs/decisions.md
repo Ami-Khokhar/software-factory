@@ -1,7 +1,7 @@
-# Factory decisions (Phase 0)
+# Factory decisions
 
-Decisions locked before any controller code is written. Each is a short ADR:
-context, decision, consequence. Changing one is a deliberate act, not a default.
+Each decision that constrains later work is a short ADR: context, decision,
+consequence. A changed decision gets a new ADR that supersedes the old one.
 
 ---
 
