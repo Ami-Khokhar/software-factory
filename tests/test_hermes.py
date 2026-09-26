@@ -1,6 +1,5 @@
 """The Day Desk profile (tenant/hermes, ADR-0013): it sees the factory tools it needs, every write
-waits for the owner's yes, and its shell cannot do what those tools guard."""
-import fnmatch
+waits for the owner's yes, and it has no shell or file tools to go around them."""
 import re
 import unittest
 from pathlib import Path
@@ -33,21 +32,11 @@ class ProfileTest(unittest.TestCase):
         used = set(re.findall(r"\$\{([A-Z_]+)\}", (PROFILE / "config.yaml").read_text()))
         self.assertLessEqual(used, {env["name"] for env in manifest["env_requires"]})
 
-    def test_the_shell_cannot_do_what_the_tools_guard(self):
-        def denied(command):  # Hermes matches each rule as a case-insensitive glob on the command
-            return any(fnmatch.fnmatchcase(command.lower(), rule.lower()) for rule in CONFIG["approvals"]["deny"])
-
-        for command in ("factory retry o/r#7 'try the old path'", "factory call factory_tick",
-                        "factory new o/r Title 'claim | check'", "factory add-repo o/r",
-                        "gh pr merge 12 --squash", "gh label create factory:ready -R o/r",
-                        "gh api -X POST repos/o/r/issues/7/labels", "cat ~/.config/factory-mcp/secrets",
-                        "echo $FACTORY_MCP_TOKEN"):
-            with self.subTest(command):
-                self.assertTrue(denied(command))
-        for command in ("factory status", "factory logs", "gh pr view 12", "git log -3"):
-            with self.subTest(command):
-                self.assertFalse(denied(command))
-
+    def test_day_desk_has_no_way_around_the_factory_tools(self):
+        """Hermes has no approval step for these toolsets, so they are off. The trial in
+        docs/RUNBOOK.md checks the running gateway honours this."""
+        self.assertLessEqual({"terminal", "code_execution", "file", "browser", "computer_use", "delegation"},
+                             set(CONFIG["agent"]["disabled_toolsets"]))
 
 if __name__ == "__main__":
     unittest.main()
