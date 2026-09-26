@@ -155,7 +155,8 @@ class WorkerTest(unittest.TestCase):
         self.assertIsNone(self.github.branch_head(REPO, "factory/7"))
 
     def test_local_only_repo(self):
-        wi = self.foreman(workers=WORKERS, local_only_repos=frozenset({REPO})).tick(ID)["workItem"]
+        # FACTORY_LOCAL_ONLY_REPOS may spell the repo in another case: GitHub repo names ignore case
+        wi = self.foreman(workers=WORKERS, local_only_repos=frozenset({REPO.upper()})).tick(ID)["workItem"]
         self.assertEqual(self.relay.tasks[wi["providerTaskId"]]["agentId"], "pi-glm")
         wi = self.foreman(local_only_repos=frozenset({REPO})).tick(ID)["workItem"]
         self.assertEqual(wi["state"], "human_waiting")

@@ -24,7 +24,7 @@ def build(store, foreman):
         if not repos.NAME.match(repo):
             raise ToolError(f"{repo!r} is not a repo name in the form owner/repo")
         checks = repos.check(foreman.github, repo)
-        return {"repo": repo, "enabled": repo in foreman.config.repos,
+        return {"repo": repo, "enabled": foreman.config.listed(repo) is not None,
                 "ready": all(c["ok"] for c in checks), "checks": checks}
 
     tools = [
