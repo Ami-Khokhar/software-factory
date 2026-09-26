@@ -27,19 +27,12 @@ class SchemaFilesTest(unittest.TestCase):
         })
 
     def test_each_schema_is_valid(self):
-        try:
-            from jsonschema import Draft202012Validator
-        except ImportError:
-            self.skipTest("jsonschema not installed")
+        from jsonschema import Draft202012Validator  # requirements.txt; a missing one must fail
         for path in SCHEMAS:
             with self.subTest(schema=path.name):
                 Draft202012Validator.check_schema(json.loads(path.read_text()))
 
     def test_contract_edit_fixtures(self):
-        try:
-            import jsonschema  # noqa: F401
-        except ImportError:
-            self.skipTest("jsonschema not installed")
         self.assertEqual(len(FIXTURES), 6)
         for path in FIXTURES:
             fixture = json.loads(path.read_text())

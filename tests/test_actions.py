@@ -83,6 +83,16 @@ class ActionsTest(unittest.TestCase):
         self.assertEqual(len(self.foreman.store.workorders(ID)), 1)
         self.assertEqual(len(self.relay.tasks), 1)
 
+    def test_renaming_a_protected_path_fails_the_result(self):
+        wi, task = self.dispatched()
+        self.github.push(REPO, "factory/7", "c1")
+        self.github.files[(REPO, "c1")] = [{"filename": "docs/agents.md", "previous_filename": "AGENTS.md",
+                                            "status": "renamed", "additions": 0, "deletions": 0}]
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"], "c1"))
+        wi = self.tick()
+        self.assertEqual(wi["state"], "ready")
+        self.assertIn("changes protected path AGENTS.md", wi["attempts"][0])
+
     def test_bad_results_fail_attempts_then_block(self):
         wi, task = self.dispatched()
         self.github.push(REPO, "factory/7", "c1", files=((".github/workflows/x.yml", 1, 0),))

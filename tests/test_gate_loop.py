@@ -69,9 +69,17 @@ class GateLoopTest(unittest.TestCase):
         self.assertTrue(all(b["resolved"] for b in wi["blockers"]))
 
         self.github.pulls[0].update(state="closed", merged_at="2026-09-24T03:00:00Z")
-        self.assertEqual(self.tick()["state"], "merged")
+        wi = self.tick()
+        self.assertEqual((wi["state"], wi.get("terminalReason")), ("merged", None))
         self.github.issues[(REPO, 7)]["state"] = "closed"
         self.assertEqual(self.tick()["state"], "closed")
+
+    def test_merge_without_a_merge_verdict_is_flagged(self):
+        self.gate("CHANGES", 1, "c1", MISSING_TEST)
+        self.github.pulls[0].update(state="closed", merged_at="2026-09-24T03:00:00Z")  # by a person
+        wi = self.tick()
+        self.assertEqual(wi["state"], "merged")
+        self.assertEqual(wi["terminalReason"], "merged without a pr-gatekeeper MERGE verdict on c1")
 
     def test_same_problem_twice_goes_to_a_human(self):
         self.gate("CHANGES", 1, "c1", MISSING_TEST)

@@ -15,6 +15,8 @@ BUSY = frozenset({"dispatching", "implementing", "human_waiting", "blocked"})
 OUTCOME_STATE = {"MERGE": "merge_pending", "CHANGES": "changes_requested", "HUMAN": "human_waiting"}
 # Gate rounds one problem may be reported in before a human takes it (D4, ADR-0005).
 ROUNDS_PER_PROBLEM = 2
+# terminalReason of a PR merged without a MERGE verdict on its head (contracts, obligation 5).
+UNGATED = "merged without a pr-gatekeeper MERGE verdict on"
 
 
 def workitem_id(repo, number):
@@ -102,6 +104,12 @@ def current_verdict(wi, facts):
     return latest
 
 
+def gated(facts):
+    """True if pr-gatekeeper decided MERGE on the head that GitHub merged."""
+    head = facts["pr"]["headSha"]
+    return any(v["outcome"] == "MERGE" and v["headSha"] == head for v in facts["verdicts"])
+
+
 def reconcile(wi, facts):
     """The WorkItem moved to what GitHub says is true. Returns a new dict; never mutates."""
     wi = dict(wi)
@@ -112,6 +120,8 @@ def reconcile(wi, facts):
         wi.update(prNumber=pr["number"], headSha=pr["headSha"], baseSha=pr["baseSha"])
         if pr["merged"]:
             wi["state"] = "closed" if issue["state"] == "closed" else "merged"
+            if not gated(facts):  # a person merged it: a fact, but not the gate's decision (D3)
+                wi["terminalReason"] = f"{UNGATED} {pr['headSha']}"
             return wi
     if issue["state"] == "closed":
         return dict(wi, state="cancelled", terminalReason="issue closed without a merged PR")
