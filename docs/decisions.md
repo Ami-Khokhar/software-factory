@@ -222,3 +222,22 @@ them; a repo's protected paths already live in its own `.github/pr-gatekeeper.js
 **Consequence.** Enabling a repo needs no restart and leaves a record a person can review. Repos
 already in `FACTORY_REPOS` keep working. Taking a repo away is an edit and a restart, and its
 WorkItems wait untouched until it comes back.
+
+---
+
+## ADR-0015 — One written standard for the factory and the repos it builds
+
+**Context.** This repo's AGENTS.md described only the gate's pull request protocol. People and
+coding agents working here, and the factory's workers in other repos, had no written rules for
+planning, building, testing or documenting, so quality depended on each one's habits. The audit in
+#25 found fields that nothing read, tests that could not fail, and finished plans kept as docs.
+
+**Decision.** The standard is written once, in `templates/AGENTS.md`, between `factory-standard`
+markers. Each factory repo's AGENTS.md carries the block unchanged, around the repo's own layout,
+commands and rules. This repo's AGENTS.md carries it too, and a test keeps the two identical. The
+factory applies it: it enables only repos whose AGENTS.md carries the block, and it tells its
+workers to follow it (#34).
+
+**Consequence.** One place improves how code is written, for people, coding agents and workers
+alike. Changing the standard means changing the template, then copying the block into each repo;
+AGENTS.md is a protected path, so a person merges each copy.
