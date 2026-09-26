@@ -1,0 +1,34 @@
+# Day Desk's settings (ADR-0013). `hermes profile install` copies this file into the profile, and
+# `hermes -p day-desk model` and `hermes -p day-desk gateway setup` then add the model and the
+# Telegram settings. Secrets live in the profile's .env, never here.
+
+mcp_servers:
+  factory:
+    url: "https://factory.lan.example:43125/mcp"
+    headers:
+      Authorization: "Bearer ${FACTORY_MCP_TOKEN}"
+    ssl_verify: "${userHome}/Library/Application Support/mkcert/rootCA.pem"
+    trust: untrusted  # every tool without readOnlyHint waits for the owner's yes in Telegram
+    tools:
+      include:  # factory_tick and factory_intake stay out: factory-mcp ticks on its own
+        - factory_status
+        - factory_repo_check
+        - factory_add_repo
+        - factory_approve_issue
+        - factory_propose_issue
+        - factory_resolve_human
+
+agent:
+  # Day Desk works only through the factory tools. A shell, file tools or a subagent would run as
+  # the owner: they could read the factory's token from the profile's .env and call any tool with
+  # no approval, or open issues and push. factory-watch runs as a no-agent script and needs none.
+  disabled_toolsets: [terminal, code_execution, file, browser, computer_use, delegation]
+
+approvals:
+  timeout: 900  # no answer in 15 minutes is a no
+
+curator:
+  enabled: false  # the skill is reviewed code in the factory repo; `hermes profile update` restores it
+
+cron:
+  mirror_delivery: true  # a reply to a factory-watch alert reaches Day Desk with the alert as context

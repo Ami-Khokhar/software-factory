@@ -1,4 +1,4 @@
-"""The factory tools OpenBot's Bots may call. Each one declares its effect."""
+"""The factory tools that Day Desk (Hermes) and the factory CLI call. Each one declares its effect."""
 from . import metrics, repos
 from .mcp import Tool, ToolError
 

@@ -140,6 +140,8 @@ and does not depend on delivery.
 
 ## ADR-0010 — OpenBot is the control plane; decisions stay deterministic
 
+**Superseded by ADR-0013** for the front door. Decisions stay deterministic.
+
 **Context.** The factory needs durable goals, governance, an audit trail, human-in-the-loop
 channels and schedules. OpenBot has all of these (Jobs, CEL policy, audit, Telegram, routines).
 It is also an LLM agent platform, and a model must not decide merges or state transitions.
@@ -180,6 +182,27 @@ branch `factory/<issue>`, PR, verdict marker). There is no merge tool.
 
 **Consequence.** OpenBot stays unmodified except for the tenant package. Losing the store loses
 history, not correctness.
+
+---
+
+## ADR-0013 — Hermes is the front door
+
+**Context.** OpenBot gave the factory two Bots, a CEL policy and a 15-minute routine that ran a
+model to tick WorkItems, which factory-mcp's own background tick already does. A person's yes was
+a `confirm` flag the model set itself.
+
+**Decision.** One Hermes agent, Day Desk, is the front door, in Telegram. It is the profile
+distribution in `tenant/hermes/`. factory-mcp is its MCP server with `trust: untrusted`, so Hermes
+asks the owner before each tool call not marked read-only, and no answer is a no. Day Desk sees
+the tools a person uses, not `factory_tick` or `factory_intake`. A no-agent cron job,
+`factory watch`, reports each new escalation once and runs no model. factory-mcp still decides
+every transition and side effect (ADR-0010).
+
+**Consequence.** The owner's yes is Hermes's approval, not the model's word. Day Desk has no
+shell, file or subagent tools: they would run as the owner with no approval, and could read the
+factory token and call any tool directly. The worker sandbox and the gate stay the boundaries
+(ADR-0007, ADR-0004). OpenBot keeps running until the trial in docs/RUNBOOK.md
+passes, and #37 then retires it.
 
 ---
 

@@ -1,8 +1,11 @@
 """scripts/factory: `update` deploys a branch only when its tests pass, and follows it to main once
-merged; `add-repo` asks factory-mcp, as Day Desk does."""
+merged; `add-repo` asks factory-mcp, as Day Desk does; `watch` reports each escalation once."""
+import contextlib
 import importlib.machinery
 import importlib.util
+import io
 import os
+import socket
 import subprocess
 import tempfile
 import unittest
@@ -64,7 +67,7 @@ class UpdateTest(unittest.TestCase):
         old = self.head()
         self.commit("tests/test_ok.py", PASS.replace("True)", "False)"))
         git(self.dev, "push", "-q", "origin", "HEAD:main")
-        with self.assertRaisesRegex(SystemExit, "tests fail"):
+        with self.assertRaisesRegex(SystemExit, r"tests fail[\s\S]*False is not true"):  # and why
             cli.cmd_update([])
         self.assertEqual((self.head(), self.restarts), (old, []))
 
@@ -117,6 +120,45 @@ class AddRepoTest(unittest.TestCase):
         calls, stopped = self.add_repo(ready=False)
         self.assertEqual(calls, [("factory_repo_check", 60)])
         self.assertIn("o/r is not ready", stopped)
+
+
+class WatchTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        patcher = mock.patch.object(cli, "STATE", Path(tmp.name))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def watch(self, *workitems):
+        """What one cron run prints, given the WorkItems factory_status returns."""
+        status = {"workItems": [{"id": i, "state": s, "blockedOn": b} for i, s, b in workitems]}
+        printed = io.StringIO()
+        with mock.patch.object(cli, "call", lambda tool, arguments=None: status), \
+                contextlib.redirect_stdout(printed):
+            cli.cmd_watch([])
+        return printed.getvalue()
+
+    def test_each_escalation_is_reported_once(self):
+        blocked = ("o/r#7", "blocked", "verify exited 1")
+        first = self.watch(blocked, ("o/r#8", "implementing", None))
+        self.assertIn("o/r#7 is blocked: verify exited 1", first)
+        self.assertNotIn("o/r#8", first)
+        self.assertEqual(self.watch(blocked), "")  # nothing new, so Hermes sends nothing
+        second = self.watch(blocked, ("o/r#9", "human_waiting", "pr-gatekeeper decided HUMAN"))
+        self.assertEqual(second.splitlines()[0], "o/r#9 is human_waiting: pr-gatekeeper decided HUMAN")
+        self.assertNotIn("o/r#7", second)
+        self.watch()  # the owner answered both
+        self.assertIn("o/r#7 is blocked", self.watch(blocked))  # blocked again is a new escalation
+
+    def test_it_fails_loudly_when_factory_mcp_is_down(self):
+        with socket.socket() as probe:  # a port with nothing listening on it
+            probe.bind(("127.0.0.1", 0))
+            closed = probe.getsockname()[1]
+        with mock.patch.object(cli, "PORT", closed), \
+                mock.patch.object(cli, "read_env", lambda path: {"FACTORY_MCP_TOKEN": "t"}), \
+                self.assertRaisesRegex(SystemExit, "factory-mcp is not running"):
+            cli.cmd_watch([])
 
 if __name__ == "__main__":
     unittest.main()

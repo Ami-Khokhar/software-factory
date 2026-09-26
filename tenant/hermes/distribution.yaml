@@ -1,0 +1,14 @@
+name: day-desk
+version: 1.0.0
+description: "The software factory's front door: one Telegram chat for repos, issues and escalations"
+author: "Ami-Khokhar"
+env_requires:
+  - name: FACTORY_MCP_TOKEN
+    description: "factory-mcp's bearer token, from ~/.config/factory-mcp/secrets"
+    required: true
+  - name: TELEGRAM_BOT_TOKEN
+    description: "The Telegram bot Day Desk speaks as"
+    required: true
+  - name: TELEGRAM_ALLOWED_USERS
+    description: "The owner's Telegram user id; nobody else may talk to Day Desk"
+    required: true
