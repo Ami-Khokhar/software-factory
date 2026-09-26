@@ -91,8 +91,9 @@ class FakeGitHub:
         for pr in self.pulls:  # an open PR follows its branch, as on GitHub
             if pr["repo"] == repo and pr["head"]["ref"] == branch and pr["state"] == "open":
                 pr["head"]["sha"] = sha
-        self.files[(repo, sha)] = [{"filename": f, "status": "modified", "additions": a, "deletions": d}
-                                   for f, a, d in files]
+        self.files[(repo, sha)] = [f if isinstance(f, dict) else  # a dict is a GitHub file entry as is
+                                   {"filename": f[0], "status": "modified", "additions": f[1], "deletions": f[2]}
+                                   for f in files]
 
     def changed_files(self, repo, base, head):
         return self.files[(repo, head)]
@@ -148,10 +149,36 @@ class FakeRelay:
         self.tasks[task_id].update(status=status, output=output, error=error)
 
 
-def result_line(order_id, sha, branch="factory/7", status="completed", exit_code=0):
+class FakeGit:
+    """factory_mcp.patches.apply at the git boundary. Pushing a patch puts `sha`, changing `files`,
+    on the branch in FakeGitHub, unless `lands` is false: then GitHub does not show the push."""
+
+    def __init__(self, github):
+        self.github, self.pushes = github, []
+        self.sha, self.files, self.lands = "c1", (("src/app.py", 10, 2),), True
+
+    def apply(self, url, token, branch, base_sha, patch, message, force, protected=()):
+        self.pushes.append({"branch": branch, "base": base_sha, "force": force})
+        if self.lands:
+            self.github.push(url.removeprefix("https://github.com/").removesuffix(".git"), branch, self.sha,
+                             self.files)
+        return self.sha
+
+    def install(self, test):
+        """Stand in for patches.apply until `test` ends."""
+        from unittest import mock
+        from factory_mcp import patches
+        patcher = mock.patch.object(patches, "apply", self.apply)
+        patcher.start()
+        test.addCleanup(patcher.stop)
+        return self
+
+
+def result_line(order_id, diff="diff --git a/src/app.py b/src/app.py\n", fmt="unified"):
+    """A worker's task output: what it printed, then its Result, which hands back a patch."""
     import json
     return "working...\n" + json.dumps({
-        "schemaVersion": "factory.result/v1", "workOrderId": order_id, "status": status,
-        "artifact": {"branch": branch, "commitSha": sha},
-        "evidence": [{"kind": "test", "command": "python3 -m unittest", "exit": exit_code, "tail": "OK"}],
+        "schemaVersion": "factory.result/v1", "workOrderId": order_id, "status": "completed",
+        "patch": {"format": fmt, "diff": diff},
+        "evidence": [{"kind": "test", "command": "python3 -m unittest", "exit": 0, "tail": "OK"}],
         "startedAt": "2026-09-24T00:00:00Z", "finishedAt": "2026-09-24T00:10:00Z"})

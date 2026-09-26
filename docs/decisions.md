@@ -36,6 +36,9 @@ epic is never one oversized PR.
 
 ## ADR-0003 — The controller opens the PR
 
+**Superseded by ADR-0016** for what the Result carries: a patch, not a branch. The controller
+still opens the PR.
+
 **Context.** A worker may push a branch or open a PR and then time out before
 returning its `Result`, so "worker failed" and "work exists" can both be true.
 
@@ -94,6 +97,9 @@ not ownership.
 ---
 
 ## ADR-0007 — Workers are least-privilege; untrusted input is data
+
+**Superseded by ADR-0016** for push access: a worker holds no GitHub credential, and factory-mcp
+pushes. Untrusted input is still data.
 
 **Context.** A worker needs enough access to push a branch, but issue text, PR
 comments, code, and model findings are all untrusted input into an agent with
@@ -241,3 +247,22 @@ workers to follow it (#34).
 **Consequence.** One place improves how code is written, for people, coding agents and workers
 alike. Changing the standard means changing the template, then copying the block into each repo;
 AGENTS.md is a protected path, so a person merges each copy.
+
+---
+
+## ADR-0016 — The patch is the only handoff
+
+**Context.** A Result could hand back a branch the worker pushed (`artifact`) or a patch that
+factory-mcp pushes. Every worker runs behind `worker/runner.py`, which holds no GitHub credential
+and returns a patch, and the rehearsal returns a patch too (#39), so nothing produced `artifact`.
+A worker that pushes its own branch also pushes before any check: a pushed workflow file runs with
+the repo's secrets before factory-mcp can refuse it (#52).
+
+**Decision.** A completed Result carries a patch, and only factory-mcp pushes. It refuses a patch
+that touches a protected path before the push, pushes the WorkItem's branch, then checks what
+GitHub holds: the pushed commit, its protected paths and its size. The Result schema stays `v1`,
+because its only producer ships in this repo.
+
+**Consequence.** A worker needs no GitHub access, and one code path pushes every change. A hosted
+worker that can only push branches cannot be used as is; supporting one takes a new ADR and a
+check that runs before its push.

@@ -10,7 +10,7 @@ from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
 from factory_mcp.metrics import autonomy, escalation
 from factory_mcp.store import Store
-from tests.fakes import FakeGitHub, FakeRelay, ISSUE_BODY, result_line
+from tests.fakes import FakeGit, FakeGitHub, FakeRelay, ISSUE_BODY, result_line
 
 REPO, ID = "o/r", "o/r#7"
 
@@ -18,6 +18,7 @@ REPO, ID = "o/r", "o/r#7"
 class ResolveHumanTest(unittest.TestCase):
     def setUp(self):
         self.github, self.relay = FakeGitHub(), FakeRelay()
+        FakeGit(self.github).install(self)
         self.github.add_issue(REPO, 7)
         self.foreman = Foreman(Store(":memory:"), self.github,
                                Config(mcp_token="t", repos=frozenset({REPO}), owner="amteshwar"),
@@ -54,8 +55,7 @@ class ResolveHumanTest(unittest.TestCase):
     def gate_says_human(self):
         """PR 100 at c1, with a HUMAN verdict from the gate."""
         wi = self.tick()
-        self.github.push(REPO, "factory/7", "c1")
-        self.relay.finish(wi["providerTaskId"], output=result_line(wi["activeWorkOrderId"], "c1"))
+        self.relay.finish(wi["providerTaskId"], output=result_line(wi["activeWorkOrderId"]))
         self.tick()
         self.github.add_run(REPO, "c1", conclusion="neutral")
         self.github.add_verdict(REPO, 100, "HUMAN", 1, "c1")

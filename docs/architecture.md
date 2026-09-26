@@ -146,9 +146,10 @@ owner's decision (ADR-0006).
 | Only allowlisted repos | `Foreman.intake`, `Foreman.tick` | `test_reconcile`: `test_intake_is_idempotent_and_allowlisted`; `test_actions`: `test_a_repo_off_the_allowlist_is_left_alone` |
 | Only trusted authors reach a worker | `Foreman._admit` | `test_safety`: `test_only_trusted_authors_reach_a_worker`, `test_logins_ignore_case` |
 | A Result meets its contract | `documents.check_result` | `test_schemas`: `test_check_result_accepts_what_the_result_schema_accepts` |
-| Changed paths come from GitHub, protected paths refused | `Foreman.check_artifact`, `patches.apply` | `test_actions`: `test_renaming_a_protected_path_fails_the_result`; `test_workers`: `test_a_patch_to_a_protected_path_is_never_pushed` |
-| One PR's size: 600 lines, 20 files | `Foreman.check_artifact` | `test_actions`: `test_a_change_must_fit_one_pr` |
-| The artifact is on the WorkItem's branch | `Foreman.check_artifact` | `test_actions`: `test_an_artifact_on_another_branch_fails_the_result` |
+| Only factory-mcp pushes, and only a patch (ADR-0016) | `Foreman.push_patch`, `patches.apply` | `test_actions`: `test_ready_to_pr_open`; `test_gate_loop`: `test_changes_fix_merge_closed`; `test_workers`: `test_unified_and_mbox_patches_push_the_workers_change` |
+| Changed paths come from GitHub, protected paths refused | `Foreman.check_pushed`, `patches.apply` | `test_actions`: `test_renaming_a_protected_path_fails_the_result`; `test_workers`: `test_a_patch_to_a_protected_path_is_never_pushed` |
+| One PR's size: 600 lines, 20 files | `Foreman.check_pushed` | `test_actions`: `test_a_change_must_fit_one_pr` |
+| GitHub holds the pushed commit | `Foreman.check_pushed` | `test_actions`: `test_bad_results_fail_attempts_then_block` |
 | One PR per WorkItem | `Foreman.open_pr` | `test_actions`: `test_a_result_for_a_branch_with_an_open_pr_joins_that_pr`, `test_open_pr_adopts_a_pr_opened_after_the_reconcile` |
 | A stale verdict is ignored | `workitem.current_verdict` | `test_actions`: `test_stale_verdict_ignored`; `test_reconcile`: `test_old_round_is_stale` |
 | The same problem twice goes to a person | `workitem.reconcile` | `test_gate_loop`: `test_same_problem_twice_goes_to_a_human` |
@@ -163,7 +164,7 @@ owner's decision (ADR-0006).
 
 - **WorkItem**: one issue's durable record in factory-mcp. One issue, one branch, one PR.
 - **WorkOrder**: one instruction to a worker: implement, or fix the gate's findings.
-- **Result**: what a worker hands back: a patch or a pushed branch, and the evidence.
+- **Result**: what a worker hands back: a patch, and the evidence.
 - **Verdict**: the gate's decision on one PR head: MERGE, CHANGES or HUMAN, with findings.
 - **Tick**: one pass of reconcile, then at most one action, for each WorkItem.
 - **Pass**: one worker task. `FACTORY_MAX_PASSES` caps them per WorkItem.

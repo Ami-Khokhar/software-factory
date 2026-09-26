@@ -282,18 +282,16 @@ class Foreman:
         errors = documents.check_result(result, order)
         if not errors and result["status"] != "completed":
             errors = [f"worker reported {result['status']}: {result.get('error')}"]
-        artifact = result.get("artifact") if not errors else None
-        if not errors and not artifact:
+        sha, files = None, []
+        if not errors:
             try:
-                artifact = self.push_patch(wi, order, result["patch"])
+                sha = self.push_patch(wi, order, result["patch"])
             except patches.PatchError as exc:
                 errors = [f"patch not pushed: {exc}"]
-        files = []
         if not errors:
-            errors, files = self.check_artifact(wi, order, artifact)
+            errors, files = self.check_pushed(wi, order, sha)
         if errors:
             return self.fail(wi, order, f"{task['agentId']}: " + "; ".join(errors))
-        sha = artifact["commitSha"]
         self.store.log("result", {"workOrder": order["id"], "commitSha": sha}, wi["id"])
         done = dict(wi, headSha=sha, attempts=[], activeWorkOrderId=None, providerTaskId=None)
         if wi.get("prNumber"):
@@ -303,22 +301,19 @@ class Foreman:
                            pr=pr["number"])
 
     def push_patch(self, wi, order, patch):
-        """Apply a patch Result on the WorkOrder's base and push it; the commit is then checked
-        like any worker's artifact."""
+        """Apply the Result's patch on the WorkOrder's base and push it to the WorkItem's branch
+        (ADR-0016). Returns the pushed commit."""
         base = patch.get("baseSha") or (order["headSha"] if order["kind"] == "fix" else order["baseSha"])
-        sha = patches.apply(self.config.git_url.format(repo=wi["repo"]), self.config.github_token,
-                            wi["branch"], base, patch, f"{wi['goal']} (#{wi['issueNumber']})\n\n"
-                            f"WorkOrder {order['id']}", force=order["kind"] != "fix",
-                            protected=order["constraints"]["protectedPaths"])
-        return {"branch": wi["branch"], "commitSha": sha}
+        return patches.apply(self.config.git_url.format(repo=wi["repo"]), self.config.github_token,
+                             wi["branch"], base, patch, f"{wi['goal']} (#{wi['issueNumber']})\n\n"
+                             f"WorkOrder {order['id']}", force=order["kind"] != "fix",
+                             protected=order["constraints"]["protectedPaths"])
 
-    def check_artifact(self, wi, order, artifact):
-        """Guards on what GitHub holds, never on what the worker says it did."""
-        if artifact["branch"] != wi["branch"]:
-            return [f"artifact branch {artifact['branch']} is not {wi['branch']}"], []
+    def check_pushed(self, wi, order, sha):
+        """Guards on what GitHub holds after the push, never on what the worker says it did."""
         head = self.github.branch_head(wi["repo"], wi["branch"])
-        if head != artifact["commitSha"]:
-            return [f"{wi['branch']} is at {head}, not the reported {artifact['commitSha']}"], []
+        if head != sha:
+            return [f"{wi['branch']} is at {head}, not the pushed {sha}"], []
         files = self.github.changed_files(wi["repo"], self._default_branch(wi["repo"]), head)
         limits = order["constraints"]
         errors = [f"changes protected path {name}" for f in files  # a rename moves the old path too
