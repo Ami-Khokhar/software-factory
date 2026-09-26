@@ -123,6 +123,7 @@ nothing from you. `factory start` checks all three.
 |---|---|
 | Deployed code (runs the services) | `~/.local/share/software-factory` |
 | Settings / secrets | `~/.config/factory-mcp/env` / `secrets` (mode 600) |
+| The relay's API token | `~/.config/agent-relay/token` (mode 600), written by the relay on its first start; factory-mcp and `factory stop` read it. `AGENT_RELAY_TOKEN` in the settings or secrets overrides it |
 | WorkItem store and audit log | `~/.local/state/factory-mcp/factory.sqlite3` |
 | Logs | `~/.local/state/factory-mcp/server.log`, `~/.local/state/agent-relay/relay.log` |
 | Worker checkouts | `$FACTORY_CHECKOUT_ROOT/<owner>/<repo>` |
@@ -141,6 +142,9 @@ they pass. A failing test keeps the old version running.
 - **Blocked: `verify exited 1`.** The repo's tests failed in the sandbox. Run the verify command
   yourself. If the tests fail on `main` too, fix `main` first.
 - **Blocked: `docker is not available`.** Start OrbStack, then `factory retry <id> "docker was down"`.
+- **Stuck in `dispatching` with `relay 401`.** The relay refused factory-mcp's token. factory-mcp
+  sends `AGENT_RELAY_TOKEN` from its settings or secrets, else `~/.config/agent-relay/token`;
+  make it match the relay's (`AGENT_RELAY_TOKEN` in the relay's environment, else that file).
 - **HUMAN from the gate.** Read the gate's comment on the PR. `retry` sends its findings to the
   worker; `regate` re-reviews a fix you pushed yourself.
 

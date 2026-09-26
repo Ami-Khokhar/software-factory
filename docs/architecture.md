@@ -26,6 +26,8 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
   effect. A background loop ticks every WorkItem every `FACTORY_POLL_SECONDS` (60).
 - **agent-relay** ([repo](https://github.com/Ami-Khokhar/agent-relay)) runs worker tasks.
   factory-mcp submits one task per WorkOrder over HTTP and reads it on later ticks; it never waits.
+  Each call carries the relay's token, which factory-mcp reads on every call from
+  `AGENT_RELAY_TOKEN` or the file the relay writes on its first start.
 - **worker/runner.py** is what a relay agent runs: the harness works in a Docker sandbox with no
   GitHub credential, and the runner turns its commits into a patch Result.
 - **GitHub** holds the facts. factory-mcp reads issues, labels, PRs, check runs and the gate's
@@ -59,7 +61,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/verdict.py` | Reading the gate's verdict marker; finding fingerprints and blockers |
 | `factory_mcp/store.py` | SQLite: WorkItems with optimistic concurrency, WorkOrders, the audit log, leases, migrations |
 | `factory_mcp/github.py` | The GitHub REST client |
-| `factory_mcp/relay.py` | The agent-relay task client |
+| `factory_mcp/relay.py` | The agent-relay task client, and where it finds the relay's token |
 | `factory_mcp/patches.py` | The git work factory-mcp does: cloning a worker checkout, pushing a patch Result |
 | `factory_mcp/repos.py` | The repo check, and `repos.json` (ADR-0014) |
 | `factory_mcp/routing.py` | Which worker takes the next attempt: locality first, then one that has not failed |

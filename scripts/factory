@@ -171,8 +171,29 @@ def cmd_resolve(resolution, args):
     print(f"{wi['id']}: {wi['state']}. The factory takes it from here.")
 
 
+def service_env():
+    """The environment factory-mcp runs in: this one, then the settings, then the secrets."""
+    return dict(os.environ, **SETTINGS, **read_env(CONFIG / "secrets"))
+
+
+def relay_token():
+    """The token factory-mcp sends the relay (factory_mcp.relay.token), from the same environment.
+    Kept here so that `factory stop` works even when factory_mcp does not import. Never printed."""
+    env = service_env()
+    value = env.get("AGENT_RELAY_TOKEN", "").strip()
+    if value:
+        return value
+    path = env.get("AGENT_RELAY_TOKEN_FILE") or Path.home() / ".config" / "agent-relay" / "token"
+    try:
+        return Path(path).read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
 def relay_json(method, path):
-    request = urllib.request.Request(f"{RELAY}{path}", method=method)
+    token = relay_token()
+    request = urllib.request.Request(f"{RELAY}{path}", method=method,
+                                     headers={"Authorization": f"Bearer {token}"} if token else {})
     with urllib.request.urlopen(request, timeout=10) as response:
         return json.loads(response.read() or b"null")
 
@@ -277,7 +298,7 @@ def cmd_update(_):
 
 
 def cmd_serve(_):
-    env = dict(os.environ, **SETTINGS, **read_env(CONFIG / "secrets"))
+    env = service_env()
     env.setdefault("FACTORY_REPOS_FILE", str(CONFIG / "repos.json"))
     if not env.get("FACTORY_MCP_TOKEN"):
         die(f"no FACTORY_MCP_TOKEN in {CONFIG / 'secrets'}")

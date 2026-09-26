@@ -232,6 +232,8 @@ def main(relay_checkout, lose_store=False):
     github_url = serve_github(github)
 
     relay_port, mcp_port, token = free_port(), free_port(), "rehearsal-token"
+    # The relay and factory-mcp share this token, so neither reads or writes ~/.config/agent-relay/token.
+    relay_token = "rehearsal-relay-token"
     agents = os.path.join(tmp, "agents.json")
     with open(agents, "w") as f:
         json.dump({"agents": [{"id": "scripted", "command": sys.executable,
@@ -242,7 +244,8 @@ def main(relay_checkout, lose_store=False):
              "GIT_COMMITTER_NAME": "worker", "GIT_COMMITTER_EMAIL": "worker@x"}
     relay = subprocess.Popen([sys.executable, os.path.join(relay_checkout, "src", "server.py")],
                              env=dict(os.environ, AGENT_RELAY_AGENTS_FILE=agents,
-                                      AGENT_RELAY_PORT=str(relay_port), **ident),
+                                      AGENT_RELAY_PORT=str(relay_port), AGENT_RELAY_TOKEN=relay_token,
+                                      **ident),
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     db = os.path.join(tmp, "factory.sqlite3")
 
@@ -251,8 +254,8 @@ def main(relay_checkout, lose_store=False):
             os.environ, FACTORY_MCP_TOKEN=token, FACTORY_REPOS=REPO, FACTORY_GITHUB_API=github_url,
             FACTORY_GITHUB_TOKEN="gh-token", FACTORY_RELAY_URL=f"http://127.0.0.1:{relay_port}",
             FACTORY_WORKERS="scripted:local", FACTORY_POLL_SECONDS="0", FACTORY_PORT=str(mcp_port),
-            FACTORY_DB=db, FACTORY_GIT_URL=bare), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True)
+            FACTORY_DB=db, FACTORY_GIT_URL=bare, AGENT_RELAY_TOKEN=relay_token),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
     factory = start_factory()
     try:
