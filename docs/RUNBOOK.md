@@ -99,6 +99,10 @@ It clones the worker checkout under `FACTORY_CHECKOUT_ROOT`, creates the labels,
 `FACTORY_REPOS`, and restarts factory-mcp. If `verify` needs a tool the sandbox image lacks, add
 it to `worker/Dockerfile`, then run `docker build -t factory-worker:latest worker/`.
 
+To take a repo away from the factory, remove it from `FACTORY_REPOS` and restart factory-mcp. Its
+WorkItems stay as they are: no worker starts and no PR opens for them, and they carry on if the
+repo comes back. A worker already running finishes; its Result is read when the repo comes back.
+
 ## Starting, stopping, rebooting
 
 The relay and factory-mcp are launchd services: they start at login and restart when they

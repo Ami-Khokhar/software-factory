@@ -8,6 +8,7 @@ from jsonschema import Draft202012Validator
 
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
+from factory_mcp.mcp import ToolError
 from factory_mcp.store import Store
 from tests.fakes import FakeGitHub, FakeRelay, result_line
 
@@ -144,6 +145,25 @@ class ActionsTest(unittest.TestCase):
         self.github.add_pr(REPO, 55, "factory/7", "c1")
         pr = self.foreman.open_pr(wi, self.foreman.store.workorders(ID)[0], [], [], "codex")
         self.assertEqual((pr["number"], len(self.github.pulls)), (55, 1))
+
+    def test_a_repo_off_the_allowlist_is_left_alone(self):
+        """Taking a repo off FACTORY_REPOS stops the factory acting on it; putting it back resumes."""
+        allowlisted, off = self.foreman.config, Config(mcp_token="t", repos=frozenset())
+        self.foreman.config = off
+        self.foreman.tick()
+        self.assertEqual((self.foreman.store.get(ID)["state"], self.relay.tasks), ("ready", {}))
+        with self.assertRaisesRegex(ToolError, "o/r is not in FACTORY_REPOS"):
+            self.foreman.tick(ID)
+
+        self.foreman.config = allowlisted
+        wi, task = self.dispatched()
+        self.github.push(REPO, "factory/7", "c1")
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"], "c1"))
+        self.foreman.config = off
+        self.foreman.tick()
+        self.assertEqual((self.foreman.store.get(ID)["state"], self.github.pulls), ("implementing", []))
+        self.foreman.config = allowlisted
+        self.assertEqual(self.tick()["state"], "pr_open")
 
     def test_bad_results_fail_attempts_then_block(self):
         wi, task = self.dispatched()
