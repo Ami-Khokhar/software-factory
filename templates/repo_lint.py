@@ -11,9 +11,9 @@ Three checks:
    `foreman.py` next to its section for `factory_mcp/foreman.py`.
 2. Every relative Markdown link in AGENTS.md, README.md and docs/*.md
    resolves, relative to the file that carries it.
-3. No tracked text file is longer than the limit (default 800 lines). Files
-   that git ignores, files under vendor/ and node_modules/, and lock files
-   are skipped.
+3. Check every text file that git does not ignore. None is longer than the
+   limit (default 800 lines). Files under vendor/ and node_modules/, and
+   lock files, are skipped too.
 
 Prints one `path:line: problem` line per problem and exits 1 when there is at
 least one; prints nothing and exits 0 when the repository is clean.
@@ -177,7 +177,7 @@ def link_problems(root: str) -> list:
 
 
 def long_file_problems(root: str, limit: int) -> list:
-    """Check 3: tracked text files longer than the line limit."""
+    """Check 3: every text file git does not ignore, by line count."""
     problems = []
     for rel in repo_files(root):
         try:
@@ -206,7 +206,8 @@ def main(argv=None) -> int:
     )
     parser.add_argument(
         "--limit", type=int, default=LINE_LIMIT,
-        help="maximum lines per tracked text file (default %d)" % LINE_LIMIT,
+        help="maximum lines for a text file git does not ignore (default %d)"
+        % LINE_LIMIT,
     )
     args = parser.parse_args(argv)
     root = os.getcwd()

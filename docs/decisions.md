@@ -297,9 +297,9 @@ file could grow past any bound. A wrong doc misdirects every agent that reads it
 
 **Decision.** `templates/repo_lint.py` is the guard. Run from a repo root, it prints one
 `path:line: problem` line for a backticked path in `AGENTS.md` that does not exist, a relative
-link in `AGENTS.md`, `README.md` or `docs/*.md` that does not resolve, and a tracked text file
-over 800 lines (`--limit` overrides the limit). It prints nothing and exits 0 when the repo is
-clean.
+link in `AGENTS.md`, `README.md` or `docs/*.md` that does not resolve, and a text file git
+does not ignore that is over 800 lines (`--limit` overrides the limit). It prints nothing and
+exits 0 when the repo is clean.
 A span with no `/` counts as a path only when its suffix is a file extension, so `patches.apply`
 is a module reference, not a path.
 
