@@ -293,7 +293,7 @@ def cmd_update(_):
         git("reset", "-q", "--hard", old)
         why = "\n".join((tests.stdout + tests.stderr).strip().splitlines()[-20:])
         die(f"update: tests fail at {new[:7]}; factory-mcp stays on {old[:7]}\n{why}")
-    if git("diff", "--quiet", old, new, "--", "worker/Dockerfile").returncode != 0:
+    if git("diff", "--quiet", old, new, "--", "worker/Dockerfile", "worker/freebuff.py").returncode != 0:
         run("docker", "build", "-q", "-t", "factory-worker:latest", str(HERE / "worker"))
     restart_factory_mcp()
     print(f"update: deployed {new[:7]} (was {old[:7]})")

@@ -18,7 +18,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
                     ▼                             ▼                              ▼
              agent-relay ──► worker/runner.py     GitHub: issues, labels,   pr-gatekeeper:
                              (Docker sandbox,     PRs, check runs           reviews, merges,
-                              the pi harness)                               comments a verdict
+                              Freebuff + GLM)                               comments a verdict
 ```
 
 - **factory-mcp** (`factory_mcp/`) is the Foreman: a Python MCP server, standard library only, on
@@ -28,8 +28,10 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
   factory-mcp submits one task per WorkOrder over HTTP and reads it on later ticks; it never waits.
   Each call carries the relay's token, which factory-mcp reads on every call from
   `AGENT_RELAY_TOKEN` or the file the relay writes on its first start.
-- **worker/runner.py** is what a relay agent runs: the harness works in a Docker sandbox with no
-  GitHub credential, and the runner turns its commits into a patch Result.
+- **worker/runner.py** is what a relay agent runs: Freebuff works in a Docker sandbox with no
+  GitHub credential, and the runner turns its edits into a patch Result. `worker/freebuff.py`
+  drives Freebuff's terminal UI and waits for its local completion log; Freebuff has no headless
+  CLI mode in the pinned version.
 - **GitHub** holds the facts. factory-mcp reads issues, labels, PRs, check runs and the gate's
   comments, and rebuilds its WorkItems from them when its store is lost (ADR-0009).
 - **pr-gatekeeper** reviews every PR and merges it on MERGE. factory-mcp has no merge tool
@@ -68,7 +70,8 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/metrics.py` | The escalation text and the autonomy rate |
 | `factory_mcp/config.py` | Settings from the environment and `repos.json` |
 | `worker/runner.py` | Runs one WorkOrder in the sandbox and prints its Result |
-| `worker/Dockerfile` | The sandbox image: git, Python, Node and the pi harness, and no GitHub credential |
+| `worker/freebuff.py` | Runs one Freebuff/GLM prompt through a PTY and checks its completion log |
+| `worker/Dockerfile` | The sandbox image: git, Python, Node and Freebuff, and no GitHub credential |
 | `scripts/factory` | The owner's CLI: `new`, `add-repo`, `status`, `watch`, `retry`/`regate`/`close`, `start`/`stop`, `update`, `serve` |
 | `scripts/install-services.sh` | The launchd services for agent-relay and factory-mcp |
 | `scripts/rehearsal.py` | One issue end to end, with the real agent-relay and a stand-in GitHub. Its scripted worker hands back a patch, as `worker/runner.py` does, and factory-mcp pushes it |
@@ -146,7 +149,7 @@ owner's decision (ADR-0006).
 | Only allowlisted repos | `Foreman.intake`, `Foreman.tick` | `test_reconcile`: `test_intake_is_idempotent_and_allowlisted`; `test_actions`: `test_a_repo_off_the_allowlist_is_left_alone` |
 | Only trusted authors reach a worker | `Foreman._admit` | `test_safety`: `test_only_trusted_authors_reach_a_worker`, `test_logins_ignore_case` |
 | A Result meets its contract | `documents.check_result` | `test_schemas`: `test_check_result_accepts_what_the_result_schema_accepts` |
-| Only factory-mcp pushes, and only a patch (ADR-0016) | `Foreman.push_patch`, `patches.apply` | `test_actions`: `test_ready_to_pr_open`; `test_gate_loop`: `test_changes_fix_merge_closed`; `test_workers`: `test_unified_and_mbox_patches_push_the_workers_change` |
+| Only factory-mcp pushes, and only a patch (ADR-0017) | `Foreman.push_patch`, `patches.apply` | `test_actions`: `test_ready_to_pr_open`; `test_gate_loop`: `test_changes_fix_merge_closed`; `test_workers`: `test_unified_and_mbox_patches_push_the_workers_change` |
 | Changed paths come from GitHub, protected paths refused | `Foreman.check_pushed`, `patches.apply` | `test_actions`: `test_renaming_a_protected_path_fails_the_result`; `test_workers`: `test_a_patch_to_a_protected_path_is_never_pushed` |
 | One PR's size: 600 lines, 20 files | `Foreman.check_pushed` | `test_actions`: `test_a_change_must_fit_one_pr` |
 | GitHub holds the pushed commit | `Foreman.check_pushed` | `test_actions`: `test_bad_results_fail_attempts_then_block` |

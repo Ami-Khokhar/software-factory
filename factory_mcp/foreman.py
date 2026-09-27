@@ -302,7 +302,7 @@ class Foreman:
 
     def push_patch(self, wi, order, patch):
         """Apply the Result's patch on the WorkOrder's base and push it to the WorkItem's branch
-        (ADR-0016). Returns the pushed commit."""
+        (ADR-0017). Returns the pushed commit."""
         base = patch.get("baseSha") or (order["headSha"] if order["kind"] == "fix" else order["baseSha"])
         return patches.apply(self.config.git_url.format(repo=wi["repo"]), self.config.github_token,
                              wi["branch"], base, patch, f"{wi['goal']} (#{wi['issueNumber']})\n\n"

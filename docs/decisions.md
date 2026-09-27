@@ -36,7 +36,7 @@ epic is never one oversized PR.
 
 ## ADR-0003 — The controller opens the PR
 
-**Superseded by ADR-0016** for what the Result carries: a patch, not a branch. The controller
+**Superseded by ADR-0017** for what the Result carries: a patch, not a branch. The controller
 still opens the PR.
 
 **Context.** A worker may push a branch or open a PR and then time out before
@@ -98,7 +98,7 @@ not ownership.
 
 ## ADR-0007 — Workers are least-privilege; untrusted input is data
 
-**Superseded by ADR-0016** for push access: a worker holds no GitHub credential, and factory-mcp
+**Superseded by ADR-0017** for push access: a worker holds no GitHub credential, and factory-mcp
 pushes. Untrusted input is still data.
 
 **Context.** A worker needs enough access to push a branch, but issue text, PR
@@ -250,7 +250,27 @@ AGENTS.md is a protected path, so a person merges each copy.
 
 ---
 
-## ADR-0016 — The patch is the only handoff
+## ADR-0016 — Freebuff is the factory's coding worker
+
+**Context.** The owner wants GLM 5.3 Flash through Freebuff for worker passes. Freebuff 0.0.203
+has a terminal UI but no noninteractive task/result command, while agent-relay needs a bounded
+command and the factory needs a trustworthy Result.
+
+**Decision.** The relay runs `worker/runner.py` with `worker/freebuff.py` as its only configured
+coding harness. The runner gives a disposable container a fresh repository copy and a private
+copy of Freebuff's login credential. The adapter selects GLM 5.3 Flash, sends the WorkOrder through
+Freebuff's terminal UI, and accepts completion only when the new session log records its request
+and `Main prompt finished`. The runner then collects the patch and runs the base commit's verify
+command. A changed UI or missing completion marker fails the pass.
+
+**Consequence.** The model provider and UI remain outside the deterministic Foreman and gate.
+Freebuff's terminal UI and log are a version-specific integration boundary; the image pins its
+version, tests cover the terminal protocol, and a live container pass must be checked after an
+upgrade.
+
+---
+
+## ADR-0017 — The patch is the only handoff
 
 **Context.** A Result could hand back a branch the worker pushed (`artifact`) or a patch that
 factory-mcp pushes. Every worker runs behind `worker/runner.py`, which holds no GitHub credential

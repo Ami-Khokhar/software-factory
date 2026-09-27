@@ -1,6 +1,6 @@
 # Plan — Day Desk as the single front door to the software factory
 
-Status: **proposal / implementation plan.** Written 2026-09-25.
+Status: **historical proposal, superseded by `docs/architecture.md` and `docs/RUNBOOK.md`.** Written 2026-09-25.
 Owner: (you). Pick-up target: a cloud coding session, reading this file from `main`.
 
 This document is self-contained: it records the current verified state, the target design, the
@@ -34,7 +34,7 @@ call them.
 | Piece | State | Evidence |
 |---|---|---|
 | `factory-mcp` running over TLS | ✅ | `127.0.0.1:43125`, mkcert cert for `factory.lan.example` |
-| `agent-relay` running | ✅ | `127.0.0.1:43124`, 8 agents incl. `pi-glm-factory` |
+| `agent-relay` running | ✅ | `127.0.0.1:43124`, now configured with `freebuff-factory` |
 | OpenBot registered `factory-mcp` MCP server | ✅ | id `factory-mcp`, 5 tools, `lastError: null` |
 | Grants | ✅ | Foreman: all 5 `factory_*` + `routines/create_routine`; Planner: `factory_propose_issue` + `factory_status` |
 | OpenBot policy | ✅ default-deny; allows `factory-mcp` only to `factory-foreman`/`factory-planner` (+ `routines` to Foreman) |
@@ -135,7 +135,7 @@ New file, `~/.config/factory-mcp/repos.yaml` (path overridable with `FACTORY_REP
 ```yaml
 version: 1
 defaults:
-  workers: [pi-glm-factory:local]     # preferred first; "agentId:local|hosted"
+  workers: [freebuff-factory:local]   # preferred first; "agentId:local|hosted"
   protected_paths: [".github/", "AGENTS.md"]
   trusted_authors: [Ami-Khokhar]
 repos:
@@ -143,7 +143,7 @@ repos:
     enabled: true
     risk: normal                      # normal | local-only
     default_branch: main
-    workers: [pi-glm-factory:local]   # optional per-repo override
+    workers: [freebuff-factory:local] # optional per-repo override
     trusted_authors: [Ami-Khokhar]    # optional per-repo override
     protected_paths: [".github/", "AGENTS.md"]
     gate:

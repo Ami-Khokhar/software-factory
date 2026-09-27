@@ -53,7 +53,7 @@ class ActionsTest(unittest.TestCase):
         self.relay.finish(task["id"], output=result_line(order["id"]))
         wi = self.tick()
         self.assertEqual((wi["state"], wi["prNumber"], wi["headSha"]), ("pr_open", 100, "c1"))
-        # factory-mcp pushed the patch (ADR-0016): built on the default branch's head, over any earlier attempt
+        # factory-mcp pushed the patch (ADR-0017): built on the default branch's head, over any earlier attempt
         self.assertEqual(self.git.pushes, [{"branch": "factory/7", "base": "base0", "force": True}])
         body = self.github.pulls[0]["body"]
         for heading in ("## Task", "## Intent", "## Why it was needed", "## Why this approach",

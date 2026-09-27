@@ -39,7 +39,7 @@ CASES = [
     ("an mbox patch with its base", result(patch={"format": "mbox", "diff": "From x", "baseSha": "b0"}), True),
     ("completed with no patch", result(patch=...), False),
     ("completed with a null patch", result(patch=None), False),
-    ("a pushed branch beside the patch, which is no handoff (ADR-0016)",
+    ("a pushed branch beside the patch, which is no handoff (ADR-0017)",
      result(artifact={"branch": "factory/7", "commitSha": "c1"}), False),
     ("a patch in an unknown format", result(patch={"format": "zip", "diff": "x"}), False),
     ("a patch with an empty diff", result(patch=dict(PATCH, diff="")), False),

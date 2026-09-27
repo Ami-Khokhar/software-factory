@@ -39,7 +39,7 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
 
 ## Design rules baked into the schemas
 
-- **The patch is the handoff (ADR-0016).** A `Result` with `status: completed`
+- **The patch is the handoff (ADR-0017).** A `Result` with `status: completed`
   **must** carry `patch` (format + diff, which `worker/runner.py` returns) and a
   passing test in its evidence. factory-mcp pushes the patch itself, after it
   refuses one that touches a protected path; a worker never pushes. The Result is
