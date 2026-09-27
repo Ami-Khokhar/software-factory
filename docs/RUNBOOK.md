@@ -96,15 +96,16 @@ and verification run as the same host UID with a writable container-only HOME. B
 `docker build -t factory-worker:latest worker/`. The image pins Freebuff 0.0.203 and uses GLM 5.3
 Flash. Later, `factory update` rebuilds the image when `worker/Dockerfile` or `worker/freebuff.py`
 changes. A live container pass on macOS host UID 501 produced a patch and passed the base verify
-command. In `~/.config/agent-relay/agents.json`, register a command agent like this (replace the
-two host paths):
+command. In `~/.config/agent-relay/agents.json`, register a command agent like this. The runner
+path must point to the deployment checkout; replace the home and checkout-root paths if yours
+differ:
 
 ```json
 {
   "id": "freebuff-factory",
   "name": "Freebuff (GLM 5.3 Flash), sandboxed factory worker",
   "command": "python3",
-  "args": ["/absolute/path/to/software-factory/worker/runner.py", "--",
+  "args": ["/Users/amteshwar/.local/share/software-factory/worker/runner.py", "--",
            "python3", "/usr/local/bin/factory-freebuff"],
   "cwd": "/absolute/path/to/factory-work",
   "allowedRoots": ["/absolute/path/to/factory-work"],

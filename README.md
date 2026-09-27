@@ -11,7 +11,8 @@ it to a reviewed, merged pull request, and asks the person only when it is stuck
 - **Gate and merge authority:** pr-gatekeeper.
 - **Source of truth:** GitHub.
 
-To run the factory, read [`docs/RUNBOOK.md`](docs/RUNBOOK.md). To change it, read
+For a visual map and setup path, read [`docs/factory-guide.md`](docs/factory-guide.md). To run the
+factory, read [`docs/RUNBOOK.md`](docs/RUNBOOK.md). To change it, read
 [`AGENTS.md`](AGENTS.md) first, then [`docs/architecture.md`](docs/architecture.md). The contracts
 are in [`schemas/`](schemas/), explained in [`docs/contracts.md`](docs/contracts.md), and the
 decisions are in [`docs/decisions.md`](docs/decisions.md).
