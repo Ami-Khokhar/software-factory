@@ -4,9 +4,8 @@ import json
 from .store import now
 
 EVIDENCE_KIND = {"tests-pass": "test"}
-RESULT_KEYS = {"schemaVersion", "workOrderId", "status", "artifact", "patch", "evidence", "error",
-               "startedAt", "finishedAt"}
-ARTIFACT_KEYS = {"branch", "commitSha"}
+RESULT_KEYS = {"schemaVersion", "workOrderId", "status", "patch", "evidence", "error", "startedAt",
+               "finishedAt"}
 PATCH_KEYS = {"format", "diff", "baseSha"}
 EVIDENCE_KEYS = {"kind", "command", "exit", "tail"}
 
@@ -74,16 +73,16 @@ def _text(value):
     return isinstance(value, str) and bool(value)
 
 
+def _integer(value):
+    # JSON Schema's integer: 0 and 0.0 are, and False is not (in Python False == 0, so a boolean exit
+    # would count as passing tests)
+    return type(value) is int or (type(value) is float and value.is_integer())
+
+
 def _evidence_ok(e):
-    # type(...) is int: in Python False == 0, and a boolean exit must not count as passing tests
     return (isinstance(e, dict) and set(e) <= EVIDENCE_KEYS and e.get("kind") in EVIDENCE_KIND.values()
-            and _text(e.get("command")) and type(e.get("exit")) is int
+            and _text(e.get("command")) and _integer(e.get("exit"))
             and isinstance(e.get("tail"), (str, type(None))))
-
-
-def _artifact_ok(artifact):
-    return (isinstance(artifact, dict) and set(artifact) <= ARTIFACT_KEYS
-            and _text(artifact.get("branch")) and _text(artifact.get("commitSha")))
 
 
 def _patch_ok(patch):
@@ -106,7 +105,7 @@ def check_result(result, order):
     for key in ("startedAt", "finishedAt"):
         if not isinstance(result.get(key), str):
             errors.append(f"{key} is missing")
-    evidence = result.get("evidence") or []
+    evidence = result.get("evidence", [])
     if not isinstance(evidence, list) or not all(_evidence_ok(e) for e in evidence):
         return errors + ["evidence entries need kind, command, an integer exit and a text tail, "
                          "and nothing else"]
@@ -114,15 +113,13 @@ def check_result(result, order):
         errors.append("error must be text")
     if result.get("status") == "failed" and not result.get("error"):
         errors.append("a failed Result needs an error")
-    artifact, patch = result.get("artifact"), result.get("patch")
-    if artifact is not None and not _artifact_ok(artifact):
-        errors.append("artifact needs branch and commitSha, and nothing else")
+    patch = result.get("patch")
     if patch is not None and not _patch_ok(patch):
         errors.append("patch needs format unified|mbox and a diff, and at most a baseSha")
     if result.get("status") != "completed" or errors:
         return errors
-    if artifact is None and patch is None:
-        errors.append("a completed Result needs an artifact or a patch")
+    if patch is None:
+        errors.append("a completed Result needs a patch")
     for required in order["requiredEvidence"]:
         kind = EVIDENCE_KIND[required]
         if not any(e["kind"] == kind and e["exit"] == 0 for e in evidence):

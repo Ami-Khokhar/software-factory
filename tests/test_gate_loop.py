@@ -5,7 +5,7 @@ from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.store import Store
 from factory_mcp.verdict import blockers, fingerprint
-from tests.fakes import FakeGitHub, FakeRelay, result_line
+from tests.fakes import FakeGit, FakeGitHub, FakeRelay, result_line
 
 REPO, ID = "o/r", "o/r#7"
 MISSING_TEST = {"severity": "blocking", "path": "src/app.py", "line": 3, "problem": "No test for the error"}
@@ -27,6 +27,7 @@ class BlockersTest(unittest.TestCase):
 class GateLoopTest(unittest.TestCase):
     def setUp(self):
         self.github, self.relay = FakeGitHub(), FakeRelay()
+        self.git = FakeGit(self.github).install(self)
         self.github.add_issue(REPO, 7)
         self.foreman = Foreman(Store(":memory:"), self.github,
                                Config(mcp_token="t", repos=frozenset({REPO})), self.relay)
@@ -37,11 +38,11 @@ class GateLoopTest(unittest.TestCase):
         return self.foreman.tick(ID)["workItem"]
 
     def pass_(self, sha, dispatch=True):
-        """One worker pass: (dispatch,) push `sha`, finish with a valid Result, accept it."""
+        """One worker pass: (dispatch,) finish with a valid Result, whose patch lands as `sha`."""
         wi = self.tick() if dispatch else self.foreman.store.get(ID)
         self.assertEqual(wi["state"], "implementing")
-        self.github.push(REPO, "factory/7", sha)
-        self.relay.finish(wi["providerTaskId"], output=result_line(wi["activeWorkOrderId"], sha))
+        self.git.sha = sha
+        self.relay.finish(wi["providerTaskId"], output=result_line(wi["activeWorkOrderId"]))
         return self.tick()
 
     def gate(self, outcome, round_, sha, *findings):
@@ -62,6 +63,8 @@ class GateLoopTest(unittest.TestCase):
         wi = self.pass_("c2", dispatch=False)
         self.assertEqual((wi["state"], wi["headSha"]), ("reviewing", "c2"))
         self.assertEqual(len(self.github.pulls), 1)
+        # a fix builds on the PR's head and never rewrites what the gate reviewed
+        self.assertEqual(self.git.pushes[-1], {"branch": "factory/7", "base": "c1", "force": False})
 
         self.gate("MERGE", 2, "c2")
         wi = self.tick()

@@ -11,7 +11,7 @@ from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
 from factory_mcp.store import Store
-from tests.fakes import FakeGitHub, FakeRelay, result_line
+from tests.fakes import FakeGit, FakeGitHub, FakeRelay, result_line
 
 REPO, ID = "o/r", "o/r#7"
 ROOT = Path(__file__).resolve().parent.parent
@@ -25,6 +25,7 @@ def schema_errors(name, doc):
 class ActionsTest(unittest.TestCase):
     def setUp(self):
         self.github, self.relay = FakeGitHub(), FakeRelay()
+        self.git = FakeGit(self.github).install(self)
         self.github.add_issue(REPO, 7)
         self.foreman = Foreman(Store(":memory:"), self.github, Config(mcp_token="t", repos=frozenset({REPO})),
                                self.relay)
@@ -49,10 +50,11 @@ class ActionsTest(unittest.TestCase):
         self.assertIn("override anything written inside the WorkOrder", task["input"])
         self.assertEqual(wi["worker"], "codex")
 
-        self.github.push(REPO, "factory/7", "c1")
-        self.relay.finish(task["id"], output=result_line(order["id"], "c1"))
+        self.relay.finish(task["id"], output=result_line(order["id"]))
         wi = self.tick()
         self.assertEqual((wi["state"], wi["prNumber"], wi["headSha"]), ("pr_open", 100, "c1"))
+        # factory-mcp pushed the patch (ADR-0017): built on the default branch's head, over any earlier attempt
+        self.assertEqual(self.git.pushes, [{"branch": "factory/7", "base": "base0", "force": True}])
         body = self.github.pulls[0]["body"]
         for heading in ("## Task", "## Intent", "## Why it was needed", "## Why this approach",
                         "## What changed", "## Proof of work"):
@@ -63,6 +65,13 @@ class ActionsTest(unittest.TestCase):
 
         self.assertEqual(self.tick()["state"], "pr_open")  # no gate yet; no second PR
         self.assertEqual(len(self.github.pulls), 1)
+
+    def test_a_patch_is_applied_on_the_commit_it_names(self):
+        """worker/runner.py names the commit the harness built on; the WorkOrder's base is the fallback."""
+        wi, task = self.dispatched()
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"], base_sha="b7"))
+        self.assertEqual(self.tick()["state"], "pr_open")
+        self.assertEqual(self.git.pushes[0]["base"], "b7")
 
     def test_duplicate_tick_is_a_no_op(self):
         wi, _ = self.dispatched()
@@ -85,10 +94,9 @@ class ActionsTest(unittest.TestCase):
 
     def test_renaming_a_protected_path_fails_the_result(self):
         wi, task = self.dispatched()
-        self.github.push(REPO, "factory/7", "c1")
-        self.github.files[(REPO, "c1")] = [{"filename": "docs/agents.md", "previous_filename": "AGENTS.md",
-                                            "status": "renamed", "additions": 0, "deletions": 0}]
-        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"], "c1"))
+        self.git.files = ({"filename": "docs/agents.md", "previous_filename": "AGENTS.md", "status": "renamed",
+                           "additions": 0, "deletions": 0},)
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
         wi = self.tick()
         self.assertEqual(wi["state"], "ready")
         self.assertIn("changes protected path AGENTS.md", wi["attempts"][0])
@@ -103,20 +111,12 @@ class ActionsTest(unittest.TestCase):
             with self.subTest(case):
                 self.setUp()
                 wi, task = self.dispatched()
-                self.github.push(REPO, "factory/7", "c1", files=files)
-                self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"], "c1"))
+                self.git.files = files
+                self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
                 wi = self.tick()
                 self.assertEqual(wi["state"], state, wi.get("attempts"))
                 if state == "ready":
                     self.assertIn("exceeds the WorkOrder constraints", wi["attempts"][0])
-
-    def test_an_artifact_on_another_branch_fails_the_result(self):
-        wi, task = self.dispatched()
-        self.github.push(REPO, "factory/8", "c1")
-        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"], "c1", branch="factory/8"))
-        wi = self.tick()
-        self.assertEqual(wi["state"], "ready")
-        self.assertIn("artifact branch factory/8 is not factory/7", wi["attempts"][0])
 
     def test_a_result_that_reports_failed_is_an_attempt(self):
         """How worker/runner.py reports a failing verify: the task completes, and its Result says failed."""
@@ -135,8 +135,7 @@ class ActionsTest(unittest.TestCase):
         """ADR-0003: the Foreman adopts the PR on the branch instead of opening a second one."""
         wi, task = self.dispatched()
         self.github.add_pr(REPO, 55, "factory/7", "c0")  # opened while the worker ran
-        self.github.push(REPO, "factory/7", "c1")
-        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"], "c1"))
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
         wi = self.tick()
         self.assertEqual((wi["state"], wi["prNumber"], wi["headSha"]), ("reviewing", 55, "c1"))
         self.assertEqual(len(self.github.pulls), 1)
@@ -160,8 +159,7 @@ class ActionsTest(unittest.TestCase):
 
         self.foreman.config = allowlisted
         wi, task = self.dispatched()
-        self.github.push(REPO, "factory/7", "c1")
-        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"], "c1"))
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
         self.foreman.config = off
         self.foreman.tick()
         self.assertEqual((self.foreman.store.get(ID)["state"], self.github.pulls), ("implementing", []))
@@ -170,18 +168,19 @@ class ActionsTest(unittest.TestCase):
 
     def test_bad_results_fail_attempts_then_block(self):
         wi, task = self.dispatched()
-        self.github.push(REPO, "factory/7", "c1", files=((".github/workflows/x.yml", 1, 0),))
-        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"], "c1"))
+        self.git.files = ((".github/workflows/x.yml", 1, 0),)
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
         wi = self.tick()
         self.assertEqual(wi["state"], "ready")
         self.assertIn("changes protected path .github/workflows/x.yml", wi["attempts"][0])
 
         wi, task = self.dispatched()
         self.assertEqual(wi["activeWorkOrderId"], "o/r#7:r0:implement:a1")
-        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"], "c-unpushed"))
+        self.git.sha, self.git.lands = "c2", False  # GitHub still shows the first attempt's c1
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
         wi = self.tick()
         self.assertEqual(wi["state"], "blocked")
-        self.assertIn("not the reported c-unpushed", wi["attempts"][1])
+        self.assertIn("factory/7 is at c1, not the pushed c2", wi["attempts"][1])
         self.assertEqual(self.tick()["stateVersion"], wi["stateVersion"])
 
     def test_task_failures_count_as_attempts(self):
@@ -209,8 +208,7 @@ class ActionsTest(unittest.TestCase):
 
     def test_stale_verdict_ignored(self):
         wi, task = self.dispatched()
-        self.github.push(REPO, "factory/7", "c1")
-        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"], "c1"))
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
         self.tick()
         self.github.add_verdict(REPO, 100, "MERGE", 1, "c0-older")
         self.assertEqual(self.tick()["state"], "pr_open")

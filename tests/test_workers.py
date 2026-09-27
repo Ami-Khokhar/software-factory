@@ -1,5 +1,4 @@
-"""Phase D: routing by locality with failover, and branch vs patch Results for the same WorkOrder."""
-import json
+"""Routing by locality with failover, and patch Results that factory-mcp pushes with real git."""
 import os
 import subprocess
 import tempfile
@@ -97,40 +96,23 @@ class WorkerTest(unittest.TestCase):
     def tree(self, sha):
         return git("rev-parse", f"{sha}^{{tree}}", cwd=self.bare)
 
-    def test_branch_and_patch_providers_complete_the_same_workorder(self):
+    def test_unified_and_mbox_patches_push_the_workers_change(self):
         self.worker_change()
-        unified = git("diff", "origin/main", "HEAD", cwd=self.work) + "\n"
-        mbox = git("format-patch", "--stdout", "origin/main", cwd=self.work) + "\n"
-        pushed = git("rev-parse", "HEAD", cwd=self.work)
-
-        def branch_output(order_id):
-            git("push", "-q", "-f", "origin", "factory/7", cwd=self.work)
-            return result_line(order_id, pushed)
-
-        trees = [self.tree(self.complete(self.foreman(), branch_output)["headSha"])]
-        for fmt, diff in (("unified", unified), ("mbox", mbox)):
-            git("push", "-q", "origin", "--delete", "factory/7", cwd=self.work)
-
-            def patch_output(order_id, fmt=fmt, diff=diff):
-                result = json.loads(result_line(order_id, "unused").splitlines()[-1])
-                del result["artifact"]
-                result["patch"] = {"format": fmt, "diff": diff}
-                return json.dumps(result)
-
-            wi = self.complete(self.foreman(), patch_output)
-            self.assertEqual(wi["activeWorkOrderId"], None)
-            trees.append(self.tree(wi["headSha"]))
-        self.assertEqual(len(set(trees)), 1)
-        self.assertIn("- `app.py`: modified (+1 -1)", self.github.pulls[0]["body"])
+        workers_tree = git("rev-parse", "HEAD^{tree}", cwd=self.work)
+        for fmt, diff in (("unified", git("diff", "origin/main", "HEAD", cwd=self.work) + "\n"),
+                          ("mbox", git("format-patch", "--stdout", "origin/main", cwd=self.work) + "\n")):
+            with self.subTest(fmt):
+                wi = self.complete(self.foreman(), lambda order_id: result_line(order_id, diff, fmt))
+                self.assertEqual((wi["activeWorkOrderId"], self.tree(wi["headSha"])), (None, workers_tree))
+                self.assertIn("- `app.py`: modified (+1 -1)", self.github.pulls[0]["body"])
+                git("push", "-q", "origin", "--delete", "factory/7", cwd=self.work)
 
     def test_failed_patch_is_an_attempt_and_the_next_goes_to_another_worker(self):
         foreman = self.foreman(workers=WORKERS)
         wi = foreman.tick(ID)["workItem"]
         self.assertEqual(self.relay.tasks[wi["providerTaskId"]]["agentId"], "codex")
-        result = json.loads(result_line(wi["activeWorkOrderId"], "x").splitlines()[-1])
-        del result["artifact"]
-        result["patch"] = {"format": "unified", "diff": "diff --git a/nope.py b/nope.py\nbroken\n"}
-        self.relay.finish(wi["providerTaskId"], output=json.dumps(result))
+        self.relay.finish(wi["providerTaskId"],
+                          output=result_line(wi["activeWorkOrderId"], "diff --git a/nope.py b/nope.py\nbroken\n"))
         wi = foreman.tick(ID)["workItem"]
         self.assertIn("patch not pushed: git apply failed", wi["attempts"][0])
         wi = foreman.tick(ID)["workItem"]
@@ -146,10 +128,7 @@ class WorkerTest(unittest.TestCase):
         diff = git("diff", "--cached", "origin/main", cwd=self.work) + "\n"
         foreman = self.foreman()
         wi = foreman.tick(ID)["workItem"]
-        result = json.loads(result_line(wi["activeWorkOrderId"], "x").splitlines()[-1])
-        del result["artifact"]
-        result["patch"] = {"format": "unified", "diff": diff}
-        self.relay.finish(wi["providerTaskId"], output=json.dumps(result))
+        self.relay.finish(wi["providerTaskId"], output=result_line(wi["activeWorkOrderId"], diff))
         wi = foreman.tick(ID)["workItem"]
         self.assertIn("changes protected path .github/workflows/x.yml", wi["attempts"][0])
         self.assertIsNone(self.github.branch_head(REPO, "factory/7"))

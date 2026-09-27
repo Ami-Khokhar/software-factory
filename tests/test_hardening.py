@@ -8,7 +8,7 @@ from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.server import make_server
 from factory_mcp.store import Store
-from tests.fakes import FakeGitHub, FakeRelay, result_line
+from tests.fakes import FakeGit, FakeGitHub, FakeRelay, result_line
 
 REPO, ID = "o/r", "o/r#7"
 
@@ -16,6 +16,7 @@ REPO, ID = "o/r", "o/r#7"
 class ForemanHardeningTest(unittest.TestCase):
     def setUp(self):
         self.github, self.relay = FakeGitHub(), FakeRelay()
+        FakeGit(self.github).install(self)
         self.github.add_issue(REPO, 7)
         self.foreman = Foreman(Store(":memory:"), self.github,
                                Config(mcp_token="t", repos=frozenset({REPO})), self.relay)
@@ -26,8 +27,7 @@ class ForemanHardeningTest(unittest.TestCase):
 
     def test_silent_gate_goes_to_a_person(self):
         wi = self.tick()
-        self.github.push(REPO, "factory/7", "c1")
-        self.relay.finish(wi["providerTaskId"], output=result_line(wi["activeWorkOrderId"], "c1"))
+        self.relay.finish(wi["providerTaskId"], output=result_line(wi["activeWorkOrderId"]))
         self.assertEqual(self.tick()["state"], "pr_open")
         self.assertEqual(self.tick()["state"], "pr_open")  # within the wait: nothing happens
         self.foreman.config = Config(mcp_token="t", repos=frozenset({REPO}), gate_wait_seconds=-1)

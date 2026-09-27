@@ -8,7 +8,7 @@ agent-relay starts this with the agent's args and the task input as the last arg
 The relay task's cwd is the persistent checkout of the WorkOrder's repo. It is never mounted into a
 container: each pass gets a fresh copy of it, and only the copy is mounted. The harness runs in a
 container that sees only that copy and a copy of the harness's model credential, so it holds no
-GitHub credential and cannot push (D6, ADR-0007). Host git never runs in a tree the harness could
+GitHub credential and cannot push (ADR-0017). Host git never runs in a tree the harness could
 have written, because hooks, config and filter drivers in `.git` would run on the host. Committing
 the harness's work and computing the patch happen in the sandbox, and so does the repo's own gate
 `verify` command, so the evidence is not the model's claim. factory-mcp pushes the patch.

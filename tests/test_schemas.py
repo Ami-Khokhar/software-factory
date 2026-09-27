@@ -18,6 +18,7 @@ from tests.fakes import marker_comment
 ROOT = Path(__file__).resolve().parent.parent
 ORDER = {"id": "o/r#7:r0:implement:a0", "requiredEvidence": ["tests-pass"]}
 PASSING = {"kind": "test", "command": "python3 -m unittest", "exit": 0, "tail": "OK"}
+PATCH = {"format": "unified", "diff": "diff --git a/app.py b/app.py"}
 
 
 def schema(name):
@@ -26,7 +27,7 @@ def schema(name):
 
 def result(**fields):
     doc = {"schemaVersion": "factory.result/v1", "workOrderId": ORDER["id"], "status": "completed",
-           "artifact": {"branch": "factory/7", "commitSha": "c1"}, "evidence": [PASSING],
+           "patch": PATCH, "evidence": [PASSING],
            "startedAt": "2026-09-24T00:00:00Z", "finishedAt": "2026-09-24T00:10:00Z"}
     doc.update(fields)
     return {key: value for key, value in doc.items() if value is not ...}
@@ -34,21 +35,19 @@ def result(**fields):
 
 # (case, Result, accepted). Each case varies one rule the schema states.
 CASES = [
-    ("a pushed branch", result(), True),
-    ("a unified patch", result(artifact=..., patch={"format": "unified", "diff": "diff --git a b"}), True),
-    ("an mbox patch with its base", result(artifact=..., patch={"format": "mbox", "diff": "From x",
-                                                                "baseSha": "b0"}), True),
-    ("completed with no artifact or patch", result(artifact=...), False),
-    ("an artifact without a commit", result(artifact={"branch": "factory/7"}), False),
-    ("an artifact with an unknown field", result(artifact={"branch": "factory/7", "commitSha": "c1",
-                                                           "filesChanged": ["app.py"]}), False),
-    ("a patch in an unknown format", result(artifact=..., patch={"format": "zip", "diff": "x"}), False),
-    ("a patch with an empty diff", result(artifact=..., patch={"format": "unified", "diff": ""}), False),
-    ("a patch with an unknown field", result(artifact=..., patch={"format": "unified", "diff": "d",
-                                                                   "stat": "1 file"}), False),
-    ("failed with its error", result(status="failed", artifact=..., error="verify exited 1"), True),
-    ("failed without an error", result(status="failed", artifact=...), False),
-    ("timed_out, a relay task status", result(status="timed_out", artifact=..., error="slow"), False),
+    ("a unified patch", result(), True),
+    ("an mbox patch with its base", result(patch={"format": "mbox", "diff": "From x", "baseSha": "b0"}), True),
+    ("completed with no patch", result(patch=...), False),
+    ("completed with a null patch", result(patch=None), False),
+    ("a pushed branch beside the patch, which is no handoff (ADR-0017)",
+     result(artifact={"branch": "factory/7", "commitSha": "c1"}), False),
+    ("a patch in an unknown format", result(patch={"format": "zip", "diff": "x"}), False),
+    ("a patch with an empty diff", result(patch=dict(PATCH, diff="")), False),
+    ("a patch with an unknown field", result(patch=dict(PATCH, stat="1 file")), False),
+    ("a patch that is not an object", result(patch="junk"), False),
+    ("failed with its error", result(status="failed", patch=..., error="verify exited 1"), True),
+    ("failed without an error", result(status="failed", patch=...), False),
+    ("timed_out, a relay task status", result(status="timed_out", patch=..., error="slow"), False),
     ("an unknown status", result(status="done"), False),
     ("an unknown field", result(relayTaskId="t1"), False),
     ("another schema version", result(schemaVersion="factory.result/v2"), False),
@@ -57,11 +56,11 @@ CASES = [
     ("evidence of an unknown kind", result(evidence=[dict(PASSING, kind="vibes")]), False),
     ("evidence with an unknown field", result(evidence=[dict(PASSING, seconds=3)]), False),
     ("an exit that is a boolean", result(evidence=[dict(PASSING, exit=False)]), False),
+    ("an exit of 0.0, which JSON counts as an integer", result(evidence=[dict(PASSING, exit=0.0)]), True),
+    ("failed, with evidence that is null",
+     result(status="failed", patch=..., error="crashed", evidence=None), False),
     ("a tail that is not text", result(evidence=[dict(PASSING, tail=5)]), False),
-    ("an artifact beside a patch that is not an object", result(patch="junk"), False),
-    ("a patch beside an artifact that is not an object",
-     result(artifact="x", patch={"format": "unified", "diff": "d"}), False),
-    ("an error that is not text", result(status="failed", artifact=..., error=7), False),
+    ("an error that is not text", result(status="failed", patch=..., error=7), False),
 ]
 
 

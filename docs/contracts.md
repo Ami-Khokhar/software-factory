@@ -24,7 +24,7 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
             │   (durable)   │  controller-owned, reconciled from GitHub facts
             └───────┬───────┘
         WorkOrder   │   ▲   Result
-        (to worker) │   │   (artifact handoff)
+        (to worker) │   │   (patch handoff)
                     ▼   │
             ┌───────────────┐
             │    Worker     │  any harness behind the agent-relay adapter
@@ -39,12 +39,13 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
 
 ## Design rules baked into the schemas
 
-- **The artifact is the handoff.** A `Result` with `status: completed` **must**
-  carry `artifact` (a pushed branch + commit) or `patch` (format + diff, which
-  is what `worker/runner.py` returns) and a passing test in its evidence. The
-  Result is the last JSON line of the relay task's output; the Foreman reads
-  nothing else the worker prints. This is what makes any harness that can
-  commit a first-class worker.
+- **The patch is the handoff (ADR-0017).** A `Result` with `status: completed`
+  **must** carry `patch` (format + diff, which `worker/runner.py` returns) and a
+  passing test in its evidence. factory-mcp pushes the patch itself, after it
+  refuses one that touches a protected path; a worker never pushes. The Result is
+  the last JSON line of the relay task's output; the Foreman reads nothing else
+  the worker prints. This is what makes any harness that can commit a
+  first-class worker.
 - **`Verdict.headSha` is mandatory.** A verdict only applies to the exact commit
   it names. Acting on an older SHA is the stale-review bug, so it is
   structurally rejectable.
