@@ -69,7 +69,7 @@ One deliverable issue maps to one branch and one PR. Keep it within 600 changed 
 
 ## Make Hermes the front door
 
-The repo packages Day Desk's Hermes profile; it does not install the Hermes runtime, create a Telegram bot, or choose a model for you. With the Hermes CLI and Telegram bot ready, follow these commands from the [runbook](RUNBOOK.md#day-desk-the-factory-in-telegram-hermes):
+The repo packages Day Desk's Hermes profile; it does not install the Hermes runtime, create a Telegram bot, or choose a model for you. With the Hermes CLI and Telegram bot ready, follow these commands from the [runbook](RUNBOOK.md):
 
 ### Hermes features to configure
 
