@@ -92,6 +92,7 @@ class RunnerTest(unittest.TestCase):
                     "seconds": seconds,
                     "env": env,
                     "credential": credential.read_text(),
+                    "settings": (credential.parent / "settings.json").read_text(),
                     "directory_mode": credential.parent.stat().st_mode & 0o777,
                     "credential_mode": credential.stat().st_mode & 0o777,
                 })
@@ -138,7 +139,7 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(documents.check_result(result, order), [])
         self.assertEqual((self.apply_on(self.base, result["patch"]["diff"]) / "app.txt").read_text(), "fixed\n")
 
-    def test_harness_gets_private_freebuff_credentials_and_its_budget(self):
+    def test_harness_gets_private_freebuff_credentials_forced_model_and_its_budget(self):
         result, _ = self.run_order("fix")
         self.assertEqual(result["status"], "completed", result.get("error"))
         self.assertEqual(len(self.harness_runs), 1)
@@ -146,7 +147,9 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(run["argv"][:-1], [sys.executable, str(self.harness), "fix"])
         self.assertEqual(run["argv"][-1].splitlines()[0], "You are a factory worker. Carry out the WorkOrder below in this checkout of o/r.")
         self.assertEqual(run["env"], {"FREEBUFF_TIMEOUT_SECONDS": "783"})
-        self.assertEqual((run["credential"], run["directory_mode"], run["credential_mode"]), ("{}", 0o700, 0o600))
+        self.assertEqual((run["credential"], json.loads(run["settings"]), run["directory_mode"],
+                          run["credential_mode"]),
+                         ("{}", {"freebuffModel": "z-ai/glm-5.3-flash"}, 0o700, 0o600))
 
     def test_uncommitted_work_is_collected(self):
         result, _ = self.run_order("nocommit")
@@ -208,16 +211,19 @@ class RunnerTest(unittest.TestCase):
 
 
 class SandboxTest(unittest.TestCase):
-    def test_freebuff_config_mount_uses_the_host_user_and_writable_home(self):
+    def test_every_sandbox_command_uses_the_host_user_and_writable_home(self):
         with mock.patch.object(runner.subprocess, "run", return_value=SimpleNamespace(
                 returncode=0, stdout="", stderr="")) as run:
             sandbox = runner.Sandbox("image", "/private/credentials", "label")
             sandbox.run(["freebuff"], 10, "/private/work", with_agent_dir=True)
-        command = run.call_args.args[0]
-        self.assertIn("--user", command)
-        self.assertIn(f"{os.getuid()}:{os.getgid()}", command)
-        self.assertIn(f"/private/credentials:{runner.CONTAINER_CONFIG_DIR}", command)
-        self.assertIn(f"HOME={runner.CONTAINER_HOME}", command)
+            sandbox.run(["sh", "-c", "git diff"], 10, "/private/work")
+        harness, collect = (call.args[0] for call in run.call_args_list)
+        for command in (harness, collect):
+            self.assertIn("--user", command)
+            self.assertIn(f"{os.getuid()}:{os.getgid()}", command)
+            self.assertIn(f"HOME={runner.CONTAINER_HOME}", command)
+        self.assertIn(f"/private/credentials:{runner.CONTAINER_CONFIG_DIR}", harness)
+        self.assertNotIn(f"/private/credentials:{runner.CONTAINER_CONFIG_DIR}", collect)
 
 
 class EnsureDockerTest(unittest.TestCase):

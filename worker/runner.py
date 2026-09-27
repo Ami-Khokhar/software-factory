@@ -36,6 +36,7 @@ git diff --binary "$FACTORY_BASE" HEAD
 """
 MAX_PATCH_BYTES = 2_000_000
 FREEBUFF_CREDENTIALS = os.path.expanduser("~/.config/manicode/credentials.json")
+FREEBUFF_SETTINGS = {"freebuffModel": "z-ai/glm-5.3-flash"}
 CONTAINER_CONFIG_DIR = "/home/node/.config/manicode"
 CONTAINER_HOME = "/tmp/factory-home"
 
@@ -151,12 +152,13 @@ class Sandbox:
         cmd = ["docker", "run", "--rm", "--init", "--name", name, "--label", f"factory-worker={self.label}",
                "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "1024",
                "--memory", "6g", "--cpus", "4", "-v", f"{mount}:/work", "-w", "/work"]
+        # All phases modify or inspect the host-owned work copy. The scratch home is mode 1777
+        # in the image, so this UID can also create tool state without using the host's HOME.
+        cmd += ["--user", f"{os.getuid()}:{os.getgid()}", "-e", f"HOME={CONTAINER_HOME}"]
         if with_agent_dir:
             # The 0600 credential copy is in a 0700 scratch dir owned by the host user. Match
             # that owner so the harness can read it inside the container.
-            cmd += ["--user", f"{os.getuid()}:{os.getgid()}",
-                    "-v", f"{self.agent_dir}:{CONTAINER_CONFIG_DIR}",
-                    "-e", f"HOME={CONTAINER_HOME}"]
+            cmd += ["-v", f"{self.agent_dir}:{CONTAINER_CONFIG_DIR}"]
         for key, value in (env or {}).items():
             cmd += ["-e", f"{key}={value}"]
         # `timeout` inside the container ends it on its own if this process is killed first.
@@ -218,8 +220,12 @@ def main(argv=None):
             raise WorkerError(f"no model credential at {FREEBUFF_CREDENTIALS}")
         os.mkdir(agent_dir, 0o700)
         credentials = os.path.join(agent_dir, "credentials.json")
+        settings = os.path.join(agent_dir, "settings.json")
         shutil.copyfile(FREEBUFF_CREDENTIALS, credentials)
         os.chmod(credentials, 0o600)
+        with open(settings, "w") as stream:
+            json.dump(FREEBUFF_SETTINGS, stream)
+        os.chmod(settings, 0o600)
         seconds = max(120, order["budget"]["wallMs"] // 1000 - 60)
         ensure_docker()
         sandbox = Sandbox(args.image, agent_dir, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]))

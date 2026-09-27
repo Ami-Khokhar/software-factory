@@ -86,16 +86,17 @@ What the design does not protect against:
 - **An unprotected `main`.** Nothing in the factory pushes to `main`, but branch protection is the
   independent backstop (ADR-0008). Turn it on where your plan allows it.
 
-## Adding a repo
-
-### Freebuff worker
+## Freebuff worker
 
 Sign in with `freebuff` on the owner machine first. The worker runner copies only
 `~/.config/manicode/credentials.json` into each disposable container; it never mounts the host's
-Freebuff sessions or GitHub credential. Build the image with
+Freebuff sessions or GitHub credential. It creates a scratch `settings.json` that pins
+`z-ai/glm-5.3-flash`, regardless of the host's Freebuff default. The harness, patch collection,
+and verification run as the same host UID with a writable container-only HOME. Build the image with
 `docker build -t factory-worker:latest worker/`. The image pins Freebuff 0.0.203 and uses GLM 5.3
 Flash. Later, `factory update` rebuilds the image when `worker/Dockerfile` or `worker/freebuff.py`
-changes. In `~/.config/agent-relay/agents.json`, register a command agent like this (replace the
+changes. A live container pass on macOS host UID 501 produced a patch and passed the base verify
+command. In `~/.config/agent-relay/agents.json`, register a command agent like this (replace the
 two host paths):
 
 ```json
@@ -118,6 +119,8 @@ CLI mode in this version. The adapter drives its terminal UI and requires its lo
 `Main prompt finished` log entry for the submitted task. If that interaction changes, the pass
 fails and the WorkItem follows the usual retry/block path. The runner still requires a patch and
 passes the repo's base-commit `verify` command before factory-mcp pushes anything.
+
+## Adding a repo
 
 The repo needs pr-gatekeeper with working secrets, a `.github/pr-gatekeeper.json` with a `verify`
 command, and an `AGENTS.md` that carries the factory standard (ADR-0015): copy `templates/AGENTS.md`

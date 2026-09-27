@@ -94,6 +94,15 @@ class FreebuffHarnessTest(unittest.TestCase):
         with self.assertRaisesRegex(freebuff.HarnessError, "authentication, payment, or permission"):
             pty._check_prompts("Authentication required")
 
+    def test_tool_output_after_composer_does_not_trigger_login_guard(self):
+        pty = object.__new__(freebuff.FreebuffPty)
+        pty.output = ""
+        pty.declined_repo_prompt = False
+        pty.check_prompts = False
+        pty.write = mock.Mock()
+        pty._check_prompts("test output: Permission denied")
+        pty.write.assert_not_called()
+
     def test_large_multiline_prompt_is_written_without_truncation(self):
         prompt = "first line\n" + "x" * 20_000 + "\nlast line"
         with mock.patch.object(freebuff, "FREEBUFF", str(self.command)), \

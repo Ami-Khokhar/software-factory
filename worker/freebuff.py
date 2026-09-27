@@ -86,6 +86,7 @@ class FreebuffPty:
         self.master = master
         self.output = ""
         self.declined_repo_prompt = False
+        self.check_prompts = True
 
     def write(self, text, deadline=None):
         data, written = text.encode(), 0
@@ -131,6 +132,8 @@ class FreebuffPty:
         self.close()
 
     def _check_prompts(self, chunk):
+        if not getattr(self, "check_prompts", True):
+            return
         recent = (self.output[-4000:] + chunk).lower()
         normalized = re.sub(r"\s+", " ", recent)
         load_prompt = ("load and run these? [y/n]" in normalized or
@@ -204,6 +207,7 @@ def run(prompt, timeout, source_home=None):
         print("factory-freebuff: GLM picker ready", file=sys.stderr, flush=True)
         process.write("\r", deadline)
         process.wait_for("Enter a coding task or / for commands", deadline)
+        process.check_prompts = False
         print("factory-freebuff: composer ready", file=sys.stderr, flush=True)
         process.write("\x1b[200~" + prompt + "\x1b[201~", deadline)
         time.sleep(INPUT_SETTLE_SECONDS)  # Freebuff needs the composer update before Enter submits it.
