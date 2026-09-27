@@ -11,9 +11,9 @@ Three checks:
    `foreman.py` next to its section for `factory_mcp/foreman.py`.
 2. Every relative Markdown link in AGENTS.md, README.md and docs/*.md
    resolves, relative to the file that carries it.
-3. No source file is longer than the limit (default 800 lines). Files that
-   git ignores, files under vendor/ and node_modules/, and lock files are
-   skipped.
+3. No tracked text file is longer than the limit (default 800 lines). Files
+   that git ignores, files under vendor/ and node_modules/, and lock files
+   are skipped.
 
 Prints one `path:line: problem` line per problem and exits 1 when there is at
 least one; prints nothing and exits 0 when the repository is clean.
@@ -36,7 +36,7 @@ LOCK_NAMES = {
     "go.sum",
 }
 BACKTICK = re.compile(r"`([^`\n]+)`")
-LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
+LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)(?:\s+[\"'][^\"']*[\"'])?\)")
 EXTENSION = re.compile(r"\.[A-Za-z0-9]+$")
 
 # What counts as "ends in a file extension" for the backtick check. Anything
@@ -177,7 +177,7 @@ def link_problems(root: str) -> list:
 
 
 def long_file_problems(root: str, limit: int) -> list:
-    """Check 3: source files longer than the line limit."""
+    """Check 3: tracked text files longer than the line limit."""
     problems = []
     for rel in repo_files(root):
         try:
@@ -206,7 +206,7 @@ def main(argv=None) -> int:
     )
     parser.add_argument(
         "--limit", type=int, default=LINE_LIMIT,
-        help="maximum lines per source file (default %d)" % LINE_LIMIT,
+        help="maximum lines per tracked text file (default %d)" % LINE_LIMIT,
     )
     args = parser.parse_args(argv)
     root = os.getcwd()

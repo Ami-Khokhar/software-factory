@@ -1,5 +1,6 @@
 """Tests for templates/repo_lint.py: the drift guard, run from temp directories."""
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -34,6 +35,7 @@ def git(root, *args):
 class RepoLintTest(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix="repo-lint-")
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
 
     def test_a_missing_path_is_reported_with_its_line(self):
         write(self.root, "AGENTS.md",
@@ -43,6 +45,19 @@ class RepoLintTest(unittest.TestCase):
         self.assertIn(
             "AGENTS.md:3: path `docs/nope.md` does not exist", proc.stdout
         )
+
+    def test_a_titled_broken_link_is_reported(self):
+        write(self.root, "README.md", '# README\n\n[guide](missing.md "T")\n')
+        proc = run_lint(self.root)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("README.md:3: broken link: missing.md", proc.stdout)
+
+    def test_a_module_reference_is_not_a_path(self):
+        write(self.root, "AGENTS.md",
+              "# AGENTS.md\n\n`patches.apply` signs the patch. Run `factory`.\n")
+        proc = run_lint(self.root)
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(proc.stdout, "")
 
     def test_a_broken_link_is_reported_with_its_line(self):
         write(self.root, "README.md", "# README\n\n[guide](missing.md)\n")
