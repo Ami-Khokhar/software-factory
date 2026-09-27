@@ -275,10 +275,12 @@ class Foreman:
             return wi
         if task["status"] != "completed":
             return self.fail(wi, order, f"{task['agentId']}: task {task['status']}: {task.get('error')}")
+        # The runner prints its Result last, so a truncation cut it off, and any Result line left is one
+        # the harness printed
+        if task.get("outputTruncated"):
+            return self.fail(wi, order, f"{task['agentId']}: the relay truncated the output, so the "
+                             "Result line is lost; raise AGENT_RELAY_MAX_OUTPUT_BYTES or quiet the harness")
         result = documents.parse_result(task.get("output"))
-        if result is None and task.get("outputTruncated"):
-            return self.fail(wi, order, f"{task['agentId']}: the relay truncated the output before "
-                             "the Result line; raise AGENT_RELAY_MAX_OUTPUT_BYTES or quiet the harness")
         errors = documents.check_result(result, order)
         if not errors and result["status"] != "completed":
             errors = [f"worker reported {result['status']}: {result.get('error')}"]

@@ -161,6 +161,8 @@ owner's decision (ADR-0006).
 | The budget ends a WorkItem | `Foreman.dispatch` | `test_actions`: `test_budget_exhausts` |
 | The harness never touches the host | `worker/runner.py` | `test_worker_runner`: `test_the_harness_gets_a_copy_and_never_the_checkout`, `test_hooks_and_filters_the_harness_plants_never_run_on_the_host` |
 | `verify` is the base commit's, not the worker's | `worker/runner.py` | `test_worker_runner`: `test_verify_comes_from_the_base_commit` |
+| A truncated output yields no Result: the runner's comes last | `Foreman.poll` | `test_hardening`: `test_a_result_line_left_in_a_truncated_output_is_not_read` |
+| The protected-path check sees the whole patch, whatever its base is called | `patches.apply` | `test_workers`: `test_a_protected_path_is_refused_whatever_name_the_base_has` |
 | Every write tool waits for the owner in Hermes | `tools.py`, `tenant/hermes/config.yaml` | `test_mcp_server`: `test_every_tool_declares_whether_it_writes`; `test_hermes`: `test_day_desk_sees_the_tools_it_needs_and_asks_before_each_write` |
 
 ## Glossary
