@@ -241,3 +241,23 @@ workers to follow it (#34).
 **Consequence.** One place improves how code is written, for people, coding agents and workers
 alike. Changing the standard means changing the template, then copying the block into each repo;
 AGENTS.md is a protected path, so a person merges each copy.
+
+---
+
+## ADR-0016 — Freebuff is the factory's coding worker
+
+**Context.** The owner wants GLM 5.3 Flash through Freebuff for worker passes. Freebuff 0.0.203
+has a terminal UI but no noninteractive task/result command, while agent-relay needs a bounded
+command and the factory needs a trustworthy Result.
+
+**Decision.** The relay runs `worker/runner.py` with `worker/freebuff.py` as its only configured
+coding harness. The runner gives a disposable container a fresh repository copy and a private
+copy of Freebuff's login credential. The adapter selects GLM 5.3 Flash, sends the WorkOrder through
+Freebuff's terminal UI, and accepts completion only when the new session log records its request
+and `Main prompt finished`. The runner then collects the patch and runs the base commit's verify
+command. A changed UI or missing completion marker fails the pass.
+
+**Consequence.** The model provider and UI remain outside the deterministic Foreman and gate.
+Freebuff's terminal UI and log are a version-specific integration boundary; the image pins its
+version, tests cover the terminal protocol, and a live container pass must be checked after an
+upgrade.

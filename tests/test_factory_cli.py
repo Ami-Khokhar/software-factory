@@ -67,6 +67,14 @@ class UpdateTest(unittest.TestCase):
         cli.cmd_update([])  # nothing new: no restart
         self.assertEqual(len(self.restarts), 1)
 
+    def test_a_freebuff_adapter_update_rebuilds_the_worker_image(self):
+        self.commit("worker/freebuff.py", "# adapter update\n")
+        git(self.dev, "push", "-q", "origin", "HEAD:main")
+        with mock.patch.object(cli, "run") as run:
+            cli.cmd_update([])
+        run.assert_called_once_with(
+            "docker", "build", "-q", "-t", "factory-worker:latest", str(self.deploy / "worker"))
+
     def test_a_failing_commit_is_not_deployed(self):
         old = self.head()
         self.commit("tests/test_ok.py", PASS.replace("True)", "False)"))
