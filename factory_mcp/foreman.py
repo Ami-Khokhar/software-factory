@@ -108,7 +108,7 @@ class Foreman:
         return {"repo": repo, "added": added, "checkout": checkout}
 
     def rebuild(self):
-        """Intake every open `factory:ready` issue the store does not know (D8: GitHub is the truth)."""
+        """Intake every open `factory:ready` issue the store does not know (ADR-0009: GitHub is the truth)."""
         found = []
         for repo in sorted(self.config.repos):
             for issue in self.github.labelled_issues(repo, workitem.READY):
@@ -196,7 +196,7 @@ class Foreman:
     def act(self, wi, facts):
         if wi["state"] == "ready":  # a retry says why the last attempt failed, or what a person said
             return self.dispatch(wi, "implement", self._human_findings(wi) + self._attempt_findings(wi))
-        if wi["state"] == "changes_requested":  # findings travel as data (D6)
+        if wi["state"] == "changes_requested":  # findings travel as data (ADR-0007)
             findings = [{key: f[key] for key in ("fingerprint", "path", "line", "problem")}
                         for f in (blocking(facts["verdicts"][-1]) if facts["verdicts"] else [])]
             return self.dispatch(wi, "fix", findings + self._human_findings(wi) + self._attempt_findings(wi))
@@ -347,7 +347,7 @@ class Foreman:
         return self._write(wi, new, "attempt_failed", reason=reason, worker=wi.get("worker"))
 
     def resolve_human(self, workitem_id, resolution, note, by):
-        """A person's answer to human_waiting or blocked (D5): retry, regate or close."""
+        """A person's answer to human_waiting or blocked (ADR-0006): retry, regate or close."""
         if not self.store.acquire(workitem_id, self.holder):
             raise ToolError(f"{workitem_id} is being ticked; try again")
         try:

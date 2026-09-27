@@ -10,7 +10,7 @@ production. The harness plays pr-gatekeeper: one CHANGES round, then MERGE.
     python3 scripts/rehearsal.py /path/to/agent-relay [--lose-store]
 
 --lose-store kills factory-mcp and deletes its SQLite file once the PR is open, so the rest of
-the run depends on rebuilding from GitHub (D8).
+the run depends on rebuilding from GitHub (ADR-0009).
 """
 import json
 import os

@@ -13,7 +13,7 @@ TERMINAL = frozenset({"closed", "cancelled", "exhausted"})
 # The Foreman owns these: a worker is running, or a human holds the WorkItem.
 BUSY = frozenset({"dispatching", "implementing", "human_waiting", "blocked"})
 OUTCOME_STATE = {"MERGE": "merge_pending", "CHANGES": "changes_requested", "HUMAN": "human_waiting"}
-# Gate rounds one problem may be reported in before a human takes it (D4, ADR-0005).
+# Gate rounds one problem may be reported in before a human takes it (ADR-0005).
 ROUNDS_PER_PROBLEM = 2
 # terminalReason of a PR merged without a MERGE verdict on its head (contracts, obligation 5).
 UNGATED = "merged without a pr-gatekeeper MERGE verdict on"
@@ -120,7 +120,7 @@ def reconcile(wi, facts):
         wi.update(prNumber=pr["number"], headSha=pr["headSha"])
         if pr["merged"]:
             wi["state"] = "closed" if issue["state"] == "closed" else "merged"
-            if not gated(facts):  # a person merged it: a fact, but not the gate's decision (D3)
+            if not gated(facts):  # a person merged it: a fact, but not the gate's decision (ADR-0004)
                 wi["terminalReason"] = f"{UNGATED} {pr['headSha']}"
             return wi
     if issue["state"] == "closed":

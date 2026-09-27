@@ -1,4 +1,4 @@
-"""Which worker takes the next attempt (D12): locality first, then one that has not failed here."""
+"""Which worker takes the next attempt (ADR-0011): locality first, then one that has not failed here."""
 
 
 def route(workers, local_only, failed):

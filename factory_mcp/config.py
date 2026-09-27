@@ -40,7 +40,7 @@ class Config:
         return str(Path(self.checkout_root, *repo.split("/"))) if self.checkout_root else None
 
     def trusts(self, repo, author):
-        """Issue text reaches a worker only when a trusted person wrote it (D6). GitHub logins
+        """Issue text reaches a worker only when a trusted person wrote it (ADR-0007). GitHub logins
         ignore case."""
         trusted = self.trusted_authors or {repo.split("/")[0]}
         return (author or "").lower() in {login.lower() for login in trusted}
