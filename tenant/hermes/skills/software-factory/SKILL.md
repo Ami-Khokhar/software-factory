@@ -67,6 +67,21 @@ A factory-watch alert names a WorkItem that waits on the owner. When the owner r
 3. Call factory_resolve_human with the id, the choice, the owner's own words as the note, and the
    owner's name as `by`. Never choose for the owner.
 
+## Teach the factory a lesson
+
+A lesson is a gate finding the factory saw on two or more WorkItems in one repo, recorded in
+the factory's lessons file with the owner's words. Only the owner approves one. Workers do not see
+lessons yet; say so if the owner asks.
+
+1. Call factory_lessons with the repo. Show each candidate with its problem, its fingerprint and
+   how many WorkItems it blocked, then the lessons already approved.
+2. If the owner picks a candidate, ask how they want the worker to read it: one line, at most 300
+   characters. Do not write the text for them.
+3. Call factory_approve_lesson with the repo, the fingerprint, the owner's own words as `text`, and
+   the owner's name as `by`. If it refuses, give the reason word for word.
+4. To stop a lesson, call factory_retire_lesson with the repo, its fingerprint and the owner's
+   name as `by`.
+
 ## Never
 
 - Merge a PR, add or remove a label, or push to a `factory/*` branch. The gate merges, and

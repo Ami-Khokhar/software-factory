@@ -323,3 +323,26 @@ The bootstrap tool never merges, and ordinary worker patches still cannot touch 
 
 **Consequence.** The owner no longer authors boilerplate, while the first change to a repo's
 authority remains a human merge. Gate Actions secrets still need to be configured for that repo.
+
+---
+
+## ADR-0020 — Lessons are owner-approved data; code finds the candidates
+
+**Context.** Each WorkItem starts from nothing. When the gate blocks two WorkItems in one repo on
+the same problem (say, "the new endpoint has no test for its 401 path"), the audit log holds both
+verdicts, but nothing reads it to help the next WorkItem. Gate findings are model text (ADR-0007),
+so passing them on to later workers unreviewed would be a prompt-injection path into every one.
+
+**Decision.** The reconcile audit entry keeps the blocking findings of the verdict it accepts.
+`lessons.candidates` groups them by fingerprint (ADR-0005) and offers each one the gate reported
+on two or more WorkItems of one repo. Only a person turns a candidate into a lesson:
+`factory_approve_lesson`, with the owner's wording (one line, at most 300 characters) and name.
+Approved lessons live in `lessons.json` (`FACTORY_LESSONS_FILE`; `factory serve` uses
+`~/.config/factory-mcp/lessons.json`), next to `repos.json` and for the same reason (ADR-0014): a
+file a person can read and edit. `factory_retire_lesson` removes one. A model never approves a
+lesson, and a fingerprint that is not a candidate is refused.
+
+**Consequence.** The factory can remember across WorkItems with no new table and no dependency,
+and every lesson has a named approver. A finding the gate saw on one WorkItem never becomes a
+lesson. When WorkOrders carry lessons, they stay data under the worker rules, like
+`findingsToAddress`.

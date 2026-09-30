@@ -1,5 +1,5 @@
 """The factory tools that Day Desk (Hermes) and the factory CLI call. Each one declares its effect."""
-from . import metrics, repos
+from . import lessons, metrics, repos
 from .mcp import Tool, ToolError
 
 
@@ -26,6 +26,19 @@ def build(store, foreman):
         checks = repos.check(foreman.github, repo)
         return {"repo": repo, "enabled": foreman.config.listed(repo) is not None,
                 "ready": all(c["ok"] for c in checks), "checks": checks}
+
+    def show_lessons(args):
+        repo = args["repo"]
+        if foreman.config.listed(repo) is None:
+            raise ToolError(f"{repo} is not in FACTORY_REPOS or repos.json")
+        repo = foreman.config.listed(repo)
+        if not foreman.config.lessons_file:
+            raise ToolError("FACTORY_LESSONS_FILE is not set, so the factory keeps no lessons")
+        try:
+            approved = lessons.for_repo(lessons.load(foreman.config.lessons_file), repo)
+        except ValueError as exc:
+            raise ToolError(str(exc)) from None
+        return {"repo": repo, "candidates": lessons.candidates(store, repo), "lessons": approved}
 
     tools = [
         Tool("factory_status",
@@ -100,5 +113,35 @@ def build(store, foreman):
               "properties": {"repo": {"type": "string"}, "title": {"type": "string", "minLength": 1},
                              "body": {"type": "string", "minLength": 1}}},
              "write", lambda args: foreman.propose_issue(args["repo"], args["title"], args["body"])),
+        Tool("factory_lessons",
+             "Show what the factory learned about one repo: the blocking gate findings that "
+             "recurred on two or more WorkItems (candidates), and the lessons the owner approved "
+             "for its WorkOrders. Changes nothing.",
+             {"type": "object", "required": ["repo"], "additionalProperties": False,
+              "properties": {"repo": {"type": "string", "description": "owner/repo"}}},
+             "read", show_lessons),
+        Tool("factory_approve_lesson",
+             "A person's go on one lesson for a repo: the factory records it in lessons.json with "
+             "who approved it; a later change passes a repo's lessons to its workers. The "
+             "fingerprint must be a candidate from factory_lessons; the text is what the worker "
+             "should read (capped at 300 characters). Approving the same fingerprint again for "
+             "the repo is refused.",
+             {"type": "object", "required": ["repo", "fingerprint", "text", "by"],
+              "additionalProperties": False,
+              "properties": {"repo": {"type": "string", "description": "owner/repo"},
+                             "fingerprint": {"type": "string", "minLength": 1},
+                             "text": {"type": "string", "minLength": 1},
+                             "by": {"type": "string", "minLength": 1, "description": "who approved"}}},
+             "write", lambda args: foreman.approve_lesson(
+                 args["repo"], args["fingerprint"], args["text"], args["by"])),
+        Tool("factory_retire_lesson",
+             "A person's no on one lesson: remove it from the repo's lessons in lessons.json, for "
+             "instance because it no longer helps or because the repo's own AGENTS.md now carries "
+             "it. Refused when the fingerprint is not a lesson in the repo.",
+             {"type": "object", "required": ["repo", "fingerprint", "by"], "additionalProperties": False,
+              "properties": {"repo": {"type": "string", "description": "owner/repo"},
+                             "fingerprint": {"type": "string", "minLength": 1},
+                             "by": {"type": "string", "minLength": 1, "description": "who retired it"}}},
+             "write", lambda args: foreman.retire_lesson(args["repo"], args["fingerprint"], args["by"])),
     ]
     return {tool.name: tool for tool in tools}

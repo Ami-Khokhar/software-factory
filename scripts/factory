@@ -302,6 +302,7 @@ def cmd_update(_):
 def cmd_serve(_):
     env = service_env()
     env.setdefault("FACTORY_REPOS_FILE", str(CONFIG / "repos.json"))
+    env.setdefault("FACTORY_LESSONS_FILE", str(CONFIG / "lessons.json"))
     if not env.get("FACTORY_MCP_TOKEN"):
         die(f"no FACTORY_MCP_TOKEN in {CONFIG / 'secrets'}")
     if not env.get("FACTORY_GITHUB_TOKEN"):
