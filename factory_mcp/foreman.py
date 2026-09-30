@@ -5,7 +5,7 @@ import os
 import time
 import uuid
 
-from . import documents, lessons, patches, repos, routing, workitem
+from . import documents, gate_secrets, lessons, patches, repos, routing, workitem
 from .github import GitHubError
 from .mcp import ToolError
 from .relay import RelayError
@@ -117,20 +117,20 @@ class Foreman:
             raise ToolError(str(exc)) from None
         repo, files = plan["repo"], plan["files"]
         if not files:
-            return {"repo": repo, "ready": True, "needsHumanMerge": False, "prNumber": None}
+            return {"repo": repo, "ready": True, "needsHumanMerge": False, "prNumber": None,
+                    "secrets": self._gate_secrets(repo, by)}
         branch = "factory-bootstrap/" + plan["fingerprint"][:16]
-        response = {"repo": repo, "ready": False, "needsHumanMerge": True,
-                    "changedPaths": sorted(files), "requiredSecrets": [
-                        "OPENCODE_GO_API_KEY", "GATEKEEPER_READ_TOKEN"]}
+        response = {"repo": repo, "ready": False, "needsHumanMerge": True, "changedPaths": sorted(files)}
         existing = next((pr for pr in self.github.pulls_for_branch(repo, branch)
                          if pr["state"] == "open"), None)
-        if existing:
-            return dict(response, prNumber=existing["number"],
+        if existing:  # a retry: sets a secret the owner has added to the Keychain since
+            return dict(response, prNumber=existing["number"], secrets=self._gate_secrets(repo, by),
                         url=existing.get("html_url") or f"https://github.com/{repo}/pull/{existing['number']}")
         if self.github.branch_head(repo, plan["default_branch"]) != plan["base_sha"]:
             raise ToolError(f"{repo}'s default branch changed during bootstrap; check the repo and try again")
         if self.github.branch_head(repo, branch):
             raise ToolError(f"bootstrap branch {branch} exists without an open PR; a person must inspect it")
+        secrets = response["secrets"] = self._gate_secrets(repo, by)  # after the refusals: they write nothing
         initial = None
         if plan["base_sha"] is None:  # an empty repo: only a README goes straight to the default branch
             try:
@@ -160,8 +160,9 @@ class Foreman:
             "## What changed", "", *(f"- `{path}`: install the missing factory control" for path in paths), "",
             "## Proof of work", "", "```text",
             f"$ git diff --name-only --no-renames -z {plan['base_sha']} HEAD", *paths, "```", "",
-            "After the owner merges: confirm the repo has OPENCODE_GO_API_KEY and GATEKEEPER_READ_TOKEN "
-            "Actions secrets, then ask Day Desk to check and enable the repo.", "",
+            "The factory set the gate's Actions secrets from the owner's Keychain:",
+            *(f"- `{item['name']}`: {item['status']}" for item in secrets), "",
+            "After the owner merges: ask Day Desk to check and enable the repo.", "",
         ])
         try:
             pr = self.github.create_pull(repo, branch, plan["default_branch"],
@@ -176,6 +177,12 @@ class Foreman:
                                         "paths": paths, "prNumber": pr["number"], "initialCommit": initial})
         return dict(response, prNumber=pr["number"],
                     url=pr.get("html_url") or f"https://github.com/{repo}/pull/{pr['number']}")
+
+    def _gate_secrets(self, repo, by):
+        """Set the repo's missing gate secrets from the Keychain; log only names and statuses."""
+        secrets = gate_secrets.ensure(repo, self.config.github_token)
+        self.store.log("bootstrap_secrets", {"repo": repo, "by": by, "secrets": secrets})
+        return secrets
 
     def rebuild(self):
         """Intake every open `factory:ready` issue the store does not know (ADR-0009: GitHub is the truth)."""

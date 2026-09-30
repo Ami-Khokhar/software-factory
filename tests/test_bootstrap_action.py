@@ -1,4 +1,6 @@
 """The owner-approved repo bootstrap prepares a setup PR, never merges controls."""
+import json
+import subprocess
 import unittest
 from unittest import mock
 
@@ -10,13 +12,51 @@ from factory_mcp.repos import GATE_CONFIG, GATE_WORKFLOW, TEMPLATE
 from factory_mcp.store import Store
 from tests.fakes import FakeGitHub, FakeRelay
 
+KEY, READ = "opencode-value-7f3a", "read-token-value-91c2"  # test stand-ins, never real secrets
+
+
+class FakeSecretCommands:
+    """subprocess.run for `security` and `gh secret`: a login Keychain and the repo's secret names."""
+
+    def __init__(self):
+        self.keychain = {}  # service name -> value
+        self.secrets = set()  # secret names on the repo
+        self.calls = []  # (argv, stdin, env) of every command run
+        self.failing = {}  # argv[:3] -> (exit code, stderr) that command returns instead
+
+    def __call__(self, argv, input=None, env=None, capture_output=False, text=False, timeout=None):
+        self.calls.append((list(argv), input, env))
+
+        def done(code, out="", err=""):
+            return subprocess.CompletedProcess(argv, code, out, err)
+
+        if tuple(argv[:3]) in self.failing:
+            code, err = self.failing[tuple(argv[:3])]
+            return done(code, "", err)
+        if argv[:2] == ["security", "find-generic-password"]:
+            service = argv[argv.index("-s") + 1]
+            if service in self.keychain:
+                return done(0, self.keychain[service] + "\n")
+            return done(44, "", "security: The specified item could not be found in the keychain.\n")
+        if argv[:3] == ["gh", "secret", "list"]:
+            return done(0, json.dumps([{"name": name} for name in sorted(self.secrets)]))
+        if argv[:3] == ["gh", "secret", "set"]:
+            self.secrets.add(argv[3])
+            return done(0)
+        raise AssertionError(f"unexpected command {argv}")
+
 
 class BootstrapActionTest(unittest.TestCase):
     def setUp(self):
         self.github = FakeGitHub()
         self.foreman = Foreman(Store(":memory:"), self.github,
-                               Config(mcp_token="t", repos=frozenset(), git_url="https://github.com/{repo}.git"),
+                               Config(mcp_token="t", repos=frozenset(), git_url="https://github.com/{repo}.git",
+                                      github_token="factory-token"),
                                FakeRelay())
+        self.commands = FakeSecretCommands()  # no test runs the real security or gh
+        patch = mock.patch("factory_mcp.gate_secrets.subprocess.run", side_effect=self.commands)
+        patch.start()
+        self.addCleanup(patch.stop)
         self.pushed = []
 
         def push(url, token, branch, base_sha, files, message):
@@ -111,7 +151,126 @@ class BootstrapActionTest(unittest.TestCase):
         with mock.patch.object(self.github, "branch_head", side_effect=moving_head):
             with self.assertRaisesRegex(ToolError, "changed"):
                 self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
-        self.assertEqual((self.pushed, self.github.pulls), ([], []))
+        self.assertEqual((self.pushed, self.github.pulls, self.commands.calls), ([], [], []))
+
+    def secret_status(self, result):
+        return {item["name"]: item["status"] for item in result["secrets"]}
+
+    def written_text(self, result):
+        """Everything the bootstrap handed out or wrote: its result, the audit log, the PR body."""
+        audit = [json.dumps(call.args) for call in self.log.call_args_list]
+        return "\n".join([json.dumps(result), *audit, *(pr["body"] for pr in self.github.pulls)])
+
+    def test_keychain_secrets_go_to_gh_on_stdin_and_only_names_are_reported(self):
+        self.commands.keychain = {"software-factory/OPENCODE_GO_API_KEY": KEY,
+                                  "software-factory/GATEKEEPER_READ_TOKEN": READ}
+
+        result = self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
+
+        self.assertEqual(self.secret_status(result),
+                         {"OPENCODE_GO_API_KEY": "set", "GATEKEEPER_READ_TOKEN": "set"})
+        sets = [(argv, stdin, env) for argv, stdin, env in self.commands.calls if argv[:3] == ["gh", "secret", "set"]]
+        self.assertEqual([(argv, stdin) for argv, stdin, _ in sets],
+                         [(["gh", "secret", "set", "OPENCODE_GO_API_KEY", "--repo", "o/r"], KEY),
+                          (["gh", "secret", "set", "GATEKEEPER_READ_TOKEN", "--repo", "o/r"], READ)])
+        self.assertTrue(all(env["GH_TOKEN"] == "factory-token" for _, _, env in sets))
+        for argv, _, env in self.commands.calls:  # a value is never in argv, nor in an env value
+            self.assertFalse({KEY, READ} & set(argv) or {KEY, READ} & set((env or {}).values()))
+        written = self.written_text(result)
+        self.assertNotIn(KEY, written)
+        self.assertNotIn(READ, written)
+        self.assertIn("- `OPENCODE_GO_API_KEY`: set", self.github.pulls[0]["body"])
+        audit = {call.args[0]: call.args[1] for call in self.log.call_args_list}
+        self.assertEqual(audit["bootstrap_secrets"]["secrets"], result["secrets"])
+
+    def test_a_secret_the_repo_has_is_left_alone(self):
+        self.commands.secrets = {"OPENCODE_GO_API_KEY", "GATEKEEPER_READ_TOKEN"}
+        self.commands.keychain = {"software-factory/OPENCODE_GO_API_KEY": KEY}
+
+        result = self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
+
+        self.assertEqual(self.secret_status(result),
+                         {"OPENCODE_GO_API_KEY": "already set", "GATEKEEPER_READ_TOKEN": "already set"})
+        self.assertEqual([argv[:3] for argv, _, _ in self.commands.calls], [["gh", "secret", "list"]])
+
+    def test_a_secret_missing_from_the_keychain_is_reported_and_the_setup_pr_still_opens(self):
+        self.commands.keychain = {"software-factory/OPENCODE_GO_API_KEY": KEY}
+
+        result = self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
+
+        self.assertEqual(self.secret_status(result), {
+            "OPENCODE_GO_API_KEY": "set",
+            "GATEKEEPER_READ_TOKEN": "missing: add it with security add-generic-password "
+                                     "-s software-factory/GATEKEEPER_READ_TOKEN -a factory -w"})
+        self.assertEqual(result["prNumber"], 100)
+        self.assertEqual(self.commands.secrets, {"OPENCODE_GO_API_KEY"})
+
+    def test_a_retry_after_the_owner_adds_the_secret_sets_it(self):
+        self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
+        self.commands.keychain = {"software-factory/OPENCODE_GO_API_KEY": KEY,
+                                  "software-factory/GATEKEEPER_READ_TOKEN": READ}
+
+        again = self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
+
+        self.assertEqual(again["prNumber"], 100)
+        self.assertEqual(self.secret_status(again),
+                         {"OPENCODE_GO_API_KEY": "set", "GATEKEEPER_READ_TOKEN": "set"})
+
+    def test_a_failing_gh_that_echoes_the_value_reports_only_its_name_and_exit_code(self):
+        self.commands.keychain = {"software-factory/OPENCODE_GO_API_KEY": KEY,
+                                  "software-factory/GATEKEEPER_READ_TOKEN": READ}
+        self.commands.failing[("gh", "secret", "set")] = (1, f"failed to set secret: body {KEY} {READ}\n")
+
+        result = self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
+
+        self.assertEqual(self.secret_status(result), {"OPENCODE_GO_API_KEY": "failed: gh secret set exited 1",
+                                                      "GATEKEEPER_READ_TOKEN": "failed: gh secret set exited 1"})
+        written = self.written_text(result)
+        self.assertNotIn(KEY, written)
+        self.assertNotIn(READ, written)
+
+    def test_a_set_that_gh_secret_list_does_not_show_is_reported_as_failed(self):
+        self.commands.keychain = {"software-factory/OPENCODE_GO_API_KEY": KEY}
+        self.commands.failing[("gh", "secret", "set")] = (0, "")  # exits 0 but stores nothing
+
+        result = self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
+
+        self.assertEqual(self.secret_status(result)["OPENCODE_GO_API_KEY"],
+                         "failed: gh secret list does not show it after gh secret set")
+
+    def test_a_command_that_cannot_run_is_a_failed_status_and_the_setup_pr_still_opens(self):
+        cases = {"not installed": (FileNotFoundError(2, "No such file"), "failed: gh is not installed"),
+                 "timed out": (subprocess.TimeoutExpired(["gh"], 60), "failed: gh secret list timed out"),
+                 "not runnable": (PermissionError(13, "denied"), "failed: gh secret list failed: PermissionError")}
+        for case, (error, status) in cases.items():
+            with self.subTest(case), mock.patch("factory_mcp.gate_secrets.subprocess.run", side_effect=error):
+                result = self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")  # then retries
+                self.assertEqual(set(self.secret_status(result).values()), {status})
+                self.assertEqual(result["prNumber"], 100)
+
+    def test_a_secret_list_that_is_not_json_names_is_a_failed_status(self):
+        with mock.patch("factory_mcp.gate_secrets.subprocess.run",
+                        return_value=subprocess.CompletedProcess(["gh"], 0, "not json", "")):
+            result = self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
+        self.assertEqual(set(self.secret_status(result).values()),
+                         {"failed: gh secret list printed no JSON list of names"})
+
+    def test_an_empty_keychain_value_is_missing_and_not_set(self):
+        self.commands.keychain = {"software-factory/OPENCODE_GO_API_KEY": ""}
+
+        result = self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
+
+        self.assertTrue(self.secret_status(result)["OPENCODE_GO_API_KEY"].startswith("missing: "))
+        self.assertEqual(self.commands.secrets, set())
+
+    def test_a_locked_keychain_reports_the_exit_code_not_missing(self):
+        self.commands.failing[("security", "find-generic-password", "-s")] = (51, f"{KEY}\n")
+
+        result = self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
+
+        self.assertEqual(set(self.secret_status(result).values()),
+                         {"failed: security find-generic-password exited 51"})
+        self.assertNotIn(KEY, self.written_text(result))
 
 
 if __name__ == "__main__":

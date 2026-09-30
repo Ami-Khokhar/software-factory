@@ -131,8 +131,23 @@ bootstrap PR; approve the `factory_bootstrap_repo` tool call in Telegram. If the
 missing, give it the command that verifies that repo. The PR contains only missing gate files and
 the factory-standard block; review and merge it yourself. An empty repo (no commits) needs no
 README first: the tool pushes one initial commit with only a `README.md` to the default branch,
-says so as `initialCommit` in its result, and then opens the setup PR. Configure the repo's
-`OPENCODE_GO_API_KEY` and `GATEKEEPER_READ_TOKEN` Actions secrets before relying on the gate.
+says so as `initialCommit` in its result, and then opens the setup PR.
+
+The tool also sets the gate's Actions secrets, so repo setup needs no secrets by hand (ADR-0022).
+Store each one once in your login Keychain; each command prompts for the value, so it stays out
+of your shell history:
+
+```bash
+security add-generic-password -s software-factory/OPENCODE_GO_API_KEY -a factory -w
+security add-generic-password -s software-factory/GATEKEEPER_READ_TOKEN -a factory -w
+```
+
+`GATEKEEPER_READ_TOKEN` is a token that can read the private Ami-Khokhar/pr-gatekeeper. The tool
+leaves alone a secret the repo already has, and reports each one as `set`, `already set`,
+`missing: ...` (add it to the Keychain and ask again) or `failed: <command> exited <code>`. It
+needs `gh` on factory-mcp's PATH and a `FACTORY_GITHUB_TOKEN` that may read and write the repo's
+Actions secrets (a fine-grained token needs the "Secrets" permission).
+
 Ask Day Desk to check and enable the repo after the merge. It will not start a worker for a repo
 whose controls are still missing. Existing valid gate files are preserved, and a conflicting
 standard or invalid gate config needs a person to fix it.
