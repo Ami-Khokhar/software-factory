@@ -1,6 +1,7 @@
 """The documents the Foreman writes and reads: WorkOrder, worker input, Result, PR body."""
 import json
 
+from .lessons import MAX_PER_WORKORDER, MAX_TEXT
 from .store import now
 
 EVIDENCE_KIND = {"tests-pass": "test"}
@@ -19,8 +20,8 @@ def workorder(wi, kind, attempt, config, base_sha=None, findings=(), lessons=())
             "constraints": {"maxChangedLines": 600, "maxChangedFiles": 20,
                             "protectedPaths": list(config.protected_paths)},
             "findingsToAddress": list(findings),
-            "lessons": [{"fingerprint": entry["fingerprint"], "text": entry["text"][:300]}
-                        for entry in list(lessons)[:10]],  # the schema's caps: the file is hand-editable
+            "lessons": [{"fingerprint": entry["fingerprint"], "text": entry["text"][:MAX_TEXT]}
+                        for entry in list(lessons)[:MAX_PER_WORKORDER]],  # the file is hand-editable
             "requiredEvidence": ["tests-pass"],
             "budget": {"maxPasses": config.max_passes, "wallMs": config.wall_ms},
             "idempotencyKey": key, "createdAt": now()}

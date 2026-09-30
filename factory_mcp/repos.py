@@ -121,6 +121,12 @@ def check(github, repo):
     if not (meta.get("permissions") or {}).get("push"):
         return [_result("repo", False, f"GitHub says the factory's token cannot push to {repo}",
                         "Give FACTORY_GITHUB_TOKEN write access to its contents, issues and pull requests.")]
+    default = meta["default_branch"]
+    by_hand = None  # patches.initial_commit refuses a repo with refs but no default-branch commit
+    if github.branch_head(repo, default) is None and github.has_refs(repo):
+        by_hand = (f"{repo} has refs but no commit on its default branch {default}, so "
+                   f"factory_bootstrap_repo refuses it: push a first commit to {default} yourself, "
+                   "then call factory_bootstrap_repo.")
     text = github.file(repo, GATE_CONFIG)
     try:
         verify = json.loads(text).get("verify") if text else None
@@ -128,8 +134,8 @@ def check(github, repo):
         verify = None
     if text is None:
         gate = _result("gate_config", False, f"{repo} has no {GATE_CONFIG}",
-                       "Call factory_bootstrap_repo with the repo's verify command: it opens a setup PR "
-                       "with the gate files for you to review and merge.")
+                       by_hand or "Call factory_bootstrap_repo with the repo's verify command: it opens a "
+                       "setup PR with the gate files for you to review and merge.")
     else:
         gate = _result("gate_config", isinstance(verify, str) and bool(verify.strip()),
                        f"verify: {verify}" if verify else f"{GATE_CONFIG} has no verify command",
@@ -152,13 +158,13 @@ def check(github, repo):
         agents_fix = ("Remove the broken factory-standard markers from AGENTS.md by hand and merge that "
                       "PR yourself: factory_bootstrap_repo refuses malformed markers. Then call it.")
     else:
-        agents_fix = ("Call factory_bootstrap_repo: it opens a setup PR that adds the factory standard "
-                      "to AGENTS.md, for you to review and merge.")
+        agents_fix = by_hand or ("Call factory_bootstrap_repo: it opens a setup PR that adds the factory "
+                                 "standard to AGENTS.md, for you to review and merge.")
     return [_result("repo", True, f"{repo} exists and the factory's token can push to it", None), gate,
             _result("gate_workflow", workflow, "the gate workflow is installed" if workflow else
                     f"{repo} has no {GATE_WORKFLOW}",
-                    "Call factory_bootstrap_repo: it opens a setup PR with the gate workflow for you "
-                    "to review and merge. Without the workflow no PR gets a verdict."),
+                    by_hand or "Call factory_bootstrap_repo: it opens a setup PR with the gate workflow "
+                    "for you to review and merge. Without the workflow no PR gets a verdict."),
             _result("agents_md", bool(found) and found == wanted, detail, agents_fix)]
 
 

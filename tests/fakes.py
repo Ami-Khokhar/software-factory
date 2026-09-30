@@ -90,6 +90,9 @@ class FakeGitHub:
     def branch_head(self, repo, branch):
         return self.branches.get((repo, branch), "base0" if branch == "main" else None)
 
+    def has_refs(self, repo):
+        return any(self.branch_head(r, b) for r, b in {*self.branches, (repo, "main")} if r == repo)
+
     def push(self, repo, branch, sha, files=(("src/app.py", 10, 2),)):
         self.branches[(repo, branch)] = sha
         for pr in self.pulls:  # an open PR follows its branch, as on GitHub
@@ -128,6 +131,11 @@ class FakeGitHub:
         self.add_pr(repo, number, head, self.branches[(repo, head)])
         self.pulls[-1].update(title=title, body=body)
         return self.pulls[-1]
+
+    def edit_pull(self, repo, number, body):
+        pr = next(p for p in self.pulls if p["repo"] == repo and p["number"] == number)
+        pr["body"] = body
+        return pr
 
 
 class FakeRelay:
@@ -176,6 +184,51 @@ class FakeGit:
         patcher = mock.patch.object(patches, "apply", self.apply)
         patcher.start()
         test.addCleanup(patcher.stop)
+        return self
+
+
+class FakeBootstrapGit:
+    """The bootstrap's pushes in factory_mcp.patches, at the git boundary: initial_commit, bootstrap
+    and update_bootstrap, each with its real signature. A push lands on the branch in FakeGitHub."""
+
+    def __init__(self, github):
+        self.github = github
+        self.initial, self.pushed, self.updates = [], [], []  # the arguments of each call
+        self.held = {}  # branch -> the files it holds
+
+    @staticmethod
+    def _repo(url):
+        return url.removeprefix("https://github.com/").removesuffix(".git")
+
+    def initial_commit(self, url, token, branch, files, message):
+        self.initial.append((url, branch, files))
+        self.github.branches[(self._repo(url), branch)] = "readme-sha"
+        return "readme-sha"
+
+    def bootstrap(self, url, token, branch, base_sha, files, message):
+        self.pushed.append((url, branch, base_sha, files, message))
+        self.held[branch] = dict(files)
+        self.github.push(self._repo(url), branch, "setup-sha", files=[(name, 1, 0) for name in files])
+        return "setup-sha"
+
+    def update_bootstrap(self, url, token, branch, head_sha, files, message):
+        """The new head, or None when the branch holds `files` already, as patches.update_bootstrap."""
+        self.updates.append((branch, head_sha, files))
+        held = self.held.setdefault(branch, {})
+        if all(held.get(name) == text for name, text in files.items()):
+            return None
+        held.update(files)
+        self.github.push(self._repo(url), branch, "update-sha", files=[(name, 1, 0) for name in held])
+        return "update-sha"
+
+    def install(self, test):
+        """Stand in for the three bootstrap pushes until `test` ends."""
+        from unittest import mock
+        from factory_mcp import patches
+        for name in ("initial_commit", "bootstrap", "update_bootstrap"):
+            patcher = mock.patch.object(patches, name, getattr(self, name))
+            patcher.start()
+            test.addCleanup(patcher.stop)
         return self
 
 

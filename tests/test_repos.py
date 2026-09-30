@@ -160,6 +160,19 @@ class RepoCheckTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, refusal):
                     bootstrap_plan(github, REPO, "make test")
 
+    def test_a_repo_with_refs_but_no_default_branch_commit_gets_a_by_hand_fix(self):
+        github = FakeGitHub()
+        github.branches[(REPO, "main")] = None  # no commit on the default branch,
+        github.branches[(REPO, "dev")] = "dev-sha"  # but one on another branch: the bootstrap refuses it
+        failed = [c for c in check(github, REPO) if not c["ok"]]
+        self.assertEqual([c["id"] for c in failed], ["gate_config", "gate_workflow", "agents_md"])
+        for found in failed:
+            self.assertIn("push a first commit to main yourself", found["fix"])
+            self.assertFalse(found["fix"].startswith("Call factory_bootstrap_repo"))
+        del github.branches[(REPO, "dev")]  # an empty repo, which the bootstrap starts itself
+        self.assertTrue(all(c["fix"].startswith("Call factory_bootstrap_repo")
+                            for c in check(github, REPO) if not c["ok"]))
+
     def test_the_tool_says_whether_the_repo_is_ready_and_enabled(self):
         foreman = Foreman(Store(":memory:"), gated(FakeGitHub()), Config(mcp_token="t", repos=frozenset({REPO})),
                           FakeRelay())

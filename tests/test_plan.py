@@ -1,5 +1,6 @@
 """factory_start_plan (ADR-0024): one approval opens a plan's issues in order, and a ready WorkItem
 waits for the issue its `Depends on #n` line names."""
+import dataclasses
 import unittest
 
 from factory_mcp import tools
@@ -75,6 +76,30 @@ class StartPlanTest(unittest.TestCase):
             self.foreman.start_plan(REPO, plan("One", "Two", "Three"), "amteshwar")
         self.assertEqual(list(self.github.issues), [(REPO, 200)])
 
+    def test_an_issue_opened_but_refused_at_intake_is_named_as_one_the_factory_will_not_run(self):
+        self.foreman.config = dataclasses.replace(self.foreman.config, trusted_authors=frozenset({"someone"}))
+        with self.assertRaisesRegex(ToolError, r"who is not a trusted author .*\. The plan stopped\. Issues "
+                                               r"opened, which the factory works on: none\. #200 was opened "
+                                               r"too, but the factory will not run it: fix the cause above, "
+                                               r"or close #200$"):
+            self.foreman.start_plan(REPO, plan("One", "Two"), "amteshwar")
+        self.assertEqual(list(self.github.issues), [(REPO, 200)])
+
+    def test_only_a_whole_protected_path_word_refuses_a_plan(self):
+        cases = [("raw.githubusercontent.com", True), ("AGENTS.mdx", True),
+                 ("edit .github/workflows/ci.yml", False), ("keep `AGENTS.md`.", False),
+                 ("docs/AGENTS.md", False)]
+        for mention, accepted in cases:
+            with self.subTest(mention):
+                self.setUp()
+                body = ISSUE_BODY + f"- it mentions {mention} — done when: the README says so\n"
+                if accepted:
+                    self.assertEqual(len(self.foreman.start_plan(REPO, [{"title": "T", "body": body}],
+                                                                 "amteshwar")["issues"]), 1)
+                else:
+                    with self.assertRaisesRegex(ToolError, "which only a person changes"):
+                        self.foreman.start_plan(REPO, [{"title": "T", "body": body}], "amteshwar")
+
 
 class DependsOnTest(unittest.TestCase):
     def setUp(self):
@@ -137,6 +162,13 @@ class DependsOnTest(unittest.TestCase):
                 self.assertIn(f"this issue depends on {reason}. Edit or remove", second["blockedOn"])
                 self.assertEqual(self.foreman.store.workorders(SECOND), [])
                 self.assertEqual([number for _, number, _ in self.github.posted], [201])  # the owner hears
+
+    def test_a_waiting_dependent_whose_own_issue_closes_waits_no_more(self):
+        self.foreman.tick()
+        self.assertEqual(self.get(SECOND)["waitingOn"], 200)
+        self.github.issues[(REPO, 201)]["state"] = "closed"
+        self.foreman.tick()
+        self.assertEqual((self.get(SECOND)["state"], self.get(SECOND)["waitingOn"]), ("cancelled", None))
 
     def test_after_the_owner_removes_the_line_a_retry_starts_the_work(self):
         self.foreman.store.put(dict(self.foreman.store.get(FIRST), state="exhausted", terminalReason="budget"))

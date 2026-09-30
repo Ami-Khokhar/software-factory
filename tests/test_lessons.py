@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from factory_mcp import lessons, tools
 from factory_mcp.config import Config
@@ -282,6 +283,23 @@ class WorkOrderLessonsTest(unittest.TestCase):
         wi, order, _ = self.dispatch()
         self.assertEqual(order["lessons"], [])
         self.assertIn("lessons_invalid", [h["action"] for h in self.foreman.store.history(f"{REPO}#7")])
+
+    def test_an_unreadable_lessons_file_does_not_stop_the_line(self):
+        Path(self.path).write_text('{"version": 1, "lessons": []}')
+        read_text = Path.read_text
+
+        def unreadable(path, *args, **kwargs):  # the file system: the file is there, reading it fails
+            if str(path) == self.path:
+                raise PermissionError(13, "Permission denied", self.path)
+            return read_text(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "read_text", unreadable):
+            wi, order, _ = self.dispatch()
+        self.assertEqual(order["lessons"], [])
+        errors = [h["detail"]["error"] for h in self.foreman.store.history(f"{REPO}#7")
+                  if h["action"] == "lessons_invalid"]
+        self.assertEqual(len(errors), 1)
+        self.assertIn("Permission denied", errors[0])
 
 
 if __name__ == "__main__":

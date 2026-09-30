@@ -156,7 +156,8 @@ def cmd_status(args):
     d = call("factory_status")
     for wi in d["workItems"]:
         line = f"{wi['id']:<34} {wi['state']:<18} PR #{wi.get('prNumber') or '-'}"
-        print(line + (f"   needs you: {wi['blockedOn']}" if wi.get("blockedOn") else ""))
+        print(line + (f"   needs you: {wi['blockedOn']}" if wi.get("blockedOn") else "")
+              + (f"   waiting on #{wi['waitingOn']}" if wi.get("waitingOn") else ""))
     if not d["workItems"]:
         print("no WorkItems yet: label an issue factory:ready, or run: factory new")
     a = d["autonomy"]

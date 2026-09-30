@@ -173,6 +173,36 @@ class WatchTest(unittest.TestCase):
             cli.cmd_watch([])
 
 
+class StatusTest(unittest.TestCase):
+    def status(self, **summary):
+        """The lines `factory status` prints, given what factory_status returns."""
+        summary = dict({"workItems": [], "autonomy": {"autonomous": 0, "ended": 0}}, **summary)
+        printed = io.StringIO()
+        with mock.patch.object(cli, "call", lambda tool, arguments=None: summary), \
+                contextlib.redirect_stdout(printed):
+            cli.cmd_status([])
+        return printed.getvalue().splitlines()
+
+    def test_each_lesson_gets_a_line_and_one_that_is_not_working_is_flagged(self):
+        long = "Every new endpoint carries a test for its 401 path, and its 403 path too."
+        lines = self.status(lessonEffect={
+            "o/r:fp1": {"repo": "o/r", "text": long, "sent": 4, "recurred": 3, "notWorking": True},
+            "o/r:fp2": {"repo": "o/r", "text": "Name tests for behavior", "sent": 2, "recurred": 0,
+                        "notWorking": False}})
+        self.assertEqual(lines[-2:], [f"lesson [o/r] {long[:60]}: sent on 4, recurred on 3  NOT WORKING",
+                                      "lesson [o/r] Name tests for behavior: sent on 2, recurred on 0"])
+
+    def test_a_workitem_that_waits_on_another_issue_names_it(self):
+        lines = self.status(workItems=[{"id": "o/r#201", "state": "ready", "waitingOn": 200},
+                                       {"id": "o/r#200", "state": "implementing", "waitingOn": None}])
+        self.assertTrue(lines[0].endswith("   waiting on #200"))
+        self.assertNotIn("waiting", lines[1])
+
+    def test_a_lessons_file_the_factory_cannot_read_is_named(self):
+        lines = self.status(lessonsError="lessons.json is not JSON: Expecting value")
+        self.assertEqual(lines[-1], "lessons: lessons.json is not JSON: Expecting value")
+
+
 class Relay(BaseHTTPRequestHandler):
     """agent-relay's task API: one running task for each of two agents."""
     seen = []  # (method, path, Authorization header or None)

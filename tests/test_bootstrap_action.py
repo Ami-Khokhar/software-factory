@@ -7,10 +7,11 @@ from unittest import mock
 from factory_mcp import patches, repos
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
+from factory_mcp.github import GitHubError
 from factory_mcp.mcp import ToolError
 from factory_mcp.repos import GATE_CONFIG, GATE_WORKFLOW, TEMPLATE
 from factory_mcp.store import Store
-from tests.fakes import FakeGitHub, FakeRelay
+from tests.fakes import FakeBootstrapGit, FakeGitHub, FakeRelay
 
 KEY, READ = "opencode-value-7f3a", "read-token-value-91c2"  # test stand-ins, never real secrets
 
@@ -57,38 +58,8 @@ class BootstrapActionTest(unittest.TestCase):
         patch = mock.patch("factory_mcp.gate_secrets.subprocess.run", side_effect=self.commands)
         patch.start()
         self.addCleanup(patch.stop)
-        self.pushed = []
-
-        def push(url, token, branch, base_sha, files, message):
-            self.pushed.append((url, branch, base_sha, files, message))
-            self.github.push("o/r", branch, "setup-sha", files=[(name, 1, 0) for name in files])
-            return "setup-sha"
-
-        patch = mock.patch("factory_mcp.foreman.patches.bootstrap", side_effect=push)
-        patch.start()
-        self.addCleanup(patch.stop)
-        self.initial = []
-
-        def start(url, token, branch, files, message):
-            self.initial.append((url, branch, files))
-            self.github.branches[("o/r", branch)] = "readme-sha"
-            return "readme-sha"
-
-        patch = mock.patch("factory_mcp.foreman.patches.initial_commit", side_effect=start)
-        patch.start()
-        self.addCleanup(patch.stop)
-        self.updates = []
-
-        def update(url, token, branch, head_sha, files, message):  # the branch holds what was pushed
-            self.updates.append((branch, head_sha, files))
-            if files == self.pushed[-1][3]:
-                return None
-            self.github.push("o/r", branch, "update-sha", files=[(name, 1, 0) for name in files])
-            return "update-sha"
-
-        patch = mock.patch("factory_mcp.foreman.patches.update_bootstrap", side_effect=update)
-        patch.start()
-        self.addCleanup(patch.stop)
+        git = FakeBootstrapGit(self.github).install(self)
+        self.initial, self.pushed, self.updates = git.initial, git.pushed, git.updates
         self.log = mock.Mock(wraps=self.foreman.store.log)  # records every audit entry it writes
         self.foreman.store.log = self.log
 
@@ -150,6 +121,58 @@ class BootstrapActionTest(unittest.TestCase):
         audit = {call.args[0]: call.args[1] for call in self.log.call_args_list}
         self.assertEqual((audit["bootstrap_pr_updated"]["prNumber"], audit["bootstrap_pr_updated"]["headSha"]),
                          (first["prNumber"], "update-sha"))
+
+    def test_an_update_rewrites_the_setup_pr_body_with_its_files_and_fresh_secret_statuses(self):
+        self.github.contents[("o/r", GATE_WORKFLOW)] = "on: pull_request"
+        self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
+        self.assertNotIn(f"- `{GATE_WORKFLOW}`", self.github.pulls[0]["body"])
+        del self.github.contents[("o/r", GATE_WORKFLOW)]  # a person removed it on the default branch
+        self.github.branches[("o/r", "main")] = "base1"
+        self.commands.keychain = {"software-factory/OPENCODE_GO_API_KEY": KEY,
+                                  "software-factory/GATEKEEPER_READ_TOKEN": READ}
+
+        again = self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
+
+        body = self.github.pulls[0]["body"]
+        self.assertEqual(again["updatedSha"], "update-sha")
+        for line in (f"- `{GATE_WORKFLOW}`", "- `GATEKEEPER_READ_TOKEN`: set", "base1 HEAD"):
+            self.assertIn(line, body)
+        self.assertNotIn("missing: ", body)
+        self.assertNotIn(KEY, body)
+
+    def test_a_default_branch_that_moved_during_a_retry_leaves_the_setup_pr_alone(self):
+        self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
+        original, reads = self.github.branch_head, []
+
+        def moving_head(repo, branch):  # the plan reads base0, then a commit lands on main
+            reads.append(branch)
+            return "new-base" if branch == "main" and reads.count("main") > 1 else original(repo, branch)
+
+        with mock.patch.object(self.github, "branch_head", side_effect=moving_head):
+            with self.assertRaisesRegex(ToolError, "default branch changed during bootstrap"):
+                self.foreman.bootstrap_repo("o/r", "make test", "owner")
+        self.assertEqual((self.updates, self.github.pulls[0]["head"]["sha"]), ([], "setup-sha"))
+
+    def test_a_setup_branch_without_an_open_pr_is_refused_before_any_write(self):
+        plan = repos.bootstrap_plan(self.github, "o/r", "python3 -m unittest")
+        self.github.push("o/r", "factory-bootstrap/" + plan["fingerprint"][:16], "orphan-sha")
+
+        with self.assertRaisesRegex(ToolError, "exists without an open PR"):
+            self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
+
+        self.assertEqual((self.pushed, self.github.pulls, self.commands.calls), ([], [], []))
+
+    def test_a_setup_pr_opened_meanwhile_is_adopted_when_creating_one_fails(self):
+        def racing_create(repo, head, base, title, body):  # another call opened it first
+            self.github.add_pr(repo, 7, head, self.github.branch_head(repo, head))
+            raise GitHubError(422, f"A pull request already exists for o:{head}.")
+
+        with mock.patch.object(self.github, "create_pull", side_effect=racing_create):
+            result = self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
+
+        self.assertEqual((result["prNumber"], len(self.github.pulls)), (7, 1))
+        audit = {call.args[0]: call.args[1] for call in self.log.call_args_list}
+        self.assertEqual(audit["bootstrap_pr"]["prNumber"], 7)
 
     def test_a_setup_branch_that_cannot_fast_forward_is_refused_naming_its_pr(self):
         self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
