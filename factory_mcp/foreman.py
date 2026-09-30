@@ -5,7 +5,7 @@ import os
 import time
 import uuid
 
-from . import documents, patches, repos, routing, workitem
+from . import documents, lessons, patches, repos, routing, workitem
 from .github import GitHubError
 from .mcp import ToolError
 from .relay import RelayError
@@ -214,7 +214,12 @@ class Foreman:
         try:
             facts = workitem.observe(self.github, wi)
             new = workitem.reconcile(wi, facts)
-            wi = self._write(wi, new, "reconcile", headSha=new.get("headSha"))
+            detail = {"headSha": new.get("headSha")}
+            verdict = workitem.current_verdict(wi, facts)  # accepted now: keep its blocking findings
+            if verdict:
+                detail["blocking"] = [{"fingerprint": f["fingerprint"], "problem": f["problem"]}
+                                      for f in blocking(verdict)]
+            wi = self._write(wi, new, "reconcile", **detail)
             wi = self.act(wi, facts)
         except Conflict:
             wi = self.store.get(workitem_id)
@@ -433,3 +438,31 @@ class Foreman:
         issue = self.github.create_issue(repo, title, body, [workitem.PROPOSED])
         self.store.log("proposed", {"title": title}, workitem.workitem_id(repo, issue["number"]))
         return {"issue": issue["number"], "url": issue.get("html_url")}
+
+    def approve_lesson(self, repo, fingerprint, text, by):
+        """A person's go on one lesson (ADR-0020): the code found the candidate, the owner approved
+        the wording. Refused when the fingerprint is not a candidate; idempotent by fingerprint."""
+        repo = self._allowlisted(repo)
+        if not self.config.lessons_file:
+            raise ToolError("FACTORY_LESSONS_FILE is not set, so the factory keeps no lessons")
+        if not isinstance(by, str) or not by.strip():
+            raise ToolError("approving a lesson needs the name of the person who approved it")
+        try:
+            entry = lessons.approve(self.config.lessons_file, repo, fingerprint, text, by,
+                                    lambda r: lessons.candidates(self.store, r))
+        except ValueError as exc:
+            raise ToolError(str(exc)) from None
+        self.store.log("lesson_approved", {"repo": entry["repo"], "fingerprint": fingerprint,
+                                           "by": by})
+        return entry
+
+    def retire_lesson(self, fingerprint, by):
+        """A person's no on one lesson: workers stop seeing it. Refused when it is not a lesson."""
+        if not self.config.lessons_file:
+            raise ToolError("FACTORY_LESSONS_FILE is not set, so the factory keeps no lessons")
+        try:
+            lessons.retire(self.config.lessons_file, fingerprint)
+        except ValueError as exc:
+            raise ToolError(str(exc)) from None
+        self.store.log("lesson_retired", {"fingerprint": fingerprint, "by": by})
+        return {"fingerprint": fingerprint, "retired": True}

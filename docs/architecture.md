@@ -58,7 +58,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/server.py` | Streamable HTTP for MCP on loopback: `POST /mcp`, the bearer token, the background tick loop |
 | `factory_mcp/mcp.py` | The MCP protocol: one JSON-RPC message in, one response out, no I/O |
 | `factory_mcp/tools.py` | The tools, and whether each one reads or writes |
-| `factory_mcp/foreman.py` | The Foreman: intake, rebuild, tick, dispatch, poll a task, open a PR, and the person's acts (resolve, approve an issue, add a repo) |
+| `factory_mcp/foreman.py` | The Foreman: intake, rebuild, tick, dispatch, poll a task, open a PR, and the person's acts (resolve, approve an issue, add a repo, approve or retire a lesson) |
 | `factory_mcp/workitem.py` | Intake from an issue, observing GitHub, and `reconcile`: the fact-driven half of the state machine |
 | `factory_mcp/documents.py` | WorkOrders, the worker input, the Result check, the PR body |
 | `factory_mcp/verdict.py` | Reading the gate's verdict marker; finding fingerprints and blockers |
@@ -67,6 +67,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/relay.py` | The agent-relay task client, and where it finds the relay's token |
 | `factory_mcp/patches.py` | The git work factory-mcp does: cloning a worker checkout, pushing a patch Result |
 | `factory_mcp/repos.py` | The repo check, and `repos.json` (ADR-0014) |
+| `factory_mcp/lessons.py` | Lesson candidates from the audit log, and `lessons.json` (ADR-0020) |
 | `factory_mcp/routing.py` | Which worker takes the next attempt: locality first, then one that has not failed |
 | `factory_mcp/metrics.py` | The escalation text and the autonomy rate |
 | `factory_mcp/config.py` | Settings from the environment and `repos.json` |

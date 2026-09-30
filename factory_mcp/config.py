@@ -27,6 +27,7 @@ class Config:
     checkout_root: str = ""  # worker checkouts live at <root>/<owner>/<repo>; empty: the agent's cwd
     trusted_authors: frozenset = frozenset()  # issue authors a worker may act for; empty: repo owner
     repos_file: str = ""  # repos.json (ADR-0014); empty: FACTORY_REPOS is the whole allowlist
+    lessons_file: str = ""  # lessons.json (ADR-0020); empty: the factory keeps no lessons
 
     def listed(self, repo):
         """The allowlist's spelling of `repo`, or None. GitHub repo names ignore case."""
@@ -84,4 +85,5 @@ class Config:
             trusted_authors=frozenset(a.strip() for a in env.get("FACTORY_TRUSTED_AUTHORS", "").split(",")
                                       if a.strip()),
             repos_file=repos_file,
+            lessons_file=env.get("FACTORY_LESSONS_FILE", ""),
         )
