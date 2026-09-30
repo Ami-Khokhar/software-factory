@@ -20,7 +20,9 @@ from pathlib import Path
 from .store import now
 
 ENTRY_KEYS = {"repo", "fingerprint", "text", "approved_by", "approved_at"}
+# schemas/workorder.schema.json holds the same two caps for WorkOrder.lessons
 MAX_TEXT = 300  # a lesson rides in every WorkOrder: it stays one line a worker reads
+MAX_PER_WORKORDER = 10
 
 
 def _blocking_fingerprints(history):

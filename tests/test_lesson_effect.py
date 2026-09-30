@@ -79,6 +79,16 @@ class LessonEffectTest(unittest.TestCase):
         self.assertEqual((effect[KEY]["sent"], effect[KEY]["recurred"]), (1, 1))
         self.assertEqual((effect["other/r:" + FP]["sent"], effect["other/r:" + FP]["recurred"]), (1, 0))
 
+    def test_the_stored_workorders_are_read_once_for_all_lessons(self):
+        reads = []
+
+        def workorders_of():  # the store: one SELECT for every call
+            reads.append(1)
+            return [order("o/r#1", 0, lessons=[FP, "fp2"])]
+
+        effect = lesson_effect([lesson(), lesson("fp2")], workorders_of)
+        self.assertEqual((len(reads), effect[KEY]["sent"], effect[f"{REPO}:fp2"]["sent"]), (1, 1, 1))
+
     def test_no_lessons_gives_no_effect(self):
         self.assertEqual(lesson_effect([], lambda: [order("o/r#1", 0)]), {})
 

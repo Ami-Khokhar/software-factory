@@ -85,6 +85,15 @@ class GitHub:
                 return None
             raise
 
+    def has_refs(self, repo):
+        """Whether the repo has any ref, a branch or a tag. An empty repo has none."""
+        try:
+            return bool(self._request("GET", f"{self.api}/repos/{repo}/git/matching-refs/")[0])
+        except GitHubError as err:
+            if err.status == 409:  # GitHub's answer for an empty repo: "Git Repository is empty."
+                return False
+            raise
+
     def changed_files(self, repo, base, head):
         """[{filename, additions, deletions, status}] between base and head (three-dot)."""
         return self._request("GET", f"{self.api}/repos/{repo}/compare/{base}...{head}")[0]["files"]
@@ -115,3 +124,7 @@ class GitHub:
     def create_pull(self, repo, head, base, title, body):
         return self._request("POST", f"{self.api}/repos/{repo}/pulls",
                              {"head": head, "base": base, "title": title, "body": body})[0]
+
+    def edit_pull(self, repo, number, body):
+        """Replace a PR's body."""
+        return self._request("PATCH", f"{self.api}/repos/{repo}/pulls/{number}", {"body": body})[0]

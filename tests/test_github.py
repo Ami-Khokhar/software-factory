@@ -1,5 +1,5 @@
 """factory_mcp.github against a local HTTP server: auth header, Link pagination, files, labels,
-errors."""
+refs, PR bodies, errors."""
 import base64
 import json
 import threading
@@ -29,6 +29,10 @@ class Api(BaseHTTPRequestHandler):
             body, link = [{"number": 3}], ""
         elif self.path in ("/repos/o/r/issues/404", "/repos/o/r/contents/.github/missing.json"):
             body, link, status = {"message": "Not Found"}, "", 404
+        elif self.path == "/repos/o/r/git/matching-refs/":
+            body, link = [{"ref": "refs/tags/v1"}], ""
+        elif self.path == "/repos/o/empty/git/matching-refs/":
+            body, link, status = {"message": "Git Repository is empty."}, "", 409
         else:
             body, link = {"number": 1}, ""
         self.reply(status, body, link)
@@ -44,6 +48,11 @@ class Api(BaseHTTPRequestHandler):
             self.reply(201, body)
         else:
             self.reply(200, [{"name": name} for name in body["labels"]])
+
+    def do_PATCH(self):
+        body = json.loads(self.rfile.read(int(self.headers["content-length"])))
+        Api.seen.append((self.path, body))
+        self.reply(200, dict(body, number=int(self.path.rsplit("/", 1)[-1])))
 
     def reply(self, status, body, link=""):
         self.send_response(status)
@@ -90,6 +99,15 @@ class GitHubClientTest(unittest.TestCase):
             self.github.create_label("o/r", "factory:x", "not-a-color", "x")
         self.assertEqual(self.github.add_labels("o/r", 7, ["factory:ready"]), [{"name": "factory:ready"}])
         self.assertEqual(Api.seen[-1], ("/repos/o/r/issues/7/labels", {"labels": ["factory:ready"]}))
+
+    def test_a_repo_has_refs_unless_github_says_it_is_empty(self):
+        self.assertTrue(self.github.has_refs("o/r"))
+        self.assertFalse(self.github.has_refs("o/empty"))
+        self.assertEqual(Api.seen[0][0], "/repos/o/r/git/matching-refs/")
+
+    def test_editing_a_pull_request_replaces_its_body(self):
+        self.assertEqual(self.github.edit_pull("o/r", 7, "new body"), {"number": 7, "body": "new body"})
+        self.assertEqual(Api.seen, [("/repos/o/r/pulls/7", {"body": "new body"})])
 
     def test_errors_carry_status(self):
         with self.assertRaises(GitHubError) as caught:

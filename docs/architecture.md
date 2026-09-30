@@ -40,9 +40,10 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
   (ADR-0004).
 - **Day Desk** is the owner's front door in Telegram (ADR-0013). The `factory` CLI calls the same
   tools. Day Desk's shell runs in a Docker sandbox whose one secret is a GitHub token (ADR-0021).
-  For a new repo, one owner-approved tool prepares a setup PR with only missing controls; the
-  owner merges it before normal worker passes start (ADR-0019). One owner approval of
-  `factory_start_plan` opens all the issues of a plan, and they run in order (ADR-0024).
+  For a new repo, one owner-approved tool prepares a setup PR with only missing controls, after it
+  pushes one README-only commit to an empty repo's default branch; the owner merges the PR before
+  normal worker passes start (ADR-0019). One owner approval of `factory_start_plan` opens all the
+  issues of a plan, and they run in order (ADR-0024).
 
 ## What crosses each boundary
 
@@ -64,15 +65,15 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/server.py` | Streamable HTTP for MCP on loopback: `POST /mcp`, the bearer token, the background tick loop |
 | `factory_mcp/mcp.py` | The MCP protocol: one JSON-RPC message in, one response out, no I/O |
 | `factory_mcp/tools.py` | The tools, and whether each one reads or writes |
-| `factory_mcp/foreman.py` | The Foreman: intake, rebuild, tick, dispatch, poll a task, open a PR, and the person's acts (resolve, approve an issue, start a plan, add a repo, approve or retire a lesson) |
+| `factory_mcp/foreman.py` | The Foreman: intake, rebuild, tick, dispatch, poll a task, open a PR, and the person's acts (resolve, approve an issue, start a plan, add a repo, bootstrap a repo, approve or retire a lesson) |
 | `factory_mcp/workitem.py` | Intake from an issue, observing GitHub, and `reconcile`: the fact-driven half of the state machine |
 | `factory_mcp/documents.py` | WorkOrders (with the repo's lessons), the worker input, the Result check, the PR body |
 | `factory_mcp/verdict.py` | Reading the gate's verdict marker; finding fingerprints and blockers |
 | `factory_mcp/store.py` | SQLite: WorkItems with optimistic concurrency, WorkOrders, the audit log, leases, migrations |
 | `factory_mcp/github.py` | The GitHub REST client |
 | `factory_mcp/relay.py` | The agent-relay task client, and where it finds the relay's token |
-| `factory_mcp/patches.py` | The git work factory-mcp does: cloning a worker checkout, pushing a patch Result |
-| `factory_mcp/repos.py` | The repo check, and `repos.json` (ADR-0014) |
+| `factory_mcp/patches.py` | The git work factory-mcp does: cloning a worker checkout, pushing a patch Result, and the owner-approved bootstrap pushes (`initial_commit`, `bootstrap`, `update_bootstrap`) |
+| `factory_mcp/repos.py` | The repo check, the bootstrap plan (`bootstrap_plan`, `plan_on`), and `repos.json` (ADR-0014) |
 | `factory_mcp/gate_secrets.py` | A repo's gate Actions secrets, set from the owner's Keychain through `gh` (ADR-0022) |
 | `factory_mcp/lessons.py` | Lesson candidates from the audit log, and `lessons.json` (ADR-0020) |
 | `factory_mcp/routing.py` | Which worker takes the next attempt: locality first, then one that has not failed |

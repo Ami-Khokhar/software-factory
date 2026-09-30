@@ -323,8 +323,10 @@ conflicts. The owner reviews and merges the PR, then enables the repo through th
 The bootstrap tool never merges, and ordinary worker patches still cannot touch `.github/` or
 `AGENTS.md`. A PR needs a base commit, so a repo with no refs at all first gets one commit on its
 default branch that holds only a `README.md` with the repo's name; the audit log and the tool
-result record it. That push is not forced: if the repo got a commit since the check, it fails and
-nothing more is pushed. The controls never go straight to the default branch.
+result record it. It is pushed only when the repo has no refs at all, and it is not forced: if the
+default branch got a commit since that check, the push is rejected and nothing more is pushed. A
+repo with refs but no commit on its default branch is refused, and `factory_repo_check` tells the
+owner to push a first commit there by hand. The controls never go straight to the default branch.
 
 **Consequence.** The owner no longer authors boilerplate, while the first change to a repo's
 authority remains a human merge. ADR-0022 sets the gate's Actions secrets.
@@ -345,12 +347,18 @@ on two or more WorkItems of one repo. Only a person turns a candidate into a les
 Approved lessons live in `lessons.json` (`FACTORY_LESSONS_FILE`; `factory serve` uses
 `~/.config/factory-mcp/lessons.json`), next to `repos.json` and for the same reason (ADR-0014): a
 file a person can read and edit. `factory_retire_lesson` removes one. A model never approves a
-lesson, and a fingerprint that is not a candidate is refused.
+lesson, and a fingerprint that is not a candidate is refused. A WorkOrder carries at most 10 of the
+repo's lessons, newest first, each cut to 300 characters, because the file is hand-editable
+(`lessons.MAX_PER_WORKORDER` and `lessons.MAX_TEXT`; the WorkOrder schema holds the same caps).
+`factory_status` measures each lesson from the stored WorkOrders: on how many WorkItems it rode
+along (`sent`), and on how many the gate reported its fingerprint again in a later round
+(`recurred`). Three recurrences flag it as not working, for the owner to retire or rewrite.
 
 **Consequence.** The factory can remember across WorkItems with no new table and no dependency,
 and every lesson has a named approver. A finding the gate saw on one WorkItem never becomes a
 lesson. When WorkOrders carry lessons, they stay data under the worker rules, like
-`findingsToAddress`.
+`findingsToAddress`. The measurement comes from the stored WorkOrders, so a lost store resets it;
+`lessons.json` keeps the lessons.
 
 ---
 
@@ -425,8 +433,10 @@ listed the secrets, so the factory's token was the likely cause.
 **Decision.** Before it creates a branch, the bootstrap adopts the open PR into the default branch
 from a `factory-bootstrap/` branch of the repo itself; more than one is refused, naming each. When
 the plan's files differ from the adopted branch, factory-mcp adds one commit with them on top of
-the PR's head and returns it as `updatedSha`. That push is not forced: a branch that moved during
-the update fails with an error that names the PR. For `gh secret list` only, which is given no
+the PR's head, returns it as `updatedSha` and rewrites the PR body from the current plan and secret
+statuses. It first checks that the default branch has not moved since it read the plan, as it does
+before it creates a branch. That push is not forced: a branch that moved during the update fails
+with an error that names the PR. For `gh secret list` only, which is given no
 value, the failed status holds gh's first stderr line, at most 200 characters, with the factory's
 token and anything shaped like a GitHub token (`ghp_`, `gho_`, `github_pat_` and the like) replaced
 by `[token]`. An HTTP 403 or "Resource not accessible" line adds that the token needs Actions
@@ -449,10 +459,13 @@ factory from starting the second issue before the first one merged.
 shows its full arguments in the approval prompt, so that one approval is the owner's review of the
 plan. factory-mcp checks every issue before it opens one: 1 to 10 issues, each body with an
 `## Acceptance` list that intake accepts, and no title or body that names a protected path. Code
-cannot tell a request to change `.github/` from a mention of it, so a mention is refused. Then it
-opens the issues in order, labelled `factory:ready`, and puts `Depends on #<previous>` at the top
-of each body after the first. The order lives in GitHub (ADR-0009): a `ready` WorkItem whose issue
-has a `Depends on #n` line is not dispatched while #n is open, and records `waitingOn: n`. When #n
+cannot tell a request to change `.github/` from a mention of it, so a mention is refused. A
+mention is a whole path word: `raw.githubusercontent.com` or `AGENTS.mdx` names no protected path.
+Then it opens the issues in order, labelled `factory:ready`, and puts `Depends on #<previous>` at
+the top of each body after the first. When one fails, the error names the issues the factory works
+on, and an issue GitHub opened that intake then refused as one it will not run. The order lives in
+GitHub (ADR-0009): a `ready` WorkItem whose issue has a `Depends on #n` line is not dispatched
+while #n is open, and records `waitingOn: n` until it leaves `ready` by any route. When #n
 is closed with a merged PR on `factory/<n>`, the next tick dispatches it. When #n was closed
 without one, ended `cancelled` or `exhausted` (the store knows these, because such an issue can
 stay open), or does not exist, the WorkItem goes to `human_waiting`: only the owner changes the

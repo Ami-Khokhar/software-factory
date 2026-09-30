@@ -2,6 +2,7 @@
 import calendar
 import dataclasses
 import os
+import re
 import time
 import uuid
 
@@ -121,17 +122,20 @@ class Foreman:
         if not files:
             return {"repo": repo, "ready": True, "needsHumanMerge": False, "prNumber": None,
                     "secrets": self._gate_secrets(repo, by)}
+        # before any write: a plan read from a default branch that has moved since must not be pushed
+        if self.github.branch_head(repo, plan["default_branch"]) != plan["base_sha"]:
+            raise ToolError(f"{repo}'s default branch changed during bootstrap; check the repo and try again")
         branch = BOOTSTRAP_PREFIX + plan["fingerprint"][:16]
         response = {"repo": repo, "ready": False, "needsHumanMerge": True, "changedPaths": sorted(files)}
         existing = self._open_setup_pr(repo, plan["default_branch"])
         if existing:  # a retry: the owner reviews one setup PR, brought up to date with the plan
             head = self._update_setup_pr(repo, existing, files, by)
-            if head:
+            secrets = self._gate_secrets(repo, by)
+            if head:  # the body names the files and secret statuses: keep it true to the new commit
                 response["updatedSha"] = head
-            return dict(response, prNumber=existing["number"], secrets=self._gate_secrets(repo, by),
+                self.github.edit_pull(repo, existing["number"], self._setup_pr_body(repo, plan, secrets))
+            return dict(response, prNumber=existing["number"], secrets=secrets,
                         url=existing.get("html_url") or f"https://github.com/{repo}/pull/{existing['number']}")
-        if self.github.branch_head(repo, plan["default_branch"]) != plan["base_sha"]:
-            raise ToolError(f"{repo}'s default branch changed during bootstrap; check the repo and try again")
         if plan["base_sha"]:  # an empty repo has no branches; its setup branch is named after the README
             self._refuse_existing_branch(repo, branch)
         secrets = response["secrets"] = self._gate_secrets(repo, by)  # after the refusals: they write nothing
@@ -156,7 +160,26 @@ class Foreman:
         except patches.PatchError as exc:
             raise ToolError(str(exc)) from None
         paths = sorted(files)
-        body = "\n".join([
+        try:
+            pr = self.github.create_pull(repo, branch, plan["default_branch"],
+                                         f"Set up software factory for {repo}",
+                                         self._setup_pr_body(repo, plan, secrets))
+        except GitHubError:
+            pr = next((item for item in self.github.pulls_for_branch(repo, branch)
+                       if item["state"] == "open"), None)
+            if pr is None:
+                raise
+        self.store.log("bootstrap_pr", {"repo": repo, "by": by, "branch": branch,
+                                        "baseSha": plan["base_sha"], "headSha": sha,
+                                        "paths": paths, "prNumber": pr["number"], "initialCommit": initial})
+        return dict(response, prNumber=pr["number"],
+                    url=pr.get("html_url") or f"https://github.com/{repo}/pull/{pr['number']}")
+
+    @staticmethod
+    def _setup_pr_body(repo, plan, secrets):
+        """The setup PR's body in the gate's format: the plan's files and each secret's status."""
+        paths = sorted(plan["files"])
+        return "\n".join([
             "## Task", "", f"Owner-approved bootstrap for https://github.com/{repo}.", "",
             "## Intent", "", "Install the missing controls required for this repository to join the factory.", "",
             "## Why it was needed", "", "The factory cannot run reviewed PRs without its gate and written standard.", "",
@@ -169,19 +192,6 @@ class Foreman:
             *(f"- `{item['name']}`: {item['status']}" for item in secrets), "",
             "After the owner merges: ask Day Desk to check and enable the repo.", "",
         ])
-        try:
-            pr = self.github.create_pull(repo, branch, plan["default_branch"],
-                                         f"Set up software factory for {repo}", body)
-        except GitHubError:
-            pr = next((item for item in self.github.pulls_for_branch(repo, branch)
-                       if item["state"] == "open"), None)
-            if pr is None:
-                raise
-        self.store.log("bootstrap_pr", {"repo": repo, "by": by, "branch": branch,
-                                        "baseSha": plan["base_sha"], "headSha": sha,
-                                        "paths": paths, "prNumber": pr["number"], "initialCommit": initial})
-        return dict(response, prNumber=pr["number"],
-                    url=pr.get("html_url") or f"https://github.com/{repo}/pull/{pr['number']}")
 
     def _open_setup_pr(self, repo, base):
         """The one open PR from a setup branch of `repo` itself into `base`, or None."""
@@ -289,6 +299,8 @@ class Foreman:
     def _write(self, old, new, action, **detail):
         if new == old:
             return old
+        if new["state"] != "ready" and new.get("waitingOn") is not None:  # however it leaves ready,
+            new = dict(new, waitingOn=None)  # the wait ends: say so, or status names a stale issue
         if new["state"] in ("human_waiting", "blocked") and not new.get("owner"):
             new = dict(new, owner=self.config.owner or new["repo"].split("/")[0])
         stored = self.store.put(new)
@@ -391,9 +403,9 @@ class Foreman:
             return []
         try:
             return lessons.for_repo(lessons.load(self.config.lessons_file), wi["repo"])
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:  # OSError: a file that exists but cannot be read
             self.store.log("lessons_invalid", {"error": str(exc)}, wi["id"])
-            return []  # a hand-edited file must not stop the line; the audit log says why
+            return []  # a hand-edited or unreadable file must not stop the line; the audit log says why
 
     def _default_branch(self, repo):
         return self.github.repository(repo)["default_branch"]
@@ -554,7 +566,7 @@ class Foreman:
             problem = self._plan_problem(item)
             if problem:
                 raise ToolError(f"issue {position} of the plan {problem}. No issue was opened")
-        opened = []
+        opened, taken = [], []
         for item in issues:
             body = f"Depends on #{opened[-1]['issue']}\n\n{item['body']}" if opened else item["body"]
             try:  # the checks passed, so only GitHub or the author's trust can stop the plan here
@@ -562,9 +574,15 @@ class Foreman:
                 opened.append({"issue": issue["number"], "url": issue.get("html_url")})
                 self.store.log("approved", {"by": by}, workitem.workitem_id(repo, issue["number"]))
                 self.intake(repo, issue["number"])
+                taken.append(issue["number"])
             except (GitHubError, ToolError) as exc:
-                raise ToolError(f"{exc}. The plan stopped. Issues opened, which the factory works on: "
-                                + (", ".join(f"#{o['issue']}" for o in opened) or "none")) from None
+                message = (f"{exc}. The plan stopped. Issues opened, which the factory works on: "
+                           + (", ".join(f"#{number}" for number in taken) or "none"))
+                if len(opened) > len(taken):  # created on GitHub, then refused at intake
+                    number = opened[-1]["issue"]
+                    message += (f". #{number} was opened too, but the factory will not run it: fix the "
+                                f"cause above, or close #{number}")
+                raise ToolError(message) from None
         return {"repo": repo, "issues": opened}
 
     def _plan_problem(self, item):
@@ -577,7 +595,9 @@ class Foreman:
             return ("needs an '## Acceptance' list of '- <claim> — done when: <check>' bullets. "
                     "Without a check: " + ("; ".join(missing) or "no bullets found"))
         text = f"{item['title']}\n{item['body']}".lower()  # code cannot tell a request from a mention
-        named = [path for path in self.config.protected_paths if path.rstrip("/").lower() in text]
+        # a whole path word only: raw.githubusercontent.com or AGENTS.mdx names no protected path
+        named = [path for path in self.config.protected_paths
+                 if re.search(rf"(?<![\w.-]){re.escape(path.rstrip('/').lower())}(?![\w-])", text)]
         if named:
             return f"names {', '.join(named)}, which only a person changes; leave it out of the plan"
         return None

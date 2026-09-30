@@ -60,12 +60,13 @@ def lesson_effect(lessons, workorders_of):
     Keyed "repo:fingerprint": a fingerprint names a path and a problem, not a repo.
     """
     effect = {}
+    stored = list(workorders_of())  # one read of the store for every lesson
     for entry in lessons:
         fingerprint, key = entry["fingerprint"], f"{entry['repo'].lower()}:{entry['fingerprint']}"
         if key in effect:
             continue
         sent, recurred = set(), 0
-        in_repo = (o for o in workorders_of() if o["repo"].lower() == entry["repo"].lower())
+        in_repo = (o for o in stored if o["repo"].lower() == entry["repo"].lower())
         for workitem_id, orders in sorted(_grouped(in_repo).items()):
             carried = [o for o in orders if any(l["fingerprint"] == fingerprint
                                                 for l in o.get("lessons") or [])]

@@ -76,7 +76,8 @@ def build(store, foreman):
              "factory-standard block. Never merges or enables the repo. Requires a verify command "
              "when the gate config is missing. An empty repo first gets one commit with only a "
              "README.md on its default branch; the result names it as initialCommit. An open setup "
-             "PR is adopted; when its files differ from the plan, a commit is added to it (updatedSha). "
+             "PR is adopted; when its files differ from the plan, a commit is added to it (updatedSha) "
+             "and its body is rewritten to match. "
              "Also sets the "
              "repo's missing gate Actions secrets from the owner's Keychain and never overwrites "
              "one; `secrets` gives each name and status (set, already set, missing, failed), "
@@ -155,7 +156,7 @@ def build(store, foreman):
         Tool("factory_approve_lesson",
              "A person's go on one lesson for a repo: the factory passes it to this repo's future "
              "workers as a past gate finding to avoid. The fingerprint must be a candidate from "
-             "factory_lessons; the text is what the worker should read (capped at 300 "
+             f"factory_lessons; the text is what the worker should read (capped at {lessons.MAX_TEXT} "
              "characters). Approving the same fingerprint again for the repo is refused.",
              {"type": "object", "required": ["repo", "fingerprint", "text", "by"],
               "additionalProperties": False,
