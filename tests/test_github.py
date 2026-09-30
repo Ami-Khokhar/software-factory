@@ -25,6 +25,8 @@ class Api(BaseHTTPRequestHandler):
         elif self.path == "/repos/o/r/contents/.github/pr-gatekeeper.json":
             text = base64.encodebytes(b'{"verify": "make test"}').decode()  # GitHub wraps it in lines
             body, link = {"type": "file", "encoding": "base64", "content": text}, ""
+        elif self.path.startswith("/repos/o/r/pulls?"):
+            body, link = [{"number": 3}], ""
         elif self.path in ("/repos/o/r/issues/404", "/repos/o/r/contents/.github/missing.json"):
             body, link, status = {"message": "Not Found"}, "", 404
         else:
@@ -74,6 +76,10 @@ class GitHubClientTest(unittest.TestCase):
     def test_a_file_is_its_decoded_text_or_none(self):
         self.assertEqual(self.github.file("o/r", ".github/pr-gatekeeper.json"), '{"verify": "make test"}')
         self.assertIsNone(self.github.file("o/r", ".github/missing.json"))
+
+    def test_open_pulls_asks_for_the_open_prs_into_a_base(self):
+        self.assertEqual(self.github.open_pulls("o/r", "main"), [{"number": 3}])
+        self.assertEqual(Api.seen[0][0], "/repos/o/r/pulls?state=open&base=main&per_page=100")
 
     def test_a_label_that_exists_already_is_not_an_error(self):
         self.github.create_label("o/r", "factory:ready", "0E8A16", "go")

@@ -66,6 +66,42 @@ class BootstrapGitTest(unittest.TestCase):
 
         self.assertEqual(self.head("factory/setup"), first)
 
+    def test_an_update_adds_one_commit_with_the_changed_files_on_top_of_the_setup_branch(self):
+        first = patches.bootstrap(self.bare, None, "factory/setup", self.base,
+                                  {"AGENTS.md": "first\n", "gate.json": "{}\n"}, "Set up factory")
+
+        sha = patches.update_bootstrap(self.bare, None, "factory/setup", first,
+                                       {"AGENTS.md": "second\n", "gate.json": "{}\n"}, "Update")
+
+        self.assertEqual(sha, self.head("factory/setup"))
+        self.assertEqual(git("rev-parse", "factory/setup^", cwd=self.bare), first)
+        self.assertEqual(git("diff", "--name-only", first, sha, cwd=self.bare), "AGENTS.md")
+        self.assertEqual(git("show", f"{sha}:AGENTS.md", cwd=self.bare), "second")
+
+    def test_an_update_to_a_branch_that_holds_the_files_pushes_nothing(self):
+        first = patches.bootstrap(self.bare, None, "factory/setup", self.base,
+                                  {"AGENTS.md": "first\n"}, "Set up factory")
+
+        self.assertIsNone(patches.update_bootstrap(self.bare, None, "factory/setup", first,
+                                                   {"AGENTS.md": "first\n"}, "Update"))
+        self.assertEqual(self.head("factory/setup"), first)
+
+    def test_an_update_to_a_branch_that_moved_is_refused_and_not_forced(self):
+        first = patches.bootstrap(self.bare, None, "factory/setup", self.base,
+                                  {"AGENTS.md": "first\n"}, "Set up factory")
+        git("fetch", "-q", "origin", cwd=self.seed)
+        git("checkout", "-q", "-b", "other", "origin/factory/setup", cwd=self.seed)
+        self.write("notes.md", "owner's change\n")
+        git("add", "notes.md", cwd=self.seed)
+        git("commit", "-q", "-m", "owner", cwd=self.seed)
+        git("push", "-q", "origin", "HEAD:factory/setup", cwd=self.seed)
+        moved = self.head("factory/setup")
+
+        with self.assertRaisesRegex(patches.PatchError, "cannot fast-forward"):
+            patches.update_bootstrap(self.bare, None, "factory/setup", first, {"AGENTS.md": "second\n"}, "Update")
+
+        self.assertEqual(self.head("factory/setup"), moved)
+
     def test_a_missing_base_does_not_create_the_setup_branch(self):
         with self.assertRaises(patches.PatchError):
             patches.bootstrap(self.bare, None, "factory/setup", "0" * 40,

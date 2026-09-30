@@ -15,6 +15,7 @@ from .verdict import blocking
 # States that need a person. Entering one posts a comment on the issue, so the owner hears of it.
 ATTENTION = ("human_waiting", "blocked", "exhausted")
 WORKING = ("dispatching", "implementing")
+BOOTSTRAP_PREFIX = "factory-bootstrap/"
 
 
 class Foreman:
@@ -119,17 +120,19 @@ class Foreman:
         if not files:
             return {"repo": repo, "ready": True, "needsHumanMerge": False, "prNumber": None,
                     "secrets": self._gate_secrets(repo, by)}
-        branch = "factory-bootstrap/" + plan["fingerprint"][:16]
+        branch = BOOTSTRAP_PREFIX + plan["fingerprint"][:16]
         response = {"repo": repo, "ready": False, "needsHumanMerge": True, "changedPaths": sorted(files)}
-        existing = next((pr for pr in self.github.pulls_for_branch(repo, branch)
-                         if pr["state"] == "open"), None)
-        if existing:  # a retry: sets a secret the owner has added to the Keychain since
+        existing = self._open_setup_pr(repo, plan["default_branch"])
+        if existing:  # a retry: the owner reviews one setup PR, brought up to date with the plan
+            head = self._update_setup_pr(repo, existing, files, by)
+            if head:
+                response["updatedSha"] = head
             return dict(response, prNumber=existing["number"], secrets=self._gate_secrets(repo, by),
                         url=existing.get("html_url") or f"https://github.com/{repo}/pull/{existing['number']}")
         if self.github.branch_head(repo, plan["default_branch"]) != plan["base_sha"]:
             raise ToolError(f"{repo}'s default branch changed during bootstrap; check the repo and try again")
-        if self.github.branch_head(repo, branch):
-            raise ToolError(f"bootstrap branch {branch} exists without an open PR; a person must inspect it")
+        if plan["base_sha"]:  # an empty repo has no branches; its setup branch is named after the README
+            self._refuse_existing_branch(repo, branch)
         secrets = response["secrets"] = self._gate_secrets(repo, by)  # after the refusals: they write nothing
         initial = None
         if plan["base_sha"] is None:  # an empty repo: only a README goes straight to the default branch
@@ -143,8 +146,9 @@ class Foreman:
             self.store.log("bootstrap_initial_commit", {"repo": repo, "by": by, "sha": initial,
                                                         "paths": sorted(plan["initial_files"])})
             plan = repos.plan_on(plan, initial)
-            branch = "factory-bootstrap/" + plan["fingerprint"][:16]
+            branch = BOOTSTRAP_PREFIX + plan["fingerprint"][:16]
             response["initialCommit"] = initial
+            self._refuse_existing_branch(repo, branch)
         try:
             sha = patches.bootstrap(self.config.git_url.format(repo=repo), self.config.github_token,
                                     branch, plan["base_sha"], files, "Set up software factory")
@@ -177,6 +181,36 @@ class Foreman:
                                         "paths": paths, "prNumber": pr["number"], "initialCommit": initial})
         return dict(response, prNumber=pr["number"],
                     url=pr.get("html_url") or f"https://github.com/{repo}/pull/{pr['number']}")
+
+    def _open_setup_pr(self, repo, base):
+        """The one open PR from a setup branch of `repo` itself into `base`, or None."""
+        found = sorted((pr for pr in self.github.open_pulls(repo, base)
+                        if pr["head"]["ref"].startswith(BOOTSTRAP_PREFIX)
+                        and ((pr["head"].get("repo") or {}).get("full_name") or "").lower() == repo.lower()),
+                       key=lambda pr: pr["number"])
+        if len(found) > 1:
+            numbers = ", ".join(f"#{pr['number']}" for pr in found)
+            raise ToolError(f"{repo} has several open setup PRs ({numbers}); close all but one and try again")
+        return found[0] if found else None
+
+    def _update_setup_pr(self, repo, pr, files, by):
+        """Commit the plan's files on the adopted PR's branch. The new head, or None if it has them."""
+        branch = pr["head"]["ref"]
+        try:
+            sha = patches.update_bootstrap(self.config.git_url.format(repo=repo), self.config.github_token,
+                                           branch, pr["head"]["sha"], files, "Update the software factory setup")
+        except patches.PatchError as exc:
+            raise ToolError(f"setup PR #{pr['number']} was not updated to the current plan: {exc}; "
+                            "a person must inspect it") from None
+        if sha:
+            self.store.log("bootstrap_pr_updated", {"repo": repo, "by": by, "branch": branch,
+                                                    "prNumber": pr["number"], "headSha": sha,
+                                                    "paths": sorted(files)})
+        return sha
+
+    def _refuse_existing_branch(self, repo, branch):
+        if self.github.branch_head(repo, branch):
+            raise ToolError(f"bootstrap branch {branch} exists without an open PR; a person must inspect it")
 
     def _gate_secrets(self, repo, by):
         """Set the repo's missing gate secrets from the Keychain; log only names and statuses."""

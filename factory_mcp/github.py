@@ -53,6 +53,10 @@ class GitHub:
         owner = repo.split("/")[0]
         return self._get_all(f"/repos/{repo}/pulls", head=f"{owner}:{branch}", state="all")
 
+    def open_pulls(self, repo, base):
+        """The open PRs into `base`."""
+        return self._get_all(f"/repos/{repo}/pulls", state="open", base=base)
+
     def comments(self, repo, number):
         return self._get_all(f"/repos/{repo}/issues/{number}/comments")
 

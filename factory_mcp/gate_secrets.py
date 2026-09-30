@@ -2,11 +2,13 @@
 
 factory-mcp, not a model, reads each value with `security` and gives it to `gh secret set` on
 stdin; gh does GitHub's libsodium encryption, so this stays standard library only. A value never
-goes into argv, a result, a log or an error text, and nothing here reads stderr, where a failing
-command may echo it.
+goes into argv, a result, a log or an error text. Only `gh secret list`, which is given no value,
+has its stderr read, so the owner can see why the factory's token was refused (ADR-0023); the
+stderr of the others, where a failing command may echo a value, is never read.
 """
 import json
 import os
+import re
 import subprocess
 
 # The gate workflow passes both. The public wrapper checks out the private Ami-Khokhar/pr-gatekeeper
@@ -17,10 +19,15 @@ SERVICE = "software-factory/{name}"
 MISSING = "missing: add it with security add-generic-password -s software-factory/{name} -a factory -w"
 NOT_IN_KEYCHAIN = 44  # security's exit code for errSecItemNotFound
 TIMEOUT = 60
+TOKEN_LIKE = re.compile(r"(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]+")
+ERROR_CHARS = 200
+REFUSED = re.compile(r"\b403\b|Resource not accessible", re.I)
+NEEDS_SECRETS = ("the factory's GitHub token needs Actions secrets read/write (the \"Secrets\" permission "
+                 "on a fine-grained token, the `repo` scope on a classic one)")
 
 
 class _Failed(Exception):
-    """A command that failed, named with its exit code only."""
+    """A command that failed, named with its exit code; never with a secret value."""
 
 
 def _run(argv, command, env=None, value=None):
@@ -34,17 +41,28 @@ def _run(argv, command, env=None, value=None):
         raise _Failed(f"{command} failed: {type(exc).__name__}") from None
 
 
-def _gh(args, token, value=None):
+def _error_line(stderr, token):
+    """gh's first stderr line without the token or anything shaped like one, at most ERROR_CHARS."""
+    line = next((line.strip() for line in (stderr or "").splitlines() if line.strip()), "")
+    if token:
+        line = line.replace(token, "[token]")
+    return TOKEN_LIKE.sub("[token]", line)[:ERROR_CHARS]
+
+
+def _gh(args, token, value=None, read_error=False):
+    """`read_error` only for a command given no value: a failing gh may echo its stdin."""
     command = "gh " + " ".join(args[:2])
     env = dict(os.environ, GH_TOKEN=token) if token else None
     done = _run(["gh", *args], command, env, value)
     if done.returncode:
-        raise _Failed(f"{command} exited {done.returncode}")
+        line = _error_line(done.stderr, token) if read_error and value is None else ""
+        hint = f"; {NEEDS_SECRETS}" if REFUSED.search(line) else ""
+        raise _Failed(f"{command} exited {done.returncode}" + (f": {line}{hint}" if line else ""))
     return done.stdout
 
 
 def _names_on(repo, token):
-    out = _gh(["secret", "list", "--repo", repo, "--json", "name"], token)
+    out = _gh(["secret", "list", "--repo", repo, "--json", "name"], token, read_error=True)
     try:
         return {item["name"] for item in json.loads(out)}
     except (ValueError, TypeError, KeyError):

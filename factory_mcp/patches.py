@@ -156,6 +156,35 @@ def bootstrap(url, token, branch, base_sha, files, message):
         return _git(["rev-parse", "HEAD"], work, env)
 
 
+def update_bootstrap(url, token, branch, head_sha, files, message):
+    """Bring the setup branch at ``head_sha`` up to date with ``files`` in one new commit.
+
+    Returns the new commit, or None when the branch already holds ``files``. The push is not
+    forced: a branch that moved since ``head_sha`` rejects it, and nothing is overwritten.
+    """
+    paths = _bootstrap_paths(files)
+    env = _env(token)
+    with tempfile.TemporaryDirectory() as tmp:
+        _git(["clone", "-q", "--no-checkout", url, "repo"], tmp, env)
+        work = os.path.join(tmp, "repo")
+        _git(["checkout", "-q", "-b", "setup", head_sha], work, env)
+        for name in paths:
+            _write_bootstrap_file(work, name, files[name])
+        _git(["add", "--", *paths], work, env)
+        staged = _changed_paths(["diff", "--cached", "--name-only", "--no-renames", "-z"], work, env)
+        if not staged:
+            return None
+        if not set(staged) <= set(paths):
+            raise PatchError("bootstrap staged paths do not match requested files")
+        _git(["-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", message], work, env)
+        try:
+            _git(["push", "-q", "origin", f"HEAD:refs/heads/{branch}"], work, env)
+        except PatchError as exc:
+            raise PatchError(f"{branch} cannot fast-forward from {head_sha[:12]}, so it was not "
+                             f"updated ({exc})") from None
+        return _git(["rev-parse", "HEAD"], work, env)
+
+
 def apply(url, token, branch, base_sha, patch, message, force, protected=()):
     """Clone, apply the patch on base_sha, commit, push to `branch`. Returns the new commit sha.
     A patch that touches a protected path is refused before the push: a pushed workflow file would
