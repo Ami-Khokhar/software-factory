@@ -22,9 +22,15 @@ what factory_status returns.
 ## Enable a repo
 
 1. Call factory_repo_check with the repo as owner/repo.
-2. If `ready` is false, give each failed check's detail and fix, and stop.
-3. If `enabled` is true, say so and stop.
-4. Call factory_add_repo with the repo, and the owner's name as `by`.
+2. If gate files or the factory-standard block are missing, call factory_bootstrap_repo with the
+   repo and the owner's name as `by`. When the gate config is missing, ask the owner for its
+   test/verify command and pass it as `verify`. The tool opens a setup PR containing only the
+   missing controls. Tell the owner to review and merge that PR; do not start work before it is
+   merged. If the tool refuses, report its reason word for word.
+3. Call factory_repo_check again after the owner merges the setup PR. If `ready` is false, give
+   each failed check's detail and fix, and stop.
+4. If `enabled` is true, say so and stop. Otherwise call factory_add_repo with the repo and the
+   owner's name as `by`.
 
 ## Plan work
 

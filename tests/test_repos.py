@@ -10,7 +10,8 @@ from factory_mcp import tools
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
-from factory_mcp.repos import GATE_CONFIG, GATE_WORKFLOW, TEMPLATE, check, load
+from factory_mcp.repos import (GATE_CONFIG, GATE_WORKFLOW, TEMPLATE, bootstrap_plan, check, load,
+                               standard_blocks)
 from factory_mcp.store import Store
 from tests.fakes import FakeGitHub, FakeRelay
 
@@ -24,6 +25,66 @@ def gated(github, repo=REPO, config='{"verify": "make test"}'):
     github.contents.update({(repo, GATE_CONFIG): config, (repo, GATE_WORKFLOW): "on: pull_request",
                             (repo, "AGENTS.md"): TEMPLATE.read_text().replace("\n", "\r\n")})
     return github
+
+
+class BootstrapPlanTest(unittest.TestCase):
+    def test_archive_or_missing_push_access_refuses_before_any_plan(self):
+        for changes, reason in (({"archived": True}, "archived"),
+                                ({"permissions": {"push": False}}, "cannot push")):
+            with self.subTest(changes=changes):
+                github = FakeGitHub()
+                github.repos[REPO] = changes
+                with self.assertRaisesRegex(ValueError, reason):
+                    bootstrap_plan(github, REPO, "make test")
+                self.assertEqual(github.contents, {})
+
+    def test_missing_controls_have_one_deterministic_three_file_plan(self):
+        github = FakeGitHub()
+
+        plan = bootstrap_plan(github, REPO, "python3 -m unittest")
+
+        self.assertEqual((plan["repo"], plan["default_branch"], plan["base_sha"]), (REPO, "main", "base0"))
+        self.assertEqual(set(plan["files"]), {GATE_CONFIG, GATE_WORKFLOW, "AGENTS.md"})
+        config = json.loads(plan["files"][GATE_CONFIG])
+        self.assertEqual(config, {"verify": "python3 -m unittest"})
+        self.assertEqual(standard_blocks(plan["files"]["AGENTS.md"]), standard_blocks(TEMPLATE.read_text()))
+        self.assertEqual(github.contents, {})
+        again = bootstrap_plan(github, REPO, "python3 -m unittest")
+        self.assertEqual((again["files"], again["fingerprint"]), (plan["files"], plan["fingerprint"]))
+
+    def test_missing_controls_are_added_without_rewriting_valid_existing_ones(self):
+        github = FakeGitHub()
+        github.contents[(REPO, GATE_CONFIG)] = '{"verify": "make test"}'
+        github.contents[(REPO, "AGENTS.md")] = "# Project notes\n"
+
+        plan = bootstrap_plan(github, REPO)
+
+        self.assertEqual(set(plan["files"]), {GATE_WORKFLOW, "AGENTS.md"})
+        self.assertEqual(plan["files"]["AGENTS.md"], "# Project notes\n\n" + standard_blocks(TEMPLATE.read_text())[0] + "\n")
+
+    def test_a_missing_config_requires_the_owner_selected_verify_command(self):
+        with self.assertRaisesRegex(ValueError, "verify command"):
+            bootstrap_plan(FakeGitHub(), REPO)
+
+    def test_conflicting_control_state_is_refused(self):
+        cases = [
+            (GATE_CONFIG, "not JSON", "not valid JSON"),
+            (GATE_CONFIG, '{"max_rounds": 3}', "has no verify command"),
+            ("AGENTS.md", "<!-- factory-standard:begin -->old<!-- factory-standard:end -->", "differs"),
+            ("AGENTS.md", "<!-- factory-standard:begin -->", "malformed"),
+        ]
+        for path, content, reason in cases:
+            with self.subTest(path=path, content=content):
+                github = FakeGitHub()
+                github.contents[(REPO, path)] = content
+                with self.assertRaisesRegex(ValueError, reason):
+                    bootstrap_plan(github, REPO, "make test")
+                self.assertEqual(github.contents[(REPO, path)], content)
+
+    def test_a_repo_that_already_has_valid_controls_needs_no_files(self):
+        plan = bootstrap_plan(gated(FakeGitHub()), REPO)
+
+        self.assertEqual(plan["files"], {})
 
 
 class RepoCheckTest(unittest.TestCase):

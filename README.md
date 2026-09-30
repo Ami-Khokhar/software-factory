@@ -4,7 +4,7 @@ A person states a goal as a GitHub issue with checkable acceptance criteria. The
 it to a reviewed, merged pull request, and asks the person only when it is stuck.
 
 - **Front door:** Day Desk, one Hermes agent in Telegram ([`tenant/hermes/`](tenant/hermes/)), and
-  the `factory` command.
+  the `factory` command. Day Desk can prepare a one-time repo setup PR for your merge.
 - **Foreman:** factory-mcp, in this repo. It owns every WorkItem's state and makes every decision.
 - **Workers:** [agent-relay](https://github.com/Ami-Khokhar/agent-relay) runs Freebuff with GLM 5.3
   Flash in a Docker sandbox ([`worker/`](worker/)).

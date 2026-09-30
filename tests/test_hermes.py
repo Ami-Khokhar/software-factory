@@ -22,6 +22,7 @@ class ProfileTest(unittest.TestCase):
         """Hermes asks the owner before any tool on an untrusted server that is not marked
         read-only (tests/test_mcp_server.py checks the marks). A new tool is added here on purpose."""
         self.assertEqual(SERVER["trust"], "untrusted")
+        self.assertIn("factory_bootstrap_repo", SERVER["tools"]["include"])
         real = set(tools.build(None, None))
         self.assertEqual(real - set(SERVER["tools"]["include"]), {"factory_tick", "factory_intake"})
         self.assertLessEqual(set(SERVER["tools"]["include"]), real)

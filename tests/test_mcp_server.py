@@ -58,7 +58,8 @@ class McpServerTest(unittest.TestCase):
         writes = {t["name"] for t in tools if t["annotations"]["readOnlyHint"] is False}
         self.assertEqual(reads, {"factory_status", "factory_repo_check"})
         self.assertEqual(writes, {"factory_intake", "factory_tick", "factory_resolve_human",
-                                  "factory_propose_issue", "factory_add_repo", "factory_approve_issue"})
+                                  "factory_propose_issue", "factory_add_repo", "factory_approve_issue",
+                                  "factory_bootstrap_repo"})
         self.assertTrue(all(t["inputSchema"]["type"] == "object" for t in tools))
 
     def test_status_call_is_audited(self):

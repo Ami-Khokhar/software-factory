@@ -107,6 +107,62 @@ class Foreman:
             self.config = dataclasses.replace(self.config, repos=self.config.repos | {repo})
         return {"repo": repo, "added": added, "checkout": checkout}
 
+    def bootstrap_repo(self, repo, verify, by):
+        """Prepare only missing factory controls on a setup PR for the owner's merge."""
+        if not isinstance(by, str) or not by.strip():
+            raise ToolError("bootstrap needs the name of the person who approved it")
+        try:
+            plan = repos.bootstrap_plan(self.github, repo, verify)
+        except ValueError as exc:
+            raise ToolError(str(exc)) from None
+        repo, files = plan["repo"], plan["files"]
+        if not files:
+            return {"repo": repo, "ready": True, "needsHumanMerge": False, "prNumber": None}
+        branch = "factory-bootstrap/" + plan["fingerprint"][:16]
+        response = {"repo": repo, "ready": False, "needsHumanMerge": True,
+                    "changedPaths": sorted(files), "requiredSecrets": [
+                        "OPENCODE_GO_API_KEY", "GATEKEEPER_READ_TOKEN"]}
+        existing = next((pr for pr in self.github.pulls_for_branch(repo, branch)
+                         if pr["state"] == "open"), None)
+        if existing:
+            return dict(response, prNumber=existing["number"],
+                        url=existing.get("html_url") or f"https://github.com/{repo}/pull/{existing['number']}")
+        if self.github.branch_head(repo, plan["default_branch"]) != plan["base_sha"]:
+            raise ToolError(f"{repo}'s default branch changed during bootstrap; check the repo and try again")
+        if self.github.branch_head(repo, branch):
+            raise ToolError(f"bootstrap branch {branch} exists without an open PR; a person must inspect it")
+        try:
+            sha = patches.bootstrap(self.config.git_url.format(repo=repo), self.config.github_token,
+                                    branch, plan["base_sha"], files, "Set up software factory")
+        except patches.PatchError as exc:
+            raise ToolError(str(exc)) from None
+        paths = sorted(files)
+        body = "\n".join([
+            "## Task", "", f"Owner-approved bootstrap for https://github.com/{repo}.", "",
+            "## Intent", "", "Install the missing controls required for this repository to join the factory.", "",
+            "## Why it was needed", "", "The factory cannot run reviewed PRs without its gate and written standard.", "",
+            "## Why this approach", "", "The factory prepared only the missing files from trusted templates.",
+            "The owner must review and merge this setup PR; normal workers still cannot change these paths.", "",
+            "## What changed", "", *(f"- `{path}`: install the missing factory control" for path in paths), "",
+            "## Proof of work", "", "```text",
+            f"$ git diff --name-only --no-renames -z {plan['base_sha']} HEAD", *paths, "```", "",
+            "After the owner merges: confirm the repo has OPENCODE_GO_API_KEY and GATEKEEPER_READ_TOKEN "
+            "Actions secrets, then ask Day Desk to check and enable the repo.", "",
+        ])
+        try:
+            pr = self.github.create_pull(repo, branch, plan["default_branch"],
+                                         f"Set up software factory for {repo}", body)
+        except GitHubError:
+            pr = next((item for item in self.github.pulls_for_branch(repo, branch)
+                       if item["state"] == "open"), None)
+            if pr is None:
+                raise
+        self.store.log("bootstrap_pr", {"repo": repo, "by": by, "branch": branch,
+                                        "baseSha": plan["base_sha"], "headSha": sha,
+                                        "paths": paths, "prNumber": pr["number"]})
+        return dict(response, prNumber=pr["number"],
+                    url=pr.get("html_url") or f"https://github.com/{repo}/pull/{pr['number']}")
+
     def rebuild(self):
         """Intake every open `factory:ready` issue the store does not know (ADR-0009: GitHub is the truth)."""
         found = []
