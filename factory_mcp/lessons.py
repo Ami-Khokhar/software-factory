@@ -94,7 +94,7 @@ def load(path):
 
 
 def for_repo(lessons, repo):
-    """The approved lessons for one repo, newest first."""
+    """The approved lessons for one repo, newest first: the WorkOrder's pick."""
     return sorted((entry for entry in lessons if entry["repo"].lower() == repo.lower()),
                   key=lambda entry: entry["approved_at"], reverse=True)
 

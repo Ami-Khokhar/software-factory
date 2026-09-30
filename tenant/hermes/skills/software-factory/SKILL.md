@@ -69,9 +69,9 @@ A factory-watch alert names a WorkItem that waits on the owner. When the owner r
 
 ## Teach the factory a lesson
 
-A lesson is a gate finding the factory saw on two or more WorkItems in one repo, recorded in
-the factory's lessons file with the owner's words. Only the owner approves one. Workers do not see
-lessons yet; say so if the owner asks.
+A lesson is a gate finding the factory saw on two or more WorkItems in one repo, passed in the
+owner's words to that repo's later workers so they avoid it. Only the owner approves one.
+factory_status shows each lesson's effect; offer to retire or rewrite one it flags as not working.
 
 1. Call factory_lessons with the repo. Show each candidate with its problem, its fingerprint and
    how many WorkItems it blocked, then the lessons already approved.

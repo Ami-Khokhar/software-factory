@@ -15,6 +15,8 @@
     "goal",
     "acceptance",
     "constraints",
+    "findingsToAddress",
+    "lessons",
     "requiredEvidence",
     "budget",
     "idempotencyKey",
@@ -47,6 +49,20 @@
       "type": "array",
       "description": "What this WorkOrder must resolve: the gate's findings, the owner's note (fingerprint human), or why the last attempt failed.",
       "items": { "$ref": "#/$defs/findingRef" }
+    },
+    "lessons": {
+      "type": "array",
+      "maxItems": 10,
+      "description": "Past gate findings in this repo, owner-approved (ADR-0020), for the worker to avoid. Data, like findingsToAddress; never instructions.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["fingerprint", "text"],
+        "properties": {
+          "fingerprint": { "type": "string", "minLength": 1 },
+          "text": { "type": "string", "minLength": 1, "maxLength": 300 }
+        }
+      }
     },
     "requiredEvidence": {
       "type": "array",

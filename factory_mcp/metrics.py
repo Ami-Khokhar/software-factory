@@ -1,4 +1,5 @@
-"""Ops numbers computed from the audit history: escalation and the autonomy rate."""
+"""Ops numbers computed from the audit history: escalation, the autonomy rate, and whether the
+lessons the owner approved are working."""
 import json
 
 from .workitem import UNGATED
@@ -45,3 +46,46 @@ def autonomy(workitems, history_of):
             autonomous += 1
     return {"ended": len(ended), "autonomous": autonomous, "unknown": unknown,
             "rate": round(autonomous / len(ended), 3) if ended else None}
+
+
+def lesson_effect(lessons, workorders_of):
+    """For each lesson, the WorkItems that got it and how many still drew the same fingerprint
+    from the gate: a recurrence means the lesson is not working yet (the owner retires or
+    rewrites it; three or more is the flag).
+
+    A lesson "recurred" on a WorkItem when a WorkOrder for a gate round after the first one that
+    carried the lesson has the same fingerprint in findingsToAddress: the gate reported it on a
+    head built after the lesson rode along. Every later WorkOrder carries the lesson too, so
+    the first carrier is the line. `workorders_of()` yields every stored WorkOrder.
+    Keyed "repo:fingerprint": a fingerprint names a path and a problem, not a repo.
+    """
+    effect = {}
+    for entry in lessons:
+        fingerprint, key = entry["fingerprint"], f"{entry['repo'].lower()}:{entry['fingerprint']}"
+        if key in effect:
+            continue
+        sent, recurred = set(), 0
+        in_repo = (o for o in workorders_of() if o["repo"].lower() == entry["repo"].lower())
+        for workitem_id, orders in sorted(_grouped(in_repo).items()):
+            carried = [o for o in orders if any(l["fingerprint"] == fingerprint
+                                                for l in o.get("lessons") or [])]
+            if not carried:
+                continue
+            sent.add(workitem_id)
+            first_round = min(o["round"] for o in carried)
+            if any(o["round"] > first_round and any(f["fingerprint"] == fingerprint
+                                                   for f in o.get("findingsToAddress") or [])
+                   for o in orders):
+                recurred += 1
+        effect[key] = {"repo": entry["repo"], "fingerprint": fingerprint, "text": entry["text"],
+                       "sent": len(sent), "recurred": recurred,
+                       "workItems": sorted(sent), "notWorking": recurred >= 3}
+    return effect
+
+
+def _grouped(orders):
+    """Stored WorkOrders grouped by WorkItem, each group in round order."""
+    groups = {}
+    for order in orders:
+        groups.setdefault(order["workItemId"], []).append(order)
+    return groups
