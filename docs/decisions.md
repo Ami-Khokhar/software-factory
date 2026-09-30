@@ -357,8 +357,8 @@ lesson. When WorkOrders carry lessons, they stay data under the worker rules, li
 ## ADR-0021 — Day Desk's shell runs in a Docker sandbox
 
 **Context.** ADR-0013 gave Day Desk no shell, because a host shell runs as the owner: it could
-read the profile's `.env` and call factory tools with no approval. So the owner had to create each
-repo and make its first commit by hand, and Day Desk could not read a repo to plan issues for it.
+read the profile's `.env` and call factory tools with no approval. So the owner had to make each
+repo's first commit by hand, and Day Desk could not read a repo to plan issues for it.
 Hermes can run its terminal tool in Docker instead. That container gets no host directory it can
 write when `terminal.container_persistent` is false, and it gets only the environment variables
 that the config names: Hermes mounts the profile's skills and caches read-only under `/root`, and
@@ -368,21 +368,21 @@ itself.
 **Decision.** Day Desk's `terminal` toolset is on, with `terminal.backend: docker` and the image
 in `tenant/hermes/sandbox/`: git, a pinned gh and python3, for a user with no sudo. One variable
 enters the container, `DAYDESK_GITHUB_TOKEN`, and the image's gh wrapper hands it to gh as
-`GH_TOKEN`. It is a fine-grained token that the owner makes for this job alone. It is not the
-factory's token. Day Desk uses the shell to create a repo, make the first commit of an empty repo
-and read a repo. It never merges, never pushes to a `factory/*` branch or, after the first commit,
-to a default branch, and never changes `.github/` or `AGENTS.md`. `code_execution`, `file`,
-`browser`, `computer_use` and `delegation` stay off: they run on the host or call tools back on it.
+`GH_TOKEN`. It is a fine-grained token that the owner makes for this job alone, with Contents and
+Pull requests read and write and no Administration. It is not the factory's token. Day Desk uses
+the shell to make the first commit of an empty repo and to read a repo; the owner creates repos.
+It never merges, never pushes to a `factory/*` branch or, after the first commit, to a default
+branch, and never changes `.github/` or `AGENTS.md`. `code_execution`, `file`, `browser`,
+`computer_use` and `delegation` stay off: they run on the host or call tools back on it.
 
 **Consequence.** Hermes asks no approval for a command in a Docker sandbox that has no host bind
 mount, so the owner's yes in Telegram now covers factory tools only. The shell's limits are the
 skill, the token's permissions and branch protection. A token that can push can also push to a
 default branch, and a prompt-injected Day Desk could try. Branch protection on `main` is the
-backstop (ADR-0008), so each repo needs it before the factory works there. Creating a repo needs
-the Administration permission, which can also change that protection or delete a repo; the owner
-leaves it out when Day Desk need not create repos. Without the Workflows permission, GitHub
-refuses a push that changes `.github/workflows/`. A clone is gone when Hermes removes the
-container at the end of the session. Services on the host's loopback may be reachable from the
+backstop (ADR-0008), so each repo needs it before the factory works there. The token has no
+Administration, so it cannot change that protection, delete a repo or create one. Without the
+Workflows permission, GitHub refuses a push that changes `.github/workflows/`. A clone is gone
+when Hermes removes the container at the end of the session. Services on the host's loopback may be reachable from the
 container, so each one keeps its own bearer token.
 
 ---

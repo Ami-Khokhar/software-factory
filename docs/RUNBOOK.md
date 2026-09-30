@@ -247,24 +247,31 @@ you. After `factory update` deploys a new version, run `hermes profile update da
 Desk gets the new skill.
 
 Day Desk has no file tools, browser or subagents (`agent.disabled_toolsets` in
-`tenant/hermes/config.yaml`). It cannot tick or take in a WorkItem itself (factory-mcp does).
-Its shell runs in a Docker container from `tenant/hermes/sandbox/` (ADR-0021), with git, gh and
-python3. It uses the shell to create a repo, make the first commit of an empty repo and read a
-repo. Hermes does not ask you before a shell command, so Day Desk shows you each command that
-changes GitHub and waits for your yes in chat. The container sees no file of yours, and its only
-secret is `DAYDESK_GITHUB_TOKEN`.
+`tenant/hermes/config.yaml`). It cannot tick or take in a WorkItem itself (factory-mcp does),
+merge or label, and it never pushes except the first commit of an empty repo (ADR-0021; the
+skill has the full list). Its shell runs in a Docker container from `tenant/hermes/sandbox/`, with
+git, gh and python3. It uses the shell to make the first commit of an empty repo and to clone and
+read a repo. Hermes does not ask you before a shell command, so Day Desk shows you each command
+that changes GitHub and waits for your yes in chat. The container has no host directory it can
+write, and one secret, `DAYDESK_GITHUB_TOKEN`. From the host, Hermes mounts only Day Desk's
+skills and its caches of files sent in chat (images, documents, audio, web pages), read-only
+under `/root/.hermes`. `/root` is root's with mode 700, so the sandbox user cannot open them, but
+count them as visible. `~/.hermes/profiles/day-desk/.env`, `~/.ssh`, `~/.config` and your other
+files are not mounted.
 
 ### The shell's GitHub token
 
 Make a fine-grained token at GitHub → Settings → Developer settings → Fine-grained tokens:
 
-- Resource owner: your account. Repository access: All repositories, because a repo Day Desk
-  creates must be in reach. Expiration: 90 days, then make a new one.
-- Repository permissions: Administration read and write (to create a repo), Contents read and
-  write, Pull requests read and write. Metadata read is added for you. Give nothing else: without
-  Workflows, a push that changes `.github/workflows/` is refused.
-- Administration also lets the token change branch protection and delete a repo. If you do not
-  want Day Desk to create repos, leave it out.
+- Resource owner: your account. Repository access: All repositories, so that a repo you create
+  later is in reach. Expiration: 90 days, then make a new one.
+- Repository permissions: Contents read and write, and Pull requests read and write. Metadata
+  read is added for you. Give nothing else. Without Workflows, GitHub refuses a push that changes
+  `.github/workflows/`.
+- Without Administration, the shell cannot create a repo. You create the empty repo on GitHub,
+  and factory_bootstrap_repo does the rest, including its first commit. If you add
+  Administration, the token can create repos, but it can also delete a repo and change branch
+  protection. Day Desk's skill asks you to create each repo either way.
 
 Open `~/.hermes/profiles/day-desk/.env` in an editor and add the line
 `DAYDESK_GITHUB_TOKEN=<the token>`. Do not type the token on a command line. Every repo the
