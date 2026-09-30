@@ -65,14 +65,14 @@ def problems(doc):
             found.append(f"{json.dumps(entry)} needs a repo")
         if not isinstance(fingerprint, str) or not fingerprint:
             found.append(f"{json.dumps(entry)} needs a fingerprint")
-        elif fingerprint.lower() in seen:
-            found.append(f"{fingerprint} is listed twice")
-        seen.add((fingerprint or "").lower())
+        elif (str(repo).lower(), fingerprint.lower()) in seen:
+            found.append(f"{fingerprint} is listed twice for {repo}")
+        seen.add((str(repo).lower(), str(fingerprint).lower()))
         found += [f"{fingerprint}: unknown field {key}" for key in sorted(set(entry) - ENTRY_KEYS)]
         found += [f"{fingerprint}: {key} must be text" for key in ("text", "approved_by", "approved_at")
                   if key in entry and not isinstance(entry[key], str)]
-        if not isinstance(entry.get("text"), str) or not entry.get("text"):
-            found.append(f"{fingerprint}: a lesson needs text")
+        found += [f"{fingerprint}: a lesson needs {key}" for key in ("text", "approved_by", "approved_at")
+                  if not isinstance(entry.get(key), str) or not entry.get(key)]
     return found
 
 
@@ -113,18 +113,23 @@ def approve(path, repo, fingerprint, text, by, candidates_fn, at=None):
         raise ValueError(f"{fingerprint} is not a candidate in {repo}: the gate must have blocked "
                          "on it on two or more WorkItems for a lesson to be approved")
     lessons = load(path)
-    if any(entry["fingerprint"].lower() == fingerprint.lower() for entry in lessons):
-        raise ValueError(f"{fingerprint} is already a lesson")
+    if any(_same(entry, repo, fingerprint) for entry in lessons):
+        raise ValueError(f"{fingerprint} is already a lesson in {repo}")
     entry = {"repo": repo, "fingerprint": fingerprint, "text": text,
              "approved_by": by, "approved_at": at or now()}
     _write(path, lessons + [entry])
     return entry
 
 
-def retire(path, fingerprint):
-    """Remove a lesson (the owner rewrote or replaced it), or refuse when it is not one."""
+def retire(path, repo, fingerprint):
+    """Remove a repo's lesson (the owner rewrote or replaced it), or refuse when it is not one."""
     lessons = load(path)
-    left = [entry for entry in lessons if entry["fingerprint"].lower() != fingerprint.lower()]
+    left = [entry for entry in lessons if not _same(entry, repo, fingerprint)]
     if len(left) == len(lessons):
-        raise ValueError(f"{fingerprint} is not a lesson")
+        raise ValueError(f"{fingerprint} is not a lesson in {repo}")
     _write(path, left)
+
+
+def _same(entry, repo, fingerprint):
+    """A fingerprint names a path and a problem, not a repo, so a lesson is one per repo."""
+    return entry["repo"].lower() == repo.lower() and entry["fingerprint"].lower() == fingerprint.lower()

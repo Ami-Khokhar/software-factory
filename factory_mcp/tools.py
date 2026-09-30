@@ -116,10 +116,11 @@ def build(store, foreman):
               "properties": {"repo": {"type": "string", "description": "owner/repo"}}},
              "read", show_lessons),
         Tool("factory_approve_lesson",
-             "A person's go on one lesson for a repo: the factory records it in lessons.json as a "
-             "past gate finding for this repo's workers to avoid. The fingerprint must be a candidate from factory_lessons; "
-             "the text is what you want the worker to read (capped at 300 characters). Approving "
-             "the same fingerprint again is refused.",
+             "A person's go on one lesson for a repo: the factory records it in lessons.json with "
+             "who approved it; a later change passes a repo's lessons to its workers. The "
+             "fingerprint must be a candidate from factory_lessons; the text is what the worker "
+             "should read (capped at 300 characters). Approving the same fingerprint again for "
+             "the repo is refused.",
              {"type": "object", "required": ["repo", "fingerprint", "text", "by"],
               "additionalProperties": False,
               "properties": {"repo": {"type": "string", "description": "owner/repo"},
@@ -129,11 +130,13 @@ def build(store, foreman):
              "write", lambda args: foreman.approve_lesson(
                  args["repo"], args["fingerprint"], args["text"], args["by"])),
         Tool("factory_retire_lesson",
-             "A person's no on one lesson: stop passing it to this repo's workers, for instance "
-             "because it no longer helps or because the repo's own AGENTS.md now carries it. Refused when the fingerprint is not a lesson.",
-             {"type": "object", "required": ["fingerprint", "by"], "additionalProperties": False,
-              "properties": {"fingerprint": {"type": "string", "minLength": 1},
+             "A person's no on one lesson: remove it from the repo's lessons in lessons.json, for "
+             "instance because it no longer helps or because the repo's own AGENTS.md now carries "
+             "it. Refused when the fingerprint is not a lesson in the repo.",
+             {"type": "object", "required": ["repo", "fingerprint", "by"], "additionalProperties": False,
+              "properties": {"repo": {"type": "string", "description": "owner/repo"},
+                             "fingerprint": {"type": "string", "minLength": 1},
                              "by": {"type": "string", "minLength": 1, "description": "who retired it"}}},
-             "write", lambda args: foreman.retire_lesson(args["fingerprint"], args["by"])),
+             "write", lambda args: foreman.retire_lesson(args["repo"], args["fingerprint"], args["by"])),
     ]
     return {tool.name: tool for tool in tools}

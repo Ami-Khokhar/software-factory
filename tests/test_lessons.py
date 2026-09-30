@@ -152,11 +152,25 @@ class ApproveRetireTest(unittest.TestCase):
 
     def test_retire_removes_the_lesson(self):
         self.approve()
-        result = self.tools["factory_retire_lesson"].fn({"fingerprint": FP, "by": "amteshwar"})
-        self.assertEqual(result, {"fingerprint": FP, "retired": True})
+        result = self.tools["factory_retire_lesson"].fn({"repo": REPO, "fingerprint": FP, "by": "amteshwar"})
+        self.assertEqual(result, {"repo": REPO, "fingerprint": FP, "retired": True})
         self.assertEqual(lessons.load(self.path), [])
         with self.assertRaisesRegex(ToolError, "is not a lesson"):
-            self.tools["factory_retire_lesson"].fn({"fingerprint": FP, "by": "amteshwar"})
+            self.tools["factory_retire_lesson"].fn({"repo": REPO, "fingerprint": FP, "by": "amteshwar"})
+
+    def test_one_fingerprint_is_a_lesson_in_each_repo_on_its_own(self):
+        """A fingerprint names a path and a problem, not a repo: two repos can share one."""
+        both = lambda r: [{"fingerprint": FP, "workItems": 2}]
+        lessons.approve(self.path, REPO, FP, "here", "amteshwar", both)
+        lessons.approve(self.path, "other/r", FP, "there", "amteshwar", both)
+        lessons.retire(self.path, "other/r", FP)
+        self.assertEqual([(l["repo"], l["text"]) for l in lessons.load(self.path)], [(REPO, "here")])
+
+    def test_a_hand_edited_entry_without_its_approver_is_refused(self):
+        Path(self.path).write_text(json.dumps(
+            {"version": 1, "lessons": [{"repo": REPO, "fingerprint": FP, "text": "t"}]}))
+        with self.assertRaisesRegex(ValueError, "a lesson needs approved_by; .*needs approved_at"):
+            lessons.load(self.path)
 
 
 if __name__ == "__main__":

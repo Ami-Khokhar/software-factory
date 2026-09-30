@@ -216,9 +216,9 @@ class Foreman:
             new = workitem.reconcile(wi, facts)
             detail = {"headSha": new.get("headSha")}
             verdict = workitem.current_verdict(wi, facts)  # accepted now: keep its blocking findings
-            if verdict:
+            if verdict:  # by severity: blocking() falls back to every finding, and a nit is no lesson
                 detail["blocking"] = [{"fingerprint": f["fingerprint"], "problem": f["problem"]}
-                                      for f in blocking(verdict)]
+                                      for f in verdict["findings"] if f["severity"] == "blocking"]
             wi = self._write(wi, new, "reconcile", **detail)
             wi = self.act(wi, facts)
         except Conflict:
@@ -441,7 +441,7 @@ class Foreman:
 
     def approve_lesson(self, repo, fingerprint, text, by):
         """A person's go on one lesson (ADR-0020): the code found the candidate, the owner approved
-        the wording. Refused when the fingerprint is not a candidate; idempotent by fingerprint."""
+        the wording. Refused when the fingerprint is not a candidate, or is already a lesson in the repo."""
         repo = self._allowlisted(repo)
         if not self.config.lessons_file:
             raise ToolError("FACTORY_LESSONS_FILE is not set, so the factory keeps no lessons")
@@ -456,13 +456,14 @@ class Foreman:
                                            "by": by})
         return entry
 
-    def retire_lesson(self, fingerprint, by):
-        """A person's no on one lesson: workers stop seeing it. Refused when it is not a lesson."""
+    def retire_lesson(self, repo, fingerprint, by):
+        """A person's no on one lesson: it leaves lessons.json. Refused when it is not a lesson."""
+        repo = self._allowlisted(repo)
         if not self.config.lessons_file:
             raise ToolError("FACTORY_LESSONS_FILE is not set, so the factory keeps no lessons")
         try:
-            lessons.retire(self.config.lessons_file, fingerprint)
+            lessons.retire(self.config.lessons_file, repo, fingerprint)
         except ValueError as exc:
             raise ToolError(str(exc)) from None
-        self.store.log("lesson_retired", {"fingerprint": fingerprint, "by": by})
-        return {"fingerprint": fingerprint, "retired": True}
+        self.store.log("lesson_retired", {"repo": repo, "fingerprint": fingerprint, "by": by})
+        return {"repo": repo, "fingerprint": fingerprint, "retired": True}

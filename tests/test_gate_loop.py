@@ -86,6 +86,13 @@ class GateLoopTest(unittest.TestCase):
         self.assertEqual(recorded, [[{"fingerprint": fingerprint("src/app.py", "No test for the error"),
                                       "problem": "No test for the error"}]])
 
+    def test_a_verdict_with_only_minor_findings_records_no_blocking_finding(self):
+        self.gate("CHANGES", 1, "c1", NIT)
+        self.tick()
+        recorded = [h["detail"]["blocking"] for h in self.foreman.store.history(ID)
+                    if h["action"] == "reconcile" and "blocking" in h["detail"]]
+        self.assertEqual(recorded, [[]])
+
     def test_an_issue_github_closed_on_merge_is_not_closed_again(self):
         self.gate("MERGE", 1, "c1")
         self.tick()
