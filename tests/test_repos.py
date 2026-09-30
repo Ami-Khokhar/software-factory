@@ -11,7 +11,7 @@ from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
 from factory_mcp.repos import (GATE_CONFIG, GATE_WORKFLOW, TEMPLATE, bootstrap_plan, check, load,
-                               standard_blocks)
+                               plan_on, standard_blocks)
 from factory_mcp.store import Store
 from tests.fakes import FakeGitHub, FakeRelay
 
@@ -51,6 +51,19 @@ class BootstrapPlanTest(unittest.TestCase):
         self.assertEqual(github.contents, {})
         again = bootstrap_plan(github, REPO, "python3 -m unittest")
         self.assertEqual((again["files"], again["fingerprint"]), (plan["files"], plan["fingerprint"]))
+        self.assertNotIn("initial_files", plan)
+
+    def test_an_empty_repo_plans_a_readme_first_and_the_controls_for_the_setup_pr(self):
+        github = FakeGitHub()
+        github.branches[(REPO, "main")] = None
+
+        plan = bootstrap_plan(github, REPO, "python3 -m unittest")
+
+        self.assertIsNone(plan["base_sha"])
+        self.assertEqual(plan["initial_files"], {"README.md": "# r\n"})
+        self.assertEqual(set(plan["files"]), {GATE_CONFIG, GATE_WORKFLOW, "AGENTS.md"})
+        github.branches[(REPO, "main")] = "readme-sha"  # what the next plan sees after the README
+        self.assertEqual(plan_on(plan, "readme-sha"), bootstrap_plan(github, REPO, "python3 -m unittest"))
 
     def test_missing_controls_are_added_without_rewriting_valid_existing_ones(self):
         github = FakeGitHub()
@@ -122,6 +135,30 @@ class RepoCheckTest(unittest.TestCase):
                 self.assertEqual([c["id"] for c in failed], [check_id])
                 self.assertRegex(failed[0]["detail"], detail)
                 self.assertTrue(failed[0]["fix"])
+
+    def test_a_missing_control_names_the_bootstrap_tool_as_its_fix(self):
+        cases = [("gate_config", (REPO, GATE_CONFIG), None), ("gate_workflow", (REPO, GATE_WORKFLOW), None),
+                 ("agents_md", (REPO, "AGENTS.md"), None), ("agents_md", (REPO, "AGENTS.md"), "# Notes\n")]
+        for check_id, key, text in cases:
+            with self.subTest(check_id=check_id, text=text):
+                github = gated(FakeGitHub())
+                github.contents[key] = text
+                failed = [c for c in check(github, REPO) if not c["ok"]]
+                self.assertEqual([c["id"] for c in failed], [check_id])
+                self.assertIn("factory_bootstrap_repo", failed[0]["fix"])
+                bootstrap_plan(github, REPO, "make test")  # the advertised fix does not refuse
+
+    def test_an_agents_md_the_bootstrap_refuses_gets_a_by_hand_fix(self):
+        for text, refusal in (("<!-- factory-standard:begin -->\n", "malformed"),
+                              (TEMPLATE.read_text().replace("Fail loudly.", "Fail quietly."), "differs")):
+            with self.subTest(refusal=refusal):
+                github = gated(FakeGitHub())
+                github.contents[(REPO, "AGENTS.md")] = text
+                [failed] = [c for c in check(github, REPO) if not c["ok"]]
+                self.assertIn("yourself", failed["fix"])
+                self.assertFalse(failed["fix"].startswith("Call factory_bootstrap_repo"))
+                with self.assertRaisesRegex(ValueError, refusal):
+                    bootstrap_plan(github, REPO, "make test")
 
     def test_the_tool_says_whether_the_repo_is_ready_and_enabled(self):
         foreman = Foreman(Store(":memory:"), gated(FakeGitHub()), Config(mcp_token="t", repos=frozenset({REPO})),

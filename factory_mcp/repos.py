@@ -64,9 +64,7 @@ def bootstrap_plan(github, repo, verify=None):
         raise ValueError(f"{canonical} is archived")
     if not (meta.get("permissions") or {}).get("push"):
         raise ValueError(f"the factory's GitHub token cannot push to {canonical}")
-    base = github.branch_head(canonical, branch)
-    if not base:
-        raise ValueError(f"{canonical}'s default branch {branch} has no head commit")
+    base = github.branch_head(canonical, branch)  # None: an empty repo, which gets a README first
 
     files = {}
     config = github.file(canonical, GATE_CONFIG)
@@ -92,6 +90,16 @@ def bootstrap_plan(github, repo, verify=None):
         files["AGENTS.md"] = agents
 
     plan = {"repo": canonical, "default_branch": branch, "base_sha": base, "files": files}
+    if not base:  # a PR needs a base commit; the controls still go on the setup PR (ADR-0019)
+        plan["initial_files"] = {"README.md": f"# {canonical.split('/')[1]}\n"}
+    return dict(plan, fingerprint=_fingerprint(plan))
+
+
+def plan_on(plan, base_sha):
+    """The plan once an empty repo's default branch has its initial commit `base_sha`: the plan
+    bootstrap_plan returns from then on, so a retry finds the same setup branch."""
+    plan = {"repo": plan["repo"], "default_branch": plan["default_branch"], "base_sha": base_sha,
+            "files": plan["files"]}
     return dict(plan, fingerprint=_fingerprint(plan))
 
 
@@ -120,7 +128,8 @@ def check(github, repo):
         verify = None
     if text is None:
         gate = _result("gate_config", False, f"{repo} has no {GATE_CONFIG}",
-                       "Install pr-gatekeeper in the repo: the gate reviews and merges every factory PR.")
+                       "Call factory_bootstrap_repo with the repo's verify command: it opens a setup PR "
+                       "with the gate files for you to review and merge.")
     else:
         gate = _result("gate_config", isinstance(verify, str) and bool(verify.strip()),
                        f"verify: {verify}" if verify else f"{GATE_CONFIG} has no verify command",
@@ -136,13 +145,21 @@ def check(github, repo):
         detail = "AGENTS.md's factory-standard block differs from software-factory's templates/AGENTS.md"
     else:
         detail = "AGENTS.md carries the factory standard"
+    if found:  # factory_bootstrap_repo refuses both of these cases (_standard_to_append)
+        agents_fix = ("Replace the block with the one in software-factory's templates/AGENTS.md and "
+                      "merge that PR yourself: factory_bootstrap_repo refuses a differing block.")
+    elif agents and "factory-standard:" in agents:
+        agents_fix = ("Remove the broken factory-standard markers from AGENTS.md by hand and merge that "
+                      "PR yourself: factory_bootstrap_repo refuses malformed markers. Then call it.")
+    else:
+        agents_fix = ("Call factory_bootstrap_repo: it opens a setup PR that adds the factory standard "
+                      "to AGENTS.md, for you to review and merge.")
     return [_result("repo", True, f"{repo} exists and the factory's token can push to it", None), gate,
             _result("gate_workflow", workflow, "the gate workflow is installed" if workflow else
                     f"{repo} has no {GATE_WORKFLOW}",
-                    "Install pr-gatekeeper's workflow: without it no PR gets a verdict."),
-            _result("agents_md", bool(found) and found == wanted, detail,
-                    "Copy the factory standard from software-factory's templates/AGENTS.md into the "
-                    "repo's AGENTS.md, and merge that PR yourself: AGENTS.md is a protected path.")]
+                    "Call factory_bootstrap_repo: it opens a setup PR with the gate workflow for you "
+                    "to review and merge. Without the workflow no PR gets a verdict."),
+            _result("agents_md", bool(found) and found == wanted, detail, agents_fix)]
 
 
 def problems(doc):

@@ -26,7 +26,9 @@ what factory_status returns.
    repo and the owner's name as `by`. When the gate config is missing, ask the owner for its
    test/verify command and pass it as `verify`. The tool opens a setup PR containing only the
    missing controls. Tell the owner to review and merge that PR; do not start work before it is
-   merged. If the tool refuses, report its reason word for word.
+   merged. If the result has `initialCommit`, the repo was empty: tell the owner that the tool
+   also pushed that one commit, which holds only a `README.md`, to the default branch. If the
+   tool refuses, report its reason word for word.
 3. Call factory_repo_check again after the owner merges the setup PR. If `ready` is false, give
    each failed check's detail and fix, and stop.
 4. If `enabled` is true, say so and stop. Otherwise call factory_add_repo with the repo and the

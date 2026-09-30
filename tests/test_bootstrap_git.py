@@ -3,6 +3,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 from factory_mcp import patches
 
@@ -95,6 +96,67 @@ class BootstrapGitTest(unittest.TestCase):
                               {"linked/AGENTS.md": "standard\n"}, "Set up factory")
 
         self.assertFalse(os.path.exists(os.path.join(outside, "AGENTS.md")))
+
+
+class InitialCommitTest(unittest.TestCase):
+    """An empty repo gets one README commit on its default branch, and nothing else."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.bare = os.path.join(self.tmp.name, "origin.git")
+        git("init", "-q", "--bare", "-b", "main", self.bare, cwd=self.tmp.name)
+
+    def refs(self):
+        return git("for-each-ref", "--format=%(refname)", cwd=self.bare).splitlines()
+
+    def push_other_commit(self, branch):
+        seed = os.path.join(self.tmp.name, "seed")
+        git("init", "-q", seed, cwd=self.tmp.name)
+        git("commit", "-q", "--allow-empty", "-m", "someone else", cwd=seed)
+        git("push", "-q", self.bare, f"HEAD:refs/heads/{branch}", cwd=seed)
+        return git("rev-parse", "HEAD", cwd=seed)
+
+    def test_an_empty_repo_gets_one_readme_commit_that_a_setup_branch_can_start_from(self):
+        sha = patches.initial_commit(self.bare, None, "main", {"README.md": "# r\n"}, "Start the repository")
+
+        self.assertEqual(self.refs(), ["refs/heads/main"])
+        self.assertEqual(git("rev-parse", "refs/heads/main", cwd=self.bare), sha)
+        self.assertEqual(git("rev-list", "--count", sha, cwd=self.bare), "1")
+        self.assertEqual(git("ls-tree", "-r", "--name-only", sha, cwd=self.bare), "README.md")
+        self.assertEqual(git("show", f"{sha}:README.md", cwd=self.bare), "# r")
+        setup = patches.bootstrap(self.bare, None, "factory/setup", sha, {"AGENTS.md": "standard\n"},
+                                  "Set up factory")
+        self.assertEqual(git("rev-parse", "factory/setup^", cwd=self.bare), sha)
+        self.assertEqual(git("rev-parse", "refs/heads/main", cwd=self.bare), sha)
+        self.assertEqual(git("diff", "--name-only", sha, setup, cwd=self.bare), "AGENTS.md")
+
+    def test_a_repo_with_any_ref_gets_no_initial_commit(self):
+        other = self.push_other_commit("other")
+
+        with self.assertRaisesRegex(patches.PatchError, "not empty"):
+            patches.initial_commit(self.bare, None, "main", {"README.md": "# r\n"}, "Start the repository")
+
+        self.assertEqual(self.refs(), ["refs/heads/other"])
+        self.assertEqual(git("rev-parse", "refs/heads/other", cwd=self.bare), other)
+
+    def test_a_commit_that_lands_after_the_check_stops_the_push(self):
+        real_run, landed = subprocess.run, []
+
+        def run(args, *rest, **kwargs):  # someone pushes to main just after ls-remote saw no refs
+            done = real_run(args, *rest, **kwargs)
+            if args[:2] == ["git", "ls-remote"] and not landed:
+                landed.append(True)
+                with mock.patch("subprocess.run", real_run):
+                    landed.append(self.push_other_commit("main"))
+            return done
+
+        with mock.patch("factory_mcp.patches.subprocess.run", side_effect=run):
+            with self.assertRaisesRegex(patches.PatchError, "may have got a commit"):
+                patches.initial_commit(self.bare, None, "main", {"README.md": "# r\n"}, "Start the repository")
+
+        self.assertEqual(self.refs(), ["refs/heads/main"])
+        self.assertEqual(git("rev-parse", "refs/heads/main", cwd=self.bare), landed[1])
 
 
 if __name__ == "__main__":

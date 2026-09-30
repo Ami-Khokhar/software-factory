@@ -129,7 +129,9 @@ command, and an `AGENTS.md` that carries the factory standard (ADR-0015). For ma
 Day Desk can prepare that one-time setup PR. Ask it to check the repo, then to prepare the
 bootstrap PR; approve the `factory_bootstrap_repo` tool call in Telegram. If the gate config is
 missing, give it the command that verifies that repo. The PR contains only missing gate files and
-the factory-standard block; review and merge it yourself. Configure the repo's
+the factory-standard block; review and merge it yourself. An empty repo (no commits) needs no
+README first: the tool pushes one initial commit with only a `README.md` to the default branch,
+says so as `initialCommit` in its result, and then opens the setup PR. Configure the repo's
 `OPENCODE_GO_API_KEY` and `GATEKEEPER_READ_TOKEN` Actions secrets before relying on the gate.
 Ask Day Desk to check and enable the repo after the merge. It will not start a worker for a repo
 whose controls are still missing. Existing valid gate files are preserved, and a conflicting
