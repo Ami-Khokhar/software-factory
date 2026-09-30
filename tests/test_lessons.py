@@ -1,4 +1,4 @@
-"""Lesson candidates from the audit log, and the owner-approved lessons file (ADR-0018)."""
+"""Lesson candidates from the audit log, and the owner-approved lessons file (ADR-0020)."""
 import json
 import tempfile
 import unittest
