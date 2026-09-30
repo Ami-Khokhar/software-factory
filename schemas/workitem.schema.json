@@ -53,6 +53,11 @@
       "type": ["string", "null"],
       "description": "The one thing that must be supplied before work can continue. Required while state is blocked."
     },
+    "waitingOn": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "The issue a ready WorkItem waits for: its issue has a 'Depends on #n' line and #n has not merged yet (ADR-0024)."
+    },
     "blockers": {
       "type": "array",
       "description": "Fingerprinted unresolved findings, for same-problem round counting.",

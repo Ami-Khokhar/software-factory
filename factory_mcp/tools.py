@@ -1,5 +1,6 @@
 """The factory tools that Day Desk (Hermes) and the factory CLI call. Each one declares its effect."""
 from . import lessons, metrics, repos
+from .foreman import MAX_PLAN_ISSUES
 from .mcp import Tool, ToolError
 
 
@@ -9,7 +10,8 @@ def build(store, foreman):
         if workitem_id is None:
             workitems = store.all()
             summary = {"workItems": [
-                {key: wi.get(key) for key in ("id", "state", "prNumber", "blockedOn", "updatedAt")}
+                {key: wi.get(key) for key in ("id", "state", "prNumber", "blockedOn", "waitingOn",
+                                              "updatedAt")}
                 for wi in workitems], "autonomy": metrics.autonomy(workitems, store.history),
                 "repos": sorted(foreman.config.repos)}
             if foreman.config.lessons_file:
@@ -126,6 +128,23 @@ def build(store, foreman):
               "properties": {"repo": {"type": "string"}, "title": {"type": "string", "minLength": 1},
                              "body": {"type": "string", "minLength": 1}}},
              "write", lambda args: foreman.propose_issue(args["repo"], args["title"], args["body"])),
+        Tool("factory_start_plan",
+             "A person's go on a whole plan. Opens the issues in the given order, each labelled "
+             "factory:ready. Each issue after the first gets the line 'Depends on #<previous>', and "
+             "the factory starts it only after the previous issue merges. First checks every issue: "
+             f"1 to {MAX_PLAN_ISSUES} issues, each body with an '## Acceptance' list of "
+             "'- <claim> — done when: <check>' bullets, and no title or body that names .github/ or "
+             "AGENTS.md. If one check fails, opens no issue. A second call opens the issues again.",
+             {"type": "object", "required": ["repo", "issues", "by"], "additionalProperties": False,
+              "properties": {"repo": {"type": "string", "description": "owner/repo"},
+                             "issues": {"type": "array", "minItems": 1, "maxItems": MAX_PLAN_ISSUES,
+                                        "description": "in the order they run",
+                                        "items": {"type": "object", "required": ["title", "body"],
+                                                  "additionalProperties": False,
+                                                  "properties": {"title": {"type": "string", "minLength": 1},
+                                                                 "body": {"type": "string", "minLength": 1}}}},
+                             "by": {"type": "string", "minLength": 1, "description": "who approved the plan"}}},
+             "write", lambda args: foreman.start_plan(args["repo"], args["issues"], args["by"])),
         Tool("factory_lessons",
              "Show what the factory learned about one repo: the blocking gate findings that "
              "recurred on two or more WorkItems (candidates), and the lessons the owner approved "

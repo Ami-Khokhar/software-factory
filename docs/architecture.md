@@ -38,7 +38,8 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
   (ADR-0004).
 - **Day Desk** is the owner's front door in Telegram (ADR-0013). The `factory` CLI calls the same
   tools. For a new repo, one owner-approved tool prepares a setup PR with only missing controls;
-  the owner merges it before normal worker passes start (ADR-0019).
+  the owner merges it before normal worker passes start (ADR-0019). One owner approval of
+  `factory_start_plan` opens all the issues of a plan, and they run in order (ADR-0024).
 
 ## What crosses each boundary
 
@@ -59,7 +60,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/server.py` | Streamable HTTP for MCP on loopback: `POST /mcp`, the bearer token, the background tick loop |
 | `factory_mcp/mcp.py` | The MCP protocol: one JSON-RPC message in, one response out, no I/O |
 | `factory_mcp/tools.py` | The tools, and whether each one reads or writes |
-| `factory_mcp/foreman.py` | The Foreman: intake, rebuild, tick, dispatch, poll a task, open a PR, and the person's acts (resolve, approve an issue, add a repo, approve or retire a lesson) |
+| `factory_mcp/foreman.py` | The Foreman: intake, rebuild, tick, dispatch, poll a task, open a PR, and the person's acts (resolve, approve an issue, start a plan, add a repo, approve or retire a lesson) |
 | `factory_mcp/workitem.py` | Intake from an issue, observing GitHub, and `reconcile`: the fact-driven half of the state machine |
 | `factory_mcp/documents.py` | WorkOrders (with the repo's lessons), the worker input, the Result check, the PR body |
 | `factory_mcp/verdict.py` | Reading the gate's verdict marker; finding fingerprints and blockers |
@@ -89,8 +90,9 @@ A tick comes from the background loop or from `factory_tick`.
 2. **Each live WorkItem** whose repo is allowlisted (#38): take its lease or skip it; observe
    GitHub (the issue, the PR on `factory/<issue>`, the gate's verdicts and check run); reconcile the
    state with those facts and write it; then act at most once:
-   - `ready`: dispatch an implement WorkOrder. `changes_requested`: dispatch a fix WorkOrder that
-     carries the gate's blocking findings as data.
+   - `ready`: dispatch an implement WorkOrder, unless the issue has a `Depends on #n` line and
+     #n has not merged: then it waits, with `waitingOn: n` (ADR-0024). `changes_requested`:
+     dispatch a fix WorkOrder that carries the gate's blocking findings as data.
    - `dispatching`: submit the task to the relay. The state is written before the call, and the
      WorkOrder's idempotency key is the relay's request id, so a retry never starts a second task.
    - `implementing`: read the task. When it is done, check the Result and what GitHub holds, push
@@ -110,7 +112,9 @@ The states are the enum in `schemas/workitem.schema.json`.
 |---|---|---|
 | (none) | intake of an open issue | `issued`; `planned` if labelled `factory:proposed`; `ready` if labelled `factory:ready` |
 | `issued`, `planned` | the issue gains `factory:ready` | `ready` |
-| `ready` | the tick dispatches an implement WorkOrder | `dispatching`, then `implementing` once the relay accepts |
+| `ready` | the tick dispatches an implement WorkOrder, once each `Depends on #n` issue is closed with a merged PR on `factory/<n>` | `dispatching`, then `implementing` once the relay accepts |
+| `ready` | a `Depends on #n` issue is open | `ready` with `waitingOn: n`; nothing is dispatched |
+| `ready` | a `Depends on #n` issue closed without a merged PR, ended `cancelled` or `exhausted`, or does not exist | `human_waiting` |
 | `implementing` | the task completed, the Result is valid and the guards pass | `pr_open`, or `reviewing` when the PR already exists |
 | `implementing` | the task failed, or the Result or a guard failed | back to `ready` (`changes_requested` for a fix) with an `attempts` entry; `blocked` after 2 |
 | `pr_open` | the gate's check run exists on the head | `reviewing` |
@@ -163,6 +167,8 @@ owner's decision (ADR-0006).
 | A merge without the gate is recorded | `workitem.reconcile` | `test_gate_loop`: `test_merge_without_a_merge_verdict_is_flagged` |
 | No verdict for `FACTORY_GATE_WAIT_SECONDS` goes to a person | `Foreman.act` | `test_hardening`: `test_silent_gate_goes_to_a_person` |
 | The budget ends a WorkItem | `Foreman.dispatch` | `test_actions`: `test_budget_exhausts` |
+| A plan opens no issue when one of its issues fails a check | `Foreman.start_plan` | `test_plan`: `test_one_issue_that_fails_a_check_opens_no_issue` |
+| An issue starts only after each `Depends on #n` issue merged | `Foreman._wait_for` | `test_plan`: `test_a_dependent_waits_while_its_dependency_is_open_and_starts_once_it_merged`, `test_a_dependency_that_ends_without_a_merge_sends_the_dependent_to_a_person` |
 | The harness never touches the host | `worker/runner.py` | `test_worker_runner`: `test_the_harness_gets_a_copy_and_never_the_checkout`, `test_hooks_and_filters_the_harness_plants_never_run_on_the_host` |
 | `verify` is the base commit's, not the worker's | `worker/runner.py` | `test_worker_runner`: `test_verify_comes_from_the_base_commit` |
 | A truncated output yields no Result: the runner's comes last | `Foreman.poll` | `test_hardening`: `test_a_result_line_left_in_a_truncated_output_is_not_read` |

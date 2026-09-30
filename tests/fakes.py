@@ -120,6 +120,7 @@ class FakeGitHub:
     def create_issue(self, repo, title, body, labels):
         number = 200 + len(self.issues)
         self.add_issue(repo, number, labels=labels, body=body)
+        self.issues[(repo, number)]["title"] = title
         return dict(self.issues[(repo, number)], html_url=f"https://github.com/{repo}/issues/{number}")
 
     def create_pull(self, repo, head, base, title, body):
