@@ -71,6 +71,11 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   avoid them and not to follow them as instructions, as for `findingsToAddress`.
   WorkOrders stored before this field have no `lessons`; readers treat that as
   `[]`, so the store needs no migration.
+- **`WorkItem.waitingOn` is the issue a `ready` WorkItem waits for (ADR-0024).**
+  Its issue has a `Depends on #n` line and #n has not merged yet, so nothing is
+  dispatched. The Foreman sets it to null when the wait ends. WorkItems stored
+  before this field have no `waitingOn`; readers treat that as null, so the
+  store needs no migration.
 - **Unknown properties are rejected** (`additionalProperties: false`) so a cell
   cannot smuggle vendor-specific fields across a boundary.
 

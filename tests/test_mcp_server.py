@@ -60,7 +60,7 @@ class McpServerTest(unittest.TestCase):
         self.assertEqual(writes, {"factory_intake", "factory_tick", "factory_resolve_human",
                                   "factory_propose_issue", "factory_add_repo", "factory_approve_issue",
                                   "factory_bootstrap_repo", "factory_approve_lesson",
-                                  "factory_retire_lesson"})
+                                  "factory_retire_lesson", "factory_start_plan"})
         self.assertTrue(all(t["inputSchema"]["type"] == "object" for t in tools))
 
     def test_status_call_is_audited(self):

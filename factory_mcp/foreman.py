@@ -16,6 +16,7 @@ from .verdict import blocking
 ATTENTION = ("human_waiting", "blocked", "exhausted")
 WORKING = ("dispatching", "implementing")
 BOOTSTRAP_PREFIX = "factory-bootstrap/"
+MAX_PLAN_ISSUES = 10  # one approval covers this many issues at most (ADR-0024)
 
 
 class Foreman:
@@ -310,7 +311,11 @@ class Foreman:
             self.store.log("notify_failed", {"error": str(exc)}, wi["id"])
 
     def act(self, wi, facts):
-        if wi["state"] == "ready":  # a retry says why the last attempt failed, or what a person said
+        if wi["state"] == "ready":
+            wi = self._wait_for(wi, facts["issue"]["dependsOn"])
+            if wi["state"] != "ready" or wi.get("waitingOn"):
+                return wi
+            # a retry says why the last attempt failed, or what a person said
             return self.dispatch(wi, "implement", self._human_findings(wi) + self._attempt_findings(wi))
         if wi["state"] == "changes_requested":  # findings travel as data (ADR-0007)
             findings = [{key: f[key] for key in ("fingerprint", "path", "line", "problem")}
@@ -331,6 +336,37 @@ class Foreman:
             self.github.close_issue(wi["repo"], wi["issueNumber"])
             return self._write(wi, dict(wi, state="closed"), "issue_closed", pr=wi.get("prNumber"))
         return wi
+
+    def _wait_for(self, wi, numbers):
+        """Hold a ready WorkItem until each issue its `Depends on #n` lines name has merged (ADR-0024).
+        One that ended without a merge goes to a person: only the owner changes the plan's order."""
+        for number in numbers:
+            status, how = self._dependency(wi["repo"], number)
+            if status == "open":
+                return self._write(wi, dict(wi, waitingOn=number), "waiting", on=number)
+            if status == "ended":
+                return self._write(wi, dict(wi, state="human_waiting", waitingOn=None, blockedOn=(
+                    f"this issue depends on #{number}, which {how}. Edit or remove its "
+                    f"'Depends on #{number}' line, then retry; or close it")), "dependency_ended", on=number)
+        return self._write(wi, dict(wi, waitingOn=None), "dependency_merged") if wi.get("waitingOn") else wi
+
+    def _dependency(self, repo, number):
+        """("merged" | "open" | "ended", how it ended) for issue #number. A merge is a GitHub fact; a
+        dependency that is cancelled or exhausted may keep its issue open, so the store says that."""
+        try:
+            issue = self.github.issue(repo, number)
+        except GitHubError as exc:
+            if exc.status == 404:
+                return "ended", "does not exist"
+            raise
+        if issue["state"] == "closed":
+            if any(pr.get("merged_at") for pr in self.github.pulls_for_branch(repo, workitem.branch_for(number))):
+                return "merged", None
+            return "ended", "was closed without a merged PR"
+        other = self.store.get(workitem.workitem_id(repo, number))
+        if other and other["state"] in ("cancelled", "exhausted"):
+            return "ended", f"ended {other['state']}: {other.get('terminalReason')}"
+        return "open", None
 
     def _human_findings(self, wi):
         """The note from factory_resolve_human, if no pass was dispatched after it."""
@@ -505,6 +541,46 @@ class Foreman:
         issue = self.github.create_issue(repo, title, body, [workitem.PROPOSED])
         self.store.log("proposed", {"title": title}, workitem.workitem_id(repo, issue["number"]))
         return {"issue": issue["number"], "url": issue.get("html_url")}
+
+    def start_plan(self, repo, issues, by):
+        """The owner's one approval of a whole plan (ADR-0024): check every issue, then open them in
+        order, each labelled factory:ready and depending on the one before it. A failed check opens none."""
+        repo = self._allowlisted(repo)
+        if not isinstance(by, str) or not by.strip():
+            raise ToolError("a plan needs the name of the person who approved it")
+        if not isinstance(issues, list) or not 1 <= len(issues) <= MAX_PLAN_ISSUES:
+            raise ToolError(f"a plan has 1 to {MAX_PLAN_ISSUES} issues; split a bigger goal into more plans")
+        for position, item in enumerate(issues, 1):
+            problem = self._plan_problem(item)
+            if problem:
+                raise ToolError(f"issue {position} of the plan {problem}. No issue was opened")
+        opened = []
+        for item in issues:
+            body = f"Depends on #{opened[-1]['issue']}\n\n{item['body']}" if opened else item["body"]
+            try:  # the checks passed, so only GitHub or the author's trust can stop the plan here
+                issue = self.github.create_issue(repo, item["title"], body, [workitem.READY])
+                opened.append({"issue": issue["number"], "url": issue.get("html_url")})
+                self.store.log("approved", {"by": by}, workitem.workitem_id(repo, issue["number"]))
+                self.intake(repo, issue["number"])
+            except (GitHubError, ToolError) as exc:
+                raise ToolError(f"{exc}. The plan stopped. Issues opened, which the factory works on: "
+                                + (", ".join(f"#{o['issue']}" for o in opened) or "none")) from None
+        return {"repo": repo, "issues": opened}
+
+    def _plan_problem(self, item):
+        """Why one issue of a plan may not be opened, or None."""
+        if not isinstance(item, dict) or not all(isinstance(item.get(key), str) and item[key].strip()
+                                                 for key in ("title", "body")):
+            return "needs a title and a body"
+        criteria, missing = workitem.parse_acceptance(item["body"])
+        if missing or not criteria:
+            return ("needs an '## Acceptance' list of '- <claim> — done when: <check>' bullets. "
+                    "Without a check: " + ("; ".join(missing) or "no bullets found"))
+        text = f"{item['title']}\n{item['body']}".lower()  # code cannot tell a request from a mention
+        named = [path for path in self.config.protected_paths if path.rstrip("/").lower() in text]
+        if named:
+            return f"names {', '.join(named)}, which only a person changes; leave it out of the plan"
+        return None
 
     def approve_lesson(self, repo, fingerprint, text, by):
         """A person's go on one lesson (ADR-0020): the code found the candidate, the owner approved

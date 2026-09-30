@@ -17,6 +17,7 @@ mcp_servers:
         - factory_add_repo
         - factory_approve_issue
         - factory_propose_issue
+        - factory_start_plan
         - factory_resolve_human
         - factory_lessons
         - factory_approve_lesson

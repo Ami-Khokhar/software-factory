@@ -400,3 +400,30 @@ supersedes the sentence of ADR-0022 that nothing reads stderr.
 **Consequence.** The owner reviews one current setup PR per repo, and a commit the owner pushed to
 it stays: the update goes on top. A token that lacks the Secrets permission shows as such, so the
 owner fixes it without guessing.
+
+## ADR-0024 — One approval starts a plan, and `Depends on #n` orders it
+
+**Context.** Day Desk turned a goal into issues with one `factory_propose_issue` call per issue,
+then one `factory_approve_issue` call per issue, and Hermes asked the owner before each call: a
+goal of 6 issues cost 12 approvals. The owner reviewed the plan once, in chat; the other approvals
+added clicks and no review. The issues of a plan also build on each other, and nothing stopped the
+factory from starting the second issue before the first one merged.
+
+**Decision.** `factory_start_plan` takes the repo, the issues in order and who approved. Hermes
+shows its full arguments in the approval prompt, so that one approval is the owner's review of the
+plan. factory-mcp checks every issue before it opens one: 1 to 10 issues, each body with an
+`## Acceptance` list that intake accepts, and no title or body that names a protected path. Code
+cannot tell a request to change `.github/` from a mention of it, so a mention is refused. Then it
+opens the issues in order, labelled `factory:ready`, and puts `Depends on #<previous>` at the top
+of each body after the first. The order lives in GitHub (ADR-0009): a `ready` WorkItem whose issue
+has a `Depends on #n` line is not dispatched while #n is open, and records `waitingOn: n`. When #n
+is closed with a merged PR on `factory/<n>`, the next tick dispatches it. When #n was closed
+without one, ended `cancelled` or `exhausted` (the store knows these, because such an issue can
+stay open), or does not exist, the WorkItem goes to `human_waiting`: only the owner changes the
+plan. The owner edits or removes the line and retries, or closes. Code makes each of these moves
+(ADR-0010).
+
+**Consequence.** A plan costs one approval. Any issue with a `Depends on #n` line waits, not only
+the issues of a plan. A plan cannot name `.github/` or `AGENTS.md`, even to say that they must not
+change. A second call opens the issues again. `factory_propose_issue` and `factory_approve_issue`
+stay for single issues.

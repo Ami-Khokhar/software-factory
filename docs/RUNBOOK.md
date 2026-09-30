@@ -261,4 +261,6 @@ After setting it up, check in Telegram that Day Desk:
 5. cannot run `ls` or read `~/.hermes/profiles/day-desk/.env` when asked to: it has no tool
    for either. If it can, the gateway ignored `disabled_toolsets`; stop it (`hermes -p day-desk
    gateway stop`) until that is fixed;
-6. relays a factory-watch message, and your reply to it resolves the WorkItem once you approve.
+6. relays a factory-watch message, and your reply to it resolves the WorkItem once you approve;
+7. turns a goal of two issues into one `factory_start_plan` call that you approve once, and then
+   answers "what needs me?" with the second issue waiting for the first.

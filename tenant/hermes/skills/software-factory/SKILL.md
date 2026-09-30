@@ -16,8 +16,8 @@ call that changes something, so do not also ask for a yes in chat.
 ## What needs the owner
 
 Call factory_status with no id. First list the WorkItems in human_waiting, blocked or exhausted,
-each with its id and blockedOn. Then list the others with their state and PR number. Report only
-what factory_status returns.
+each with its id and blockedOn. Then list the others with their state and PR number, and for each
+one with `waitingOn`, the issue it waits for. Report only what factory_status returns.
 
 ## Enable a repo
 
@@ -50,10 +50,21 @@ standard in the repo's AGENTS.md ask:
   `- <claim> — done when: <check>`. A check is read from the result: a test that passes, a command
   that prints something, a file that contains something. Never "when it is done". Add one bullet
   for what must not change.
-- No issue asks for changes under `.github/` or to `AGENTS.md`. Those need a person.
+- No issue names `.github/` or `AGENTS.md`, not even in the bullet for what must not change.
+  Those paths need a person, and factory_start_plan refuses a plan that names them.
+- Put the issues in the order they must run: each one can build on the ones before it. A plan
+  has at most 10 issues.
 
-Show the owner the titles and acceptance first. Then call factory_propose_issue once per issue.
-It opens the issue labelled `factory:proposed`; nothing starts yet.
+Show the owner the whole plan in chat: each issue in order, with its title and acceptance. Then
+call factory_start_plan once, with the repo, all the issues in order as `title` and `body`, and
+the owner's name as `by`. Hermes shows the owner the full plan in its approval prompt, and that
+one yes starts the plan: the factory opens the issues labelled `factory:ready`, and each issue
+waits until the issue before it merges. Never split a plan into factory_propose_issue or
+factory_approve_issue calls. If the tool refuses, give its reason word for word; it opened no
+issue.
+
+For one issue that the owner wants to read on GitHub before it starts, call factory_propose_issue
+instead. It opens the issue labelled `factory:proposed`; nothing starts until "Start an issue".
 
 ## Start an issue
 
