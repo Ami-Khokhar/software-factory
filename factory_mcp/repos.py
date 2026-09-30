@@ -145,16 +145,21 @@ def check(github, repo):
         detail = "AGENTS.md's factory-standard block differs from software-factory's templates/AGENTS.md"
     else:
         detail = "AGENTS.md carries the factory standard"
+    if found:  # factory_bootstrap_repo refuses both of these cases (_standard_to_append)
+        agents_fix = ("Replace the block with the one in software-factory's templates/AGENTS.md and "
+                      "merge that PR yourself: factory_bootstrap_repo refuses a differing block.")
+    elif agents and "factory-standard:" in agents:
+        agents_fix = ("Remove the broken factory-standard markers from AGENTS.md by hand and merge that "
+                      "PR yourself: factory_bootstrap_repo refuses malformed markers. Then call it.")
+    else:
+        agents_fix = ("Call factory_bootstrap_repo: it opens a setup PR that adds the factory standard "
+                      "to AGENTS.md, for you to review and merge.")
     return [_result("repo", True, f"{repo} exists and the factory's token can push to it", None), gate,
             _result("gate_workflow", workflow, "the gate workflow is installed" if workflow else
                     f"{repo} has no {GATE_WORKFLOW}",
                     "Call factory_bootstrap_repo: it opens a setup PR with the gate workflow for you "
                     "to review and merge. Without the workflow no PR gets a verdict."),
-            _result("agents_md", bool(found) and found == wanted, detail,
-                    "Replace the block with the one in software-factory's templates/AGENTS.md and "
-                    "merge that PR yourself: factory_bootstrap_repo refuses a differing block." if found
-                    else "Call factory_bootstrap_repo: it opens a setup PR that adds the factory "
-                    "standard to AGENTS.md, for you to review and merge.")]
+            _result("agents_md", bool(found) and found == wanted, detail, agents_fix)]
 
 
 def problems(doc):

@@ -146,6 +146,19 @@ class RepoCheckTest(unittest.TestCase):
                 failed = [c for c in check(github, REPO) if not c["ok"]]
                 self.assertEqual([c["id"] for c in failed], [check_id])
                 self.assertIn("factory_bootstrap_repo", failed[0]["fix"])
+                bootstrap_plan(github, REPO, "make test")  # the advertised fix does not refuse
+
+    def test_an_agents_md_the_bootstrap_refuses_gets_a_by_hand_fix(self):
+        for text, refusal in (("<!-- factory-standard:begin -->\n", "malformed"),
+                              (TEMPLATE.read_text().replace("Fail loudly.", "Fail quietly."), "differs")):
+            with self.subTest(refusal=refusal):
+                github = gated(FakeGitHub())
+                github.contents[(REPO, "AGENTS.md")] = text
+                [failed] = [c for c in check(github, REPO) if not c["ok"]]
+                self.assertIn("yourself", failed["fix"])
+                self.assertFalse(failed["fix"].startswith("Call factory_bootstrap_repo"))
+                with self.assertRaisesRegex(ValueError, refusal):
+                    bootstrap_plan(github, REPO, "make test")
 
     def test_the_tool_says_whether_the_repo_is_ready_and_enabled(self):
         foreman = Foreman(Store(":memory:"), gated(FakeGitHub()), Config(mcp_token="t", repos=frozenset({REPO})),
