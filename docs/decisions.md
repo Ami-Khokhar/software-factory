@@ -319,7 +319,10 @@ letting an ordinary coding worker edit those paths would let it alter its own re
 missing controls from its reviewed templates. It preserves existing valid controls and refuses
 conflicts. The owner reviews and merges the PR, then enables the repo through the existing check.
 The bootstrap tool never merges, and ordinary worker patches still cannot touch `.github/` or
-`AGENTS.md`.
+`AGENTS.md`. A PR needs a base commit, so a repo with no refs at all first gets one commit on its
+default branch that holds only a `README.md` with the repo's name; the audit log and the tool
+result record it. That push is not forced: if the repo got a commit since the check, it fails and
+nothing more is pushed. The controls never go straight to the default branch.
 
 **Consequence.** The owner no longer authors boilerplate, while the first change to a repo's
 authority remains a human merge. Gate Actions secrets still need to be configured for that repo.

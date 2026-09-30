@@ -131,6 +131,20 @@ class Foreman:
             raise ToolError(f"{repo}'s default branch changed during bootstrap; check the repo and try again")
         if self.github.branch_head(repo, branch):
             raise ToolError(f"bootstrap branch {branch} exists without an open PR; a person must inspect it")
+        initial = None
+        if plan["base_sha"] is None:  # an empty repo: only a README goes straight to the default branch
+            try:
+                initial = patches.initial_commit(self.config.git_url.format(repo=repo), self.config.github_token,
+                                                 plan["default_branch"], plan["initial_files"],
+                                                 "Start the repository")
+            except patches.PatchError as exc:
+                raise ToolError(str(exc)) from None
+            # logged at once too: a later step may fail, and this write stays on the default branch
+            self.store.log("bootstrap_initial_commit", {"repo": repo, "by": by, "sha": initial,
+                                                        "paths": sorted(plan["initial_files"])})
+            plan = repos.plan_on(plan, initial)
+            branch = "factory-bootstrap/" + plan["fingerprint"][:16]
+            response["initialCommit"] = initial
         try:
             sha = patches.bootstrap(self.config.git_url.format(repo=repo), self.config.github_token,
                                     branch, plan["base_sha"], files, "Set up software factory")
@@ -159,7 +173,7 @@ class Foreman:
                 raise
         self.store.log("bootstrap_pr", {"repo": repo, "by": by, "branch": branch,
                                         "baseSha": plan["base_sha"], "headSha": sha,
-                                        "paths": paths, "prNumber": pr["number"]})
+                                        "paths": paths, "prNumber": pr["number"], "initialCommit": initial})
         return dict(response, prNumber=pr["number"],
                     url=pr.get("html_url") or f"https://github.com/{repo}/pull/{pr['number']}")
 

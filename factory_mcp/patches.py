@@ -100,6 +100,34 @@ def _changed_paths(args, work, env):
     return [name for name in _git(args, work, env).split("\0") if name]
 
 
+def initial_commit(url, token, branch, files, message):
+    """Push the first commit of an empty repo to ``branch``, holding only ``files``.
+
+    A PR needs a base commit, so an empty repo gets this one first. It is pushed only when the
+    remote has no refs at all, and the push never replaces a branch that appeared since.
+    """
+    paths = _bootstrap_paths(files)
+    env = _env(token)
+    with tempfile.TemporaryDirectory() as tmp:
+        work = os.path.join(tmp, "repo")
+        _git(["init", "-q", work], tmp, env)
+        _git(["remote", "add", "origin", url], work, env)
+        if _git(["ls-remote", "origin"], work, env):
+            raise PatchError("the repo is not empty: it has refs but no default branch head, "
+                             "so no initial commit was pushed; a person must inspect it")
+        _git(["symbolic-ref", "HEAD", f"refs/heads/{branch}"], work, env)
+        for name in paths:
+            _write_bootstrap_file(work, name, files[name])
+        _git(["add", "--", *paths], work, env)
+        _git(["-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", message], work, env)
+        try:  # not forced: a branch that got a commit since the check rejects this push
+            _git(["push", "-q", "origin", f"HEAD:refs/heads/{branch}"], work, env)
+        except PatchError as exc:
+            raise PatchError(f"the initial commit was not pushed to {branch}; the repo may have got a "
+                             f"commit since the check, so nothing more was pushed ({exc})") from None
+        return _git(["rev-parse", "HEAD"], work, env)
+
+
 def bootstrap(url, token, branch, base_sha, files, message):
     """Push supplied bootstrap files on a new branch rooted at ``base_sha``.
 
