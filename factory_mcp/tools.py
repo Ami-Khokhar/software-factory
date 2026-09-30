@@ -49,6 +49,15 @@ def build(store, foreman):
               "properties": {"repo": {"type": "string", "description": "owner/repo"},
                              "by": {"type": "string", "minLength": 1, "description": "who agreed"}}},
              "write", lambda args: foreman.add_repo(args["repo"], args["by"])),
+        Tool("factory_bootstrap_repo",
+             "Prepare an owner-reviewed setup PR containing only missing gate files and the "
+             "factory-standard block. Never merges or enables the repo. Requires a verify command "
+             "when the gate config is missing.",
+             {"type": "object", "required": ["repo", "by"], "additionalProperties": False,
+              "properties": {"repo": {"type": "string", "description": "owner/repo"},
+                             "verify": {"type": "string", "description": "repo test command, if gate config is missing"},
+                             "by": {"type": "string", "minLength": 1, "description": "who approved the setup PR"}}},
+             "write", lambda args: foreman.bootstrap_repo(args["repo"], args.get("verify"), args["by"])),
         Tool("factory_intake",
              "Create a WorkItem from an open GitHub issue in an allowlisted repo. The issue needs an "
              "'## Acceptance' list of '- <claim> — done when: <check>' bullets. Idempotent.",

@@ -123,9 +123,17 @@ passes the repo's base-commit `verify` command before factory-mcp pushes anythin
 ## Adding a repo
 
 The repo needs pr-gatekeeper with working secrets, a `.github/pr-gatekeeper.json` with a `verify`
-command, and an `AGENTS.md` that carries the factory standard (ADR-0015): copy `templates/AGENTS.md`
-from this repo, fill in its top sections, and merge that PR yourself, because `AGENTS.md` is a
-protected path. Then:
+command, and an `AGENTS.md` that carries the factory standard (ADR-0015). For manual setup, copy
+`templates/AGENTS.md` into the target repo and merge that PR yourself; `AGENTS.md` is protected.
+
+Day Desk can prepare that one-time setup PR. Ask it to check the repo, then to prepare the
+bootstrap PR; approve the `factory_bootstrap_repo` tool call in Telegram. If the gate config is
+missing, give it the command that verifies that repo. The PR contains only missing gate files and
+the factory-standard block; review and merge it yourself. Configure the repo's
+`OPENCODE_GO_API_KEY` and `GATEKEEPER_READ_TOKEN` Actions secrets before relying on the gate.
+Ask Day Desk to check and enable the repo after the merge. It will not start a worker for a repo
+whose controls are still missing. Existing valid gate files are preserved, and a conflicting
+standard or invalid gate config needs a person to fix it.
 
 ```bash
 factory add-repo <owner>/<repo>

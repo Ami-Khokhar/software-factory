@@ -306,3 +306,20 @@ is a module reference, not a path.
 **Consequence.** Every repo the factory touches can run the same check with one script. Files
 over 800 lines fail it: split the file or raise the limit. Wiring it into a repo's `verify`
 command changes `.github/`, so that step stays with the owner.
+
+---
+
+## ADR-0019 — Owner-reviewed bootstrap PRs for new repos
+
+**Context.** A repo needs gate config, a workflow and the factory standard before it can join the
+factory. Requiring the owner to write each control file by hand made repo setup needlessly hard;
+letting an ordinary coding worker edit those paths would let it alter its own review rules.
+
+**Decision.** With one Hermes write approval, factory-mcp prepares a setup PR containing only
+missing controls from its reviewed templates. It preserves existing valid controls and refuses
+conflicts. The owner reviews and merges the PR, then enables the repo through the existing check.
+The bootstrap tool never merges, and ordinary worker patches still cannot touch `.github/` or
+`AGENTS.md`.
+
+**Consequence.** The owner no longer authors boilerplate, while the first change to a repo's
+authority remains a human merge. Gate Actions secrets still need to be configured for that repo.

@@ -13,6 +13,7 @@ mcp_servers:
       include:  # factory_tick and factory_intake stay out: factory-mcp ticks on its own
         - factory_status
         - factory_repo_check
+        - factory_bootstrap_repo
         - factory_add_repo
         - factory_approve_issue
         - factory_propose_issue

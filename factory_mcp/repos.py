@@ -7,6 +7,7 @@ repos.json lists the repos a factory tool enabled; FACTORY_REPOS lists the other
 
 factory-mcp reads it at start. A person may read or edit it; an edit takes effect at the next start.
 """
+import hashlib
 import json
 import os
 import re
@@ -28,6 +29,70 @@ LABELS = ((READY, "0E8A16", "software-factory may work on this issue"),
 def standard_blocks(text):
     """The factory-standard blocks in an AGENTS.md text."""
     return STANDARD.findall((text or "").replace("\r\n", "\n"))
+
+
+def _fingerprint(plan):
+    """A stable digest of exactly what a person reviews before bootstrap writes it."""
+    encoded = json.dumps(plan, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _standard_to_append(agents):
+    """Return AGENTS.md with the canonical standard appended, or reject conflicting markers."""
+    wanted = standard_blocks(TEMPLATE.read_text())
+    if len(wanted) != 1:
+        raise RuntimeError("templates/AGENTS.md needs exactly one factory-standard block")
+    found = standard_blocks(agents)
+    if found:
+        if found != wanted:
+            raise ValueError("AGENTS.md's factory-standard block differs from software-factory's templates/AGENTS.md")
+        return None
+    if agents and "factory-standard:" in agents:
+        raise ValueError("AGENTS.md has malformed factory-standard markers")
+    if not agents:
+        return wanted[0] + "\n"
+    return agents + ("\n" if agents.endswith(("\n", "\r")) else "\n\n") + wanted[0] + "\n"
+
+
+def bootstrap_plan(github, repo, verify=None):
+    """Describe the exact missing controls a person may approve; this only reads GitHub."""
+    if not NAME.match(repo):
+        raise ValueError(f"{repo!r} is not a repo name in the form owner/repo")
+    meta = github.repository(repo)
+    canonical, branch = meta["full_name"], meta["default_branch"]
+    if meta.get("archived"):
+        raise ValueError(f"{canonical} is archived")
+    if not (meta.get("permissions") or {}).get("push"):
+        raise ValueError(f"the factory's GitHub token cannot push to {canonical}")
+    base = github.branch_head(canonical, branch)
+    if not base:
+        raise ValueError(f"{canonical}'s default branch {branch} has no head commit")
+
+    files = {}
+    config = github.file(canonical, GATE_CONFIG)
+    if config is None:
+        if not isinstance(verify, str) or not verify.strip():
+            raise ValueError("a nonempty verify command is required when .github/pr-gatekeeper.json is missing")
+        files[GATE_CONFIG] = json.dumps({"verify": verify}, indent=2) + "\n"
+    else:
+        try:
+            config_doc = json.loads(config)
+        except ValueError as exc:
+            raise ValueError(".github/pr-gatekeeper.json is not valid JSON") from exc
+        if not isinstance(config_doc, dict) or not isinstance(config_doc.get("verify"), str) \
+                or not config_doc["verify"].strip():
+            raise ValueError(".github/pr-gatekeeper.json has no verify command")
+
+    if github.file(canonical, GATE_WORKFLOW) is None:
+        source = TEMPLATE.parent.parent / GATE_WORKFLOW
+        files[GATE_WORKFLOW] = source.read_text()
+
+    agents = _standard_to_append(github.file(canonical, "AGENTS.md"))
+    if agents is not None:
+        files["AGENTS.md"] = agents
+
+    plan = {"repo": canonical, "default_branch": branch, "base_sha": base, "files": files}
+    return dict(plan, fingerprint=_fingerprint(plan))
 
 
 def _result(check_id, ok, detail, fix):
