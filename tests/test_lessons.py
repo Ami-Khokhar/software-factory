@@ -174,6 +174,19 @@ class ApproveRetireTest(unittest.TestCase):
             self.tools["factory_retire_lesson"].fn({"repo": REPO, "fingerprint": FP, "by": " "})
         self.assertEqual(len(lessons.load(self.path)), 1)
 
+    def test_status_shows_each_lessons_effect_from_the_stored_workorders(self):
+        self.approve()
+        for round_, kind, findings in ((0, "implement", []),
+                                       (1, "fix", [{"fingerprint": FP, "problem": "No test"}])):
+            self.store.save_workorder({"id": f"{REPO}#7:r{round_}:{kind}:a0", "workItemId": f"{REPO}#7",
+                                       "round": round_, "kind": kind, "repo": REPO,
+                                       "lessons": [{"fingerprint": FP, "text": "t"}],
+                                       "findingsToAddress": findings})
+        summary = self.tools["factory_status"].fn({})
+        effect = summary["lessonEffect"][f"{REPO}:{FP}"]
+        self.assertEqual((effect["sent"], effect["recurred"], effect["notWorking"]), (1, 1, False))
+        self.assertNotIn("lessonsError", summary)
+
     def test_status_names_a_broken_lessons_file(self):
         Path(self.path).write_text('{"version": 2}')
         summary = self.tools["factory_status"].fn({})
@@ -250,6 +263,13 @@ class WorkOrderLessonsTest(unittest.TestCase):
                             lambda r, n=n: [{"fingerprint": f"fp-{n}", "workItems": 2}])
         _, order, _ = self.dispatch()
         self.assertEqual(len(order["lessons"]), 10)
+
+    def test_a_hand_edited_long_lesson_is_cut_to_the_schemas_300_characters(self):
+        Path(self.path).write_text(json.dumps({"version": 1, "lessons": [
+            {"repo": REPO, "fingerprint": FP, "text": "x" * 400, "approved_by": "amteshwar",
+             "approved_at": "2026-09-27T00:00:00Z"}]}))
+        _, order, _ = self.dispatch()
+        self.assertEqual(order["lessons"], [{"fingerprint": FP, "text": "x" * 300}])
 
     def test_only_this_repos_lessons_ride_along(self):
         lessons.approve(self.path, "other/r", "fp-other", "other repo's lesson", "amteshwar",

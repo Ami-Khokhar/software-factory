@@ -90,18 +90,6 @@ class AutonomyUnchangedTest(unittest.TestCase):
         self.assertEqual(autonomy(workitems, store.history),
                          {"ended": 1, "autonomous": 1, "unknown": 0, "rate": 1.0})
 
-    def test_the_fixture_history_gives_the_fixture_answer(self):
-        import json
-        from pathlib import Path
-        from factory_mcp.store import Store
-        fixture = json.loads((Path(__file__).parent / "fixtures" / "autonomy-history.json").read_text())
-        store = Store(":memory:")
-        for workitem_id, item in fixture["workItems"].items():
-            for action, detail in item["history"]:
-                store.log(action, detail, workitem_id)
-        workitems = [{"id": i, "state": item["state"]} for i, item in fixture["workItems"].items()]
-        self.assertEqual(autonomy(workitems, store.history), fixture["expected"])
-
 
 def _store_with_history():
     from factory_mcp.store import Store

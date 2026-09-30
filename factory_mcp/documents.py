@@ -19,8 +19,8 @@ def workorder(wi, kind, attempt, config, base_sha=None, findings=(), lessons=())
             "constraints": {"maxChangedLines": 600, "maxChangedFiles": 20,
                             "protectedPaths": list(config.protected_paths)},
             "findingsToAddress": list(findings),
-            "lessons": [{"fingerprint": entry["fingerprint"], "text": entry["text"]}
-                        for entry in list(lessons)[:10]],
+            "lessons": [{"fingerprint": entry["fingerprint"], "text": entry["text"][:300]}
+                        for entry in list(lessons)[:10]],  # the schema's caps: the file is hand-editable
             "requiredEvidence": ["tests-pass"],
             "budget": {"maxPasses": config.max_passes, "wallMs": config.wall_ms},
             "idempotencyKey": key, "createdAt": now()}

@@ -15,7 +15,7 @@ def build(store, foreman):
             if foreman.config.lessons_file:
                 try:
                     summary["lessonEffect"] = metrics.lesson_effect(
-                        lessons.load(foreman.config.lessons_file), store.workorders)
+                        lessons.load(foreman.config.lessons_file), store.all_workorders)
                 except ValueError as exc:  # a hand-edited file: say what is wrong with it
                     summary["lessonsError"] = str(exc)
             return summary

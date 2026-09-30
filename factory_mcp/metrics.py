@@ -84,7 +84,7 @@ def lesson_effect(lessons, workorders_of):
 
 
 def _grouped(orders):
-    """Stored WorkOrders grouped by WorkItem, each group in round order."""
+    """Stored WorkOrders grouped by WorkItem, in the order `orders` yields them."""
     groups = {}
     for order in orders:
         groups.setdefault(order["workItemId"], []).append(order)
