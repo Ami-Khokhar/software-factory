@@ -7,6 +7,8 @@ are in [decisions.md](decisions.md).
 ## Components
 
 ```
+                      Day Desk's shell (Docker sandbox) ──► GitHub: git, gh, one token
+                          ▲
 Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory CLI (scripts/factory)
                           │ MCP tools; each write needs the owner's yes       │ MCP tools
                           ▼                                                   ▼
@@ -52,6 +54,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | factory-mcp → GitHub | The `factory/<issue>` branch, a PR in the gate's body format, labels, comments | `patches.py`, `github.py`, `documents.pr_body` |
 | Keychain → factory-mcp → GitHub | A gate secret's value: `security`'s stdout, then `gh secret set`'s stdin, with the factory's token; never logged or returned | `gate_secrets.py` |
 | Day Desk, CLI → factory-mcp | MCP tool calls, each one marked read or write | `tools.py` |
+| Day Desk's shell → GitHub | git and gh traffic from the Docker sandbox, with a fine-grained token for the factory's repos and no Administration; no other secret or host file | `tenant/hermes/config.yaml`, `tenant/hermes/sandbox/Dockerfile` |
 
 ## Code map
 

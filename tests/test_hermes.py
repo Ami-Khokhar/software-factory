@@ -69,6 +69,11 @@ class ProfileTest(unittest.TestCase):
         self.assertRegex(dockerfile, r"(?m)^USER daydesk$")
         self.assertIn(f"--home-dir {TERMINAL['cwd']} ", dockerfile)
 
+    def test_a_first_commit_in_the_sandbox_is_on_main(self):
+        """For an empty repo, the first branch pushed becomes the default one (ADR-0008)."""
+        dockerfile = (PROFILE / "sandbox" / "Dockerfile").read_text()
+        self.assertRegex(dockerfile, r"\[init\]\n\tdefaultBranch = main\n")
+
 
 if __name__ == "__main__":
     unittest.main()

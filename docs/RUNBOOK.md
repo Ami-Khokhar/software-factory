@@ -244,7 +244,9 @@ hermes -p day-desk cron create "every 5m" --no-agent --script factory-watch.sh -
 `factory-watch` sends one message for each WorkItem that newly waits on you, and an error message
 when factory-mcp does not answer. Reply to the message, and Day Desk answers the escalation with
 you. After `factory update` deploys a new version, run `hermes profile update day-desk` so Day
-Desk gets the new skill.
+Desk gets the new skill. `factory update` does not rebuild Day Desk's sandbox image: when the
+deploy changes `tenant/hermes/sandbox/Dockerfile`, run the `docker build` command above again and
+`hermes -p day-desk gateway restart`.
 
 Day Desk has no file tools, browser or subagents (`agent.disabled_toolsets` in
 `tenant/hermes/config.yaml`). It cannot tick or take in a WorkItem itself (factory-mcp does),
@@ -255,16 +257,16 @@ read a repo. Hermes does not ask you before a shell command, so Day Desk shows y
 that changes GitHub and waits for your yes in chat. The container has no host directory it can
 write, and one secret, `DAYDESK_GITHUB_TOKEN`. From the host, Hermes mounts only Day Desk's
 skills and its caches of files sent in chat (images, documents, audio, web pages), read-only
-under `/root/.hermes`. `/root` is root's with mode 700, so the sandbox user cannot open them, but
-count them as visible. `~/.hermes/profiles/day-desk/.env`, `~/.ssh`, `~/.config` and your other
-files are not mounted.
+under `/root/.hermes`. `~/.hermes/profiles/day-desk/.env`, `~/.ssh`, `~/.config` and your other
+files are not mounted. Treat anything you send Day Desk in chat as visible to the shell.
 
 ### The shell's GitHub token
 
 Make a fine-grained token at GitHub → Settings → Developer settings → Fine-grained tokens:
 
-- Resource owner: your account. Repository access: All repositories, so that a repo you create
-  later is in reach. Expiration: 90 days, then make a new one.
+- Resource owner: your account. Repository access: Only select repositories, the ones the
+  factory works on. Add each new repo to the token when you create it. Expiration: 90 days, then
+  make a new one.
 - Repository permissions: Contents read and write, and Pull requests read and write. Metadata
   read is added for you. Give nothing else. Without Workflows, GitHub refuses a push that changes
   `.github/workflows/`.

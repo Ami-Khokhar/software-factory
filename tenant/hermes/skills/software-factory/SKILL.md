@@ -105,15 +105,18 @@ factory_status shows each lesson's effect; offer to retire or rewrite one it fla
 
 The `terminal` tool runs in a Docker sandbox with git, gh and python3. gh and git already have
 the owner's GitHub token. Nothing in the sandbox lasts after the session. The token cannot create
-a repo: when a repo does not exist, ask the owner to create it, empty, on GitHub. Use the shell
-for two jobs:
+a repo: when a repo does not exist, ask the owner to create it, empty, on GitHub. The token
+reaches only the repos the owner chose for it: when gh cannot find a repo, ask the owner to add
+it to the token. Use the shell for two jobs:
 
 - Make the first commit of an empty repo, when the owner wants particular files in it: clone it,
   add those files, commit with `git -c user.name="$(gh api user -q .login)" -c
   user.email="$(gh api user -q .id)+$(gh api user -q .login)@users.noreply.github.com" commit`,
-  and push the default branch. Do this only when `git ls-remote` prints no refs; after that,
-  every change goes through an issue. If the owner wants no files of their own, skip this:
-  factory_bootstrap_repo makes the first commit of an empty repo itself.
+  and push to the branch GitHub names as the default:
+  `git push origin HEAD:"$(gh api repos/<owner>/<repo> -q .default_branch)"`. Do this only when
+  `git ls-remote` prints no refs; after that, every change goes through an issue. If the owner
+  wants no files of their own, skip this: factory_bootstrap_repo makes the first commit of an
+  empty repo itself.
 - Read a repo: `gh repo clone <owner>/<repo> -- --depth 1`, then `ls`, `cat` or `git log`.
 
 Hermes does not ask the owner before shell commands. Before a command that changes GitHub, show

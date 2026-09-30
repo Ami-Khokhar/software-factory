@@ -368,8 +368,9 @@ itself.
 **Decision.** Day Desk's `terminal` toolset is on, with `terminal.backend: docker` and the image
 in `tenant/hermes/sandbox/`: git, a pinned gh and python3, for a user with no sudo. One variable
 enters the container, `DAYDESK_GITHUB_TOKEN`, and the image's gh wrapper hands it to gh as
-`GH_TOKEN`. It is a fine-grained token that the owner makes for this job alone, with Contents and
-Pull requests read and write and no Administration. It is not the factory's token. Day Desk uses
+`GH_TOKEN`. It is a fine-grained token that the owner makes for this job alone, for the factory's
+repos only, with Contents and Pull requests read and write and no Administration. It is not the
+factory's token. Day Desk uses
 the shell to make the first commit of an empty repo and to read a repo; the owner creates repos.
 It never merges, never pushes to a `factory/*` branch or, after the first commit, to a default
 branch, and never changes `.github/` or `AGENTS.md`. `code_execution`, `file`, `browser`,

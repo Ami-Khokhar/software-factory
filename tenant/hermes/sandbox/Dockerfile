@@ -25,11 +25,14 @@ COPY --chmod=755 <<'EOF' /usr/local/bin/gh
 GH_TOKEN="$DAYDESK_GITHUB_TOKEN" exec /usr/bin/gh "$@"
 EOF
 
-# git asks gh for the token on every https push and fetch to GitHub.
+# git asks gh for the token on every https push and fetch to GitHub. A new repo's first branch is
+# main, as in worker/Dockerfile, so a first commit cannot make another branch the default.
 COPY <<'EOF' /etc/gitconfig
 [credential "https://github.com"]
 	helper =
 	helper = !/usr/local/bin/gh auth git-credential
+[init]
+	defaultBranch = main
 EOF
 
 # Hermes mounts root-owned tmpfs over /workspace, /home and /root, which this user cannot write, so

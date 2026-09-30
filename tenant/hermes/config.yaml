@@ -35,8 +35,8 @@ terminal:
   # one secret: the GitHub token, which the image's gh wrapper hands to gh as GH_TOKEN.
   backend: docker
   docker_image: "day-desk-sandbox:1"
-  container_persistent: false  # no bind mount from the host; Hermes removes the container after
-  cwd: /day-desk  # the image user's home: Hermes's tmpfs over /workspace, /home and /root is root's
+  container_persistent: false  # no bind mount from the host; the container goes with the session
+  cwd: /day-desk  # the image user's home, which it can write; Hermes's tmpfs over /root is root's
   env_passthrough: [DAYDESK_GITHUB_TOKEN]
 
 approvals:
