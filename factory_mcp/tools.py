@@ -32,8 +32,13 @@ def build(store, foreman):
         if foreman.config.listed(repo) is None:
             raise ToolError(f"{repo} is not in FACTORY_REPOS or repos.json")
         repo = foreman.config.listed(repo)
-        return {"repo": repo, "candidates": lessons.candidates(store, repo),
-                "lessons": lessons.for_repo(lessons.load(foreman.config.lessons_file), repo)}
+        if not foreman.config.lessons_file:
+            raise ToolError("FACTORY_LESSONS_FILE is not set, so the factory keeps no lessons")
+        try:
+            approved = lessons.for_repo(lessons.load(foreman.config.lessons_file), repo)
+        except ValueError as exc:
+            raise ToolError(str(exc)) from None
+        return {"repo": repo, "candidates": lessons.candidates(store, repo), "lessons": approved}
 
     tools = [
         Tool("factory_status",

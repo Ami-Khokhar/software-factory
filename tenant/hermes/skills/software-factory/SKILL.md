@@ -73,8 +73,8 @@ A lesson is a gate finding the factory saw on two or more WorkItems in one repo,
 the factory's lessons file with the owner's words. Only the owner approves one. Workers do not see
 lessons yet; say so if the owner asks.
 
-1. Call factory_lessons with the repo. Show each candidate with its fingerprint and how many
-   WorkItems it blocked, then the lessons already approved.
+1. Call factory_lessons with the repo. Show each candidate with its problem, its fingerprint and
+   how many WorkItems it blocked, then the lessons already approved.
 2. If the owner picks a candidate, ask how they want the worker to read it: one line, at most 300
    characters. Do not write the text for them.
 3. Call factory_approve_lesson with the repo, the fingerprint, the owner's own words as `text`, and

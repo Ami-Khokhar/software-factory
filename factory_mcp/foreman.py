@@ -461,6 +461,8 @@ class Foreman:
         repo = self._allowlisted(repo)
         if not self.config.lessons_file:
             raise ToolError("FACTORY_LESSONS_FILE is not set, so the factory keeps no lessons")
+        if not isinstance(by, str) or not by.strip():
+            raise ToolError("retiring a lesson needs the name of the person who retired it")
         try:
             lessons.retire(self.config.lessons_file, repo, fingerprint)
         except ValueError as exc:

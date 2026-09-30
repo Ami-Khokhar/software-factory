@@ -32,7 +32,8 @@ def _blocking_fingerprints(history):
 
 
 def candidates(store, repo):
-    """Blocking findings the gate reported on 2+ WorkItems of one repo: the lessons to offer.
+    """Blocking findings the gate reported on 2+ WorkItems of one repo: the lessons to offer,
+    each with the gate's latest wording of the problem, since a fingerprint is a one-way hash.
 
     Distinct WorkItems, not rounds: one problem stuck across one WorkItem's rounds is one sight
     of it, not two (the fingerprint already sent the second round to a person, ADR-0005).
@@ -41,9 +42,11 @@ def candidates(store, repo):
     for wi in store.all():
         if wi["repo"].lower() != repo.lower():
             continue
-        for fingerprint in {fp for fp, _ in _blocking_fingerprints(store.history(wi["id"]))}:
+        sightings = dict(_blocking_fingerprints(store.history(wi["id"])))  # the last problem wins
+        for fingerprint, problem in sightings.items():
             known = seen.setdefault(fingerprint, {"fingerprint": fingerprint, "workItems": 0})
             known["workItems"] += 1
+            known["problem"] = problem
     return sorted((known for known in seen.values() if known["workItems"] > 1),
                   key=lambda known: -known["workItems"])
 
@@ -80,7 +83,10 @@ def load(path):
     """The lessons in the lessons.json at `path`, or [] when there is no such file."""
     if not path or not Path(path).is_file():
         return []
-    doc = json.loads(Path(path).read_text())
+    try:
+        doc = json.loads(Path(path).read_text())
+    except ValueError as exc:
+        raise ValueError(f"{path} is not JSON: {exc}") from None
     found = problems(doc)
     if found:
         raise ValueError(f"{path}: " + "; ".join(found))

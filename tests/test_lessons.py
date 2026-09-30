@@ -65,9 +65,16 @@ class CandidatesTest(unittest.TestCase):
         self.assertEqual(len(lessons.candidates(store, REPO.upper())), 1)
 
     def test_most_seen_first(self):
-        store = store_with((REPO, verdict_history("often")), (REPO, verdict_history("often")),
-                           (REPO, verdict_history("once")))
-        self.assertEqual([c["fingerprint"] for c in lessons.candidates(store, REPO)], ["often"])
+        store = store_with((REPO, verdict_history("sometimes")), (REPO, verdict_history("sometimes")),
+                           (REPO, verdict_history("often")), (REPO, verdict_history("often")),
+                           (REPO, verdict_history("often")))
+        self.assertEqual([c["fingerprint"] for c in lessons.candidates(store, REPO)],
+                         ["often", "sometimes"])
+
+    def test_a_candidate_shows_the_gates_latest_wording_of_the_problem(self):
+        store = store_with((REPO, verdict_history(problem="No test for the error path")),
+                           (REPO, verdict_history(problem="Still no test for the 401 path")))
+        self.assertEqual(lessons.candidates(store, REPO)[0]["problem"], "Still no test for the 401 path")
 
     def test_an_empty_store_has_no_candidates(self):
         self.assertEqual(lessons.candidates(Store(":memory:"), REPO), [])
@@ -149,6 +156,23 @@ class ApproveRetireTest(unittest.TestCase):
         tool = tools.build(self.store, foreman)["factory_approve_lesson"]
         with self.assertRaisesRegex(ToolError, "FACTORY_LESSONS_FILE is not set"):
             tool.fn({"repo": REPO, "fingerprint": FP, "text": "t", "by": "o"})
+
+    def test_a_lessons_file_that_is_not_json_is_named_in_the_error(self):
+        Path(self.path).write_text("{truncated")
+        with self.assertRaisesRegex(ToolError, "lessons.json is not JSON"):
+            self.tools["factory_lessons"].fn({"repo": REPO})
+
+    def test_factory_lessons_says_when_no_lessons_file_is_configured(self):
+        foreman = Foreman(self.store, self.github,
+                          Config(mcp_token="t", repos=frozenset({REPO})), FakeRelay())
+        with self.assertRaisesRegex(ToolError, "FACTORY_LESSONS_FILE is not set"):
+            tools.build(self.store, foreman)["factory_lessons"].fn({"repo": REPO})
+
+    def test_retiring_needs_the_name_of_who_retired_it(self):
+        self.approve()
+        with self.assertRaisesRegex(ToolError, "needs the name of the person"):
+            self.tools["factory_retire_lesson"].fn({"repo": REPO, "fingerprint": FP, "by": " "})
+        self.assertEqual(len(lessons.load(self.path)), 1)
 
     def test_retire_removes_the_lesson(self):
         self.approve()
