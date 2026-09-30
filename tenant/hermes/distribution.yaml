@@ -12,3 +12,6 @@ env_requires:
   - name: TELEGRAM_ALLOWED_USERS
     description: "The owner's Telegram user id; nobody else may talk to Day Desk"
     required: true
+  - name: DAYDESK_GITHUB_TOKEN
+    description: "A fine-grained GitHub token for Day Desk's sandboxed shell; see docs/RUNBOOK.md"
+    required: true

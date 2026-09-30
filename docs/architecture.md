@@ -37,8 +37,9 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 - **pr-gatekeeper** reviews every PR and merges it on MERGE. factory-mcp has no merge tool
   (ADR-0004).
 - **Day Desk** is the owner's front door in Telegram (ADR-0013). The `factory` CLI calls the same
-  tools. For a new repo, one owner-approved tool prepares a setup PR with only missing controls;
-  the owner merges it before normal worker passes start (ADR-0019). One owner approval of
+  tools. Day Desk's shell runs in a Docker sandbox whose one secret is a GitHub token (ADR-0021).
+  For a new repo, one owner-approved tool prepares a setup PR with only missing controls; the
+  owner merges it before normal worker passes start (ADR-0019). One owner approval of
   `factory_start_plan` opens all the issues of a plan, and they run in order (ADR-0024).
 
 ## What crosses each boundary
