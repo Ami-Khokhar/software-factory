@@ -30,6 +30,8 @@ def _run(argv, command, env=None, value=None):
         raise _Failed(f"{argv[0]} is not installed") from None
     except subprocess.TimeoutExpired:
         raise _Failed(f"{command} timed out") from None
+    except (OSError, ValueError) as exc:  # ValueError: output that is not text
+        raise _Failed(f"{command} failed: {type(exc).__name__}") from None
 
 
 def _gh(args, token, value=None):

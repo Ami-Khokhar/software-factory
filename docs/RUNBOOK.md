@@ -145,7 +145,10 @@ security add-generic-password -s software-factory/GATEKEEPER_READ_TOKEN -a facto
 `GATEKEEPER_READ_TOKEN` is a token that can read the private Ami-Khokhar/pr-gatekeeper. The tool
 leaves alone a secret the repo already has, and reports each one as `set`, `already set`,
 `missing: ...` (add it to the Keychain and ask again) or `failed: <command> exited <code>`. It
-needs `gh` on factory-mcp's PATH. Ask Day Desk to check and enable the repo after the merge. It will not start a worker for a repo
+needs `gh` on factory-mcp's PATH and a `FACTORY_GITHUB_TOKEN` that may read and write the repo's
+Actions secrets (a fine-grained token needs the "Secrets" permission).
+
+Ask Day Desk to check and enable the repo after the merge. It will not start a worker for a repo
 whose controls are still missing. Existing valid gate files are preserved, and a conflicting
 standard or invalid gate config needs a person to fix it.
 

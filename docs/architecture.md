@@ -48,6 +48,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | worker → factory-mcp | A Result: the last JSON line of the task output | `schemas/result.schema.json`, `documents.check_result` |
 | pr-gatekeeper → factory-mcp | A Verdict, read from the marker JSON in the gate's latest PR comment | `schemas/verdict.schema.json`, `verdict.py` |
 | factory-mcp → GitHub | The `factory/<issue>` branch, a PR in the gate's body format, labels, comments | `patches.py`, `github.py`, `documents.pr_body` |
+| Keychain → factory-mcp → GitHub | A gate secret's value: `security`'s stdout, then `gh secret set`'s stdin, with the factory's token; never logged or returned | `gate_secrets.py` |
 | Day Desk, CLI → factory-mcp | MCP tool calls, each one marked read or write | `tools.py` |
 
 ## Code map
@@ -67,6 +68,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/relay.py` | The agent-relay task client, and where it finds the relay's token |
 | `factory_mcp/patches.py` | The git work factory-mcp does: cloning a worker checkout, pushing a patch Result |
 | `factory_mcp/repos.py` | The repo check, and `repos.json` (ADR-0014) |
+| `factory_mcp/gate_secrets.py` | A repo's gate Actions secrets, set from the owner's Keychain through `gh` (ADR-0022) |
 | `factory_mcp/lessons.py` | Lesson candidates from the audit log, and `lessons.json` (ADR-0020) |
 | `factory_mcp/routing.py` | Which worker takes the next attempt: locality first, then one that has not failed |
 | `factory_mcp/metrics.py` | The escalation text, the autonomy rate, and whether each lesson works |

@@ -151,7 +151,7 @@ class BootstrapActionTest(unittest.TestCase):
         with mock.patch.object(self.github, "branch_head", side_effect=moving_head):
             with self.assertRaisesRegex(ToolError, "changed"):
                 self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
-        self.assertEqual((self.pushed, self.github.pulls), ([], []))
+        self.assertEqual((self.pushed, self.github.pulls, self.commands.calls), ([], [], []))
 
     def secret_status(self, result):
         return {item["name"]: item["status"] for item in result["secrets"]}
@@ -237,6 +237,31 @@ class BootstrapActionTest(unittest.TestCase):
 
         self.assertEqual(self.secret_status(result)["OPENCODE_GO_API_KEY"],
                          "failed: gh secret list does not show it after gh secret set")
+
+    def test_a_command_that_cannot_run_is_a_failed_status_and_the_setup_pr_still_opens(self):
+        cases = {"not installed": (FileNotFoundError(2, "No such file"), "failed: gh is not installed"),
+                 "timed out": (subprocess.TimeoutExpired(["gh"], 60), "failed: gh secret list timed out"),
+                 "not runnable": (PermissionError(13, "denied"), "failed: gh secret list failed: PermissionError")}
+        for case, (error, status) in cases.items():
+            with self.subTest(case), mock.patch("factory_mcp.gate_secrets.subprocess.run", side_effect=error):
+                result = self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")  # then retries
+                self.assertEqual(set(self.secret_status(result).values()), {status})
+                self.assertEqual(result["prNumber"], 100)
+
+    def test_a_secret_list_that_is_not_json_names_is_a_failed_status(self):
+        with mock.patch("factory_mcp.gate_secrets.subprocess.run",
+                        return_value=subprocess.CompletedProcess(["gh"], 0, "not json", "")):
+            result = self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
+        self.assertEqual(set(self.secret_status(result).values()),
+                         {"failed: gh secret list printed no JSON list of names"})
+
+    def test_an_empty_keychain_value_is_missing_and_not_set(self):
+        self.commands.keychain = {"software-factory/OPENCODE_GO_API_KEY": ""}
+
+        result = self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
+
+        self.assertTrue(self.secret_status(result)["OPENCODE_GO_API_KEY"].startswith("missing: "))
+        self.assertEqual(self.commands.secrets, set())
 
     def test_a_locked_keychain_reports_the_exit_code_not_missing(self):
         self.commands.failing[("security", "find-generic-password", "-s")] = (51, f"{KEY}\n")
