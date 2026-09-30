@@ -44,7 +44,8 @@ class FakeGitHub:
     def add_pr(self, repo, number, branch, sha, state="open", merged=False):
         self.pulls.append({"repo": repo, "number": number, "state": state,
                            "merged_at": "2026-09-24T01:00:00Z" if merged else None,
-                           "head": {"ref": branch, "sha": sha}, "base": {"ref": "main", "sha": "base0"}})
+                           "head": {"ref": branch, "sha": sha, "repo": {"full_name": repo}},
+                           "base": {"ref": "main", "sha": "base0"}})
 
     def add_verdict(self, repo, pr, outcome, round_, head_sha, findings=()):
         self.issue_comments.setdefault((repo, pr), []).append(
@@ -66,6 +67,9 @@ class FakeGitHub:
 
     def pulls_for_branch(self, repo, branch):
         return [p for p in self.pulls if p["repo"] == repo and p["head"]["ref"] == branch]
+
+    def open_pulls(self, repo, base):
+        return [p for p in self.pulls if p["repo"] == repo and p["state"] == "open" and p["base"]["ref"] == base]
 
     def comments(self, repo, number):
         return list(self.issue_comments.get((repo, number), []))

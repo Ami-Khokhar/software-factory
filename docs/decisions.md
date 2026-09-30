@@ -375,3 +375,28 @@ A missing or failed secret does not stop the setup PR: the owner adds it and cal
 secret on the owner's Mac. factory-mcp needs `gh` on its PATH and runs in the owner's login session
 (the launchd agent does) to read the Keychain. This supersedes the last sentence of ADR-0019's
 consequence.
+
+---
+
+## ADR-0023 — One setup PR per repo, and why gh refused to list secrets
+
+**Context.** On Ami-Khokhar/Morningbrief a retry of `factory_bootstrap_repo` opened a second setup
+PR: the branch name comes from a fingerprint of the planned files, and the templates had changed
+since the first PR. The same run reported `failed: gh secret list exited 1` for both secrets, and
+the owner could not see why, because nothing read stderr (ADR-0022). The owner's own gh login
+listed the secrets, so the factory's token was the likely cause.
+
+**Decision.** Before it creates a branch, the bootstrap adopts the open PR into the default branch
+from a `factory-bootstrap/` branch of the repo itself; more than one is refused, naming each. When
+the plan's files differ from the adopted branch, factory-mcp adds one commit with them on top of
+the PR's head and returns it as `updatedSha`. That push is not forced: a branch that moved during
+the update fails with an error that names the PR. For `gh secret list` only, which is given no
+value, the failed status holds gh's first stderr line, at most 200 characters, with the factory's
+token and anything shaped like a GitHub token (`ghp_`, `gho_`, `github_pat_` and the like) replaced
+by `[token]`. An HTTP 403 or "Resource not accessible" line adds that the token needs Actions
+secrets read/write. The stderr of `gh secret set` and `security` is still never read. This
+supersedes the sentence of ADR-0022 that nothing reads stderr.
+
+**Consequence.** The owner reviews one current setup PR per repo, and a commit the owner pushed to
+it stays: the update goes on top. A token that lacks the Secrets permission shows as such, so the
+owner fixes it without guessing.
