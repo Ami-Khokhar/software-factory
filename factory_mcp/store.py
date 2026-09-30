@@ -139,3 +139,9 @@ class Store:
             rows = self._db.execute("SELECT doc FROM workorders WHERE workitem_id = ? ORDER BY seq",
                                     (workitem_id,)).fetchall()
         return [json.loads(row[0]) for row in rows]
+
+    def all_workorders(self):
+        """Every stored WorkOrder, oldest first: what metrics.lesson_effect measures."""
+        with self._lock:
+            rows = self._db.execute("SELECT doc FROM workorders ORDER BY seq").fetchall()
+        return [json.loads(row[0]) for row in rows]

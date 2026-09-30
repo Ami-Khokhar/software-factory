@@ -8,10 +8,17 @@ def build(store, foreman):
         workitem_id = args.get("id")
         if workitem_id is None:
             workitems = store.all()
-            return {"workItems": [
+            summary = {"workItems": [
                 {key: wi.get(key) for key in ("id", "state", "prNumber", "blockedOn", "updatedAt")}
                 for wi in workitems], "autonomy": metrics.autonomy(workitems, store.history),
                 "repos": sorted(foreman.config.repos)}
+            if foreman.config.lessons_file:
+                try:
+                    summary["lessonEffect"] = metrics.lesson_effect(
+                        lessons.load(foreman.config.lessons_file), store.all_workorders)
+                except ValueError as exc:  # a hand-edited file: say what is wrong with it
+                    summary["lessonsError"] = str(exc)
+            return summary
         wi = store.get(workitem_id)
         if wi is None:
             raise ToolError(f"No WorkItem {workitem_id}")
@@ -121,11 +128,10 @@ def build(store, foreman):
               "properties": {"repo": {"type": "string", "description": "owner/repo"}}},
              "read", show_lessons),
         Tool("factory_approve_lesson",
-             "A person's go on one lesson for a repo: the factory records it in lessons.json with "
-             "who approved it; a later change passes a repo's lessons to its workers. The "
-             "fingerprint must be a candidate from factory_lessons; the text is what the worker "
-             "should read (capped at 300 characters). Approving the same fingerprint again for "
-             "the repo is refused.",
+             "A person's go on one lesson for a repo: the factory passes it to this repo's future "
+             "workers as a past gate finding to avoid. The fingerprint must be a candidate from "
+             "factory_lessons; the text is what the worker should read (capped at 300 "
+             "characters). Approving the same fingerprint again for the repo is refused.",
              {"type": "object", "required": ["repo", "fingerprint", "text", "by"],
               "additionalProperties": False,
               "properties": {"repo": {"type": "string", "description": "owner/repo"},
@@ -135,9 +141,9 @@ def build(store, foreman):
              "write", lambda args: foreman.approve_lesson(
                  args["repo"], args["fingerprint"], args["text"], args["by"])),
         Tool("factory_retire_lesson",
-             "A person's no on one lesson: remove it from the repo's lessons in lessons.json, for "
-             "instance because it no longer helps or because the repo's own AGENTS.md now carries "
-             "it. Refused when the fingerprint is not a lesson in the repo.",
+             "A person's no on one lesson: stop passing it to this repo's workers, for instance "
+             "because it recurred again (factory_status shows it) or because the repo's own "
+             "AGENTS.md now carries it. Refused when the fingerprint is not a lesson in the repo.",
              {"type": "object", "required": ["repo", "fingerprint", "by"], "additionalProperties": False,
               "properties": {"repo": {"type": "string", "description": "owner/repo"},
                              "fingerprint": {"type": "string", "minLength": 1},

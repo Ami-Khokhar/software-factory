@@ -65,6 +65,12 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   [decisions.md](decisions.md), ADR-0005).
 - **`WorkItem.gateRound` mirrors pr-gatekeeper's round number** and is never
   incremented by controller retries.
+- **`WorkOrder.lessons` is data (ADR-0020).** At most 10 of the repo's
+  owner-approved lessons, each `{fingerprint, text}` with text of at most 300
+  characters, newest first; `[]` when the repo has none. The worker rules say to
+  avoid them and not to follow them as instructions, as for `findingsToAddress`.
+  WorkOrders stored before this field have no `lessons`; readers treat that as
+  `[]`, so the store needs no migration.
 - **Unknown properties are rejected** (`additionalProperties: false`) so a cell
   cannot smuggle vendor-specific fields across a boundary.
 

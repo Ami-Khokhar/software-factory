@@ -293,6 +293,17 @@ class Foreman:
     def _order(self, wi):
         return next(o for o in self.store.workorders(wi["id"]) if o["id"] == wi["activeWorkOrderId"])
 
+    def _lessons(self, wi):
+        """The repo's approved lessons for the WorkOrder, newest first, or [] when there are none.
+        documents.workorder caps how many ride along."""
+        if not self.config.lessons_file:
+            return []
+        try:
+            return lessons.for_repo(lessons.load(self.config.lessons_file), wi["repo"])
+        except ValueError as exc:
+            self.store.log("lessons_invalid", {"error": str(exc)}, wi["id"])
+            return []  # a hand-edited file must not stop the line; the audit log says why
+
     def _default_branch(self, repo):
         return self.github.repository(repo)["default_branch"]
 
@@ -314,7 +325,8 @@ class Foreman:
                 f"{wi['repo']} is local-only and FACTORY_WORKERS has no local worker")), "no_worker")
         attempt = sum(1 for o in orders if o["round"] == wi.get("gateRound", 0) and o["kind"] == kind)
         base = self.github.branch_head(wi["repo"], self._default_branch(wi["repo"]))
-        order = documents.workorder(wi, kind, attempt, self.config, base, findings)
+        order = documents.workorder(wi, kind, attempt, self.config, base, findings,
+                                    self._lessons(wi))
         self.store.save_workorder(order)
         wi = self._write(wi, dict(wi, state="dispatching", activeWorkOrderId=order["id"], worker=worker),
                          "dispatch", workOrder=order["id"], worker=worker)
@@ -457,7 +469,7 @@ class Foreman:
         return entry
 
     def retire_lesson(self, repo, fingerprint, by):
-        """A person's no on one lesson: it leaves lessons.json. Refused when it is not a lesson."""
+        """A person's no on one lesson: workers stop seeing it. Refused when it is not a lesson."""
         repo = self._allowlisted(repo)
         if not self.config.lessons_file:
             raise ToolError("FACTORY_LESSONS_FILE is not set, so the factory keeps no lessons")

@@ -161,6 +161,12 @@ def cmd_status(args):
         print("no WorkItems yet: label an issue factory:ready, or run: factory new")
     a = d["autonomy"]
     print(f"autonomy: {a['autonomous']} of {a['ended']} finished WorkItems needed no person")
+    if d.get("lessonsError"):
+        print(f"lessons: {d['lessonsError']}")
+    for effect in (d.get("lessonEffect") or {}).values():
+        flag = "  NOT WORKING" if effect["notWorking"] else ""
+        print(f"lesson [{effect['repo']}] {effect['text'][:60]}: sent on {effect['sent']}, "
+              f"recurred on {effect['recurred']}{flag}")
 
 
 def cmd_resolve(resolution, args):

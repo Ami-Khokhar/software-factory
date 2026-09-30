@@ -174,6 +174,25 @@ class ApproveRetireTest(unittest.TestCase):
             self.tools["factory_retire_lesson"].fn({"repo": REPO, "fingerprint": FP, "by": " "})
         self.assertEqual(len(lessons.load(self.path)), 1)
 
+    def test_status_shows_each_lessons_effect_from_the_stored_workorders(self):
+        self.approve()
+        for round_, kind, findings in ((0, "implement", []),
+                                       (1, "fix", [{"fingerprint": FP, "problem": "No test"}])):
+            self.store.save_workorder({"id": f"{REPO}#7:r{round_}:{kind}:a0", "workItemId": f"{REPO}#7",
+                                       "round": round_, "kind": kind, "repo": REPO,
+                                       "lessons": [{"fingerprint": FP, "text": "t"}],
+                                       "findingsToAddress": findings})
+        summary = self.tools["factory_status"].fn({})
+        effect = summary["lessonEffect"][f"{REPO}:{FP}"]
+        self.assertEqual((effect["sent"], effect["recurred"], effect["notWorking"]), (1, 1, False))
+        self.assertNotIn("lessonsError", summary)
+
+    def test_status_names_a_broken_lessons_file(self):
+        Path(self.path).write_text('{"version": 2}')
+        summary = self.tools["factory_status"].fn({})
+        self.assertIn('needs "version": 1', summary["lessonsError"])
+        self.assertNotIn("lessonEffect", summary)
+
     def test_retire_removes_the_lesson(self):
         self.approve()
         result = self.tools["factory_retire_lesson"].fn({"repo": REPO, "fingerprint": FP, "by": "amteshwar"})
@@ -195,6 +214,74 @@ class ApproveRetireTest(unittest.TestCase):
             {"version": 1, "lessons": [{"repo": REPO, "fingerprint": FP, "text": "t"}]}))
         with self.assertRaisesRegex(ValueError, "a lesson needs approved_by; .*needs approved_at"):
             lessons.load(self.path)
+
+
+class WorkOrderLessonsTest(unittest.TestCase):
+    """Issue 3: the WorkOrder carries the repo's lessons to the worker."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.path = str(Path(self.dir.name) / "lessons.json")
+        self.github, self.relay = FakeGitHub(), FakeRelay()
+        self.github.add_issue(REPO, 7)
+        self.foreman = Foreman(Store(":memory:"), self.github,
+                               Config(mcp_token="t", repos=frozenset({REPO}), lessons_file=self.path),
+                               self.relay)
+        self.foreman.intake(REPO, 7)
+
+    def dispatch(self):
+        wi = self.foreman.tick(f"{REPO}#7")["workItem"]
+        self.assertEqual(wi["state"], "implementing")
+        order = self.foreman.store.workorders(f"{REPO}#7")[-1]
+        return wi, order, self.relay.tasks[wi["providerTaskId"]]
+
+    def test_a_workorder_for_a_repo_with_lessons_carries_them(self):
+        lessons.approve(self.path, REPO, FP, "Every new endpoint carries a test for its 401 path.",
+                        "amteshwar", lambda r: [{"fingerprint": FP, "workItems": 2}])
+        wi, order, task = self.dispatch()
+        self.assertEqual(order["lessons"],
+                         [{"fingerprint": FP, "text": "Every new endpoint carries a test for its 401 path."}])
+        self.assertIn('"lessons"', task["input"])
+
+    def test_a_workorder_for_a_repo_with_none_carries_an_empty_list(self):
+        wi, order, _ = self.dispatch()
+        self.assertEqual(order["lessons"], [])
+
+    def test_the_worker_rules_still_come_before_the_workorder(self):
+        lessons.approve(self.path, REPO, FP, "avoid the 401 gap", "amteshwar",
+                        lambda r: [{"fingerprint": FP, "workItems": 2}])
+        _, order, task = self.dispatch()
+        rules, payload = task["input"].split("WorkOrder:", 1)
+        self.assertIn("lessons are past gate findings in this repo", rules)
+        self.assertLess(rules.index("Rules (these override"), rules.index("lessons are past gate"))
+        self.assertIn(order["id"], payload)
+
+    def test_at_most_ten_lessons_ride_along(self):
+        for n in range(12):
+            lessons.approve(self.path, REPO, f"fp-{n}", f"lesson {n}", "amteshwar",
+                            lambda r, n=n: [{"fingerprint": f"fp-{n}", "workItems": 2}])
+        _, order, _ = self.dispatch()
+        self.assertEqual(len(order["lessons"]), 10)
+
+    def test_a_hand_edited_long_lesson_is_cut_to_the_schemas_300_characters(self):
+        Path(self.path).write_text(json.dumps({"version": 1, "lessons": [
+            {"repo": REPO, "fingerprint": FP, "text": "x" * 400, "approved_by": "amteshwar",
+             "approved_at": "2026-09-27T00:00:00Z"}]}))
+        _, order, _ = self.dispatch()
+        self.assertEqual(order["lessons"], [{"fingerprint": FP, "text": "x" * 300}])
+
+    def test_only_this_repos_lessons_ride_along(self):
+        lessons.approve(self.path, "other/r", "fp-other", "other repo's lesson", "amteshwar",
+                        lambda r: [{"fingerprint": "fp-other", "workItems": 2}])
+        _, order, _ = self.dispatch()
+        self.assertEqual(order["lessons"], [])
+
+    def test_a_broken_lessons_file_does_not_stop_the_line(self):
+        Path(self.path).write_text("{not json")
+        wi, order, _ = self.dispatch()
+        self.assertEqual(order["lessons"], [])
+        self.assertIn("lessons_invalid", [h["action"] for h in self.foreman.store.history(f"{REPO}#7")])
 
 
 if __name__ == "__main__":
