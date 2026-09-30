@@ -228,8 +228,9 @@ Set it up once:
 ```bash
 hermes profile install ~/path/to/software-factory/tenant/hermes
 cp ~/.hermes/profiles/day-desk/.env.EXAMPLE ~/.hermes/profiles/day-desk/.env
-# fill in FACTORY_MCP_TOKEN (from ~/.config/factory-mcp/secrets), TELEGRAM_BOT_TOKEN and
-# TELEGRAM_ALLOWED_USERS (your Telegram user id)
+# fill in FACTORY_MCP_TOKEN (from ~/.config/factory-mcp/secrets), TELEGRAM_BOT_TOKEN,
+# TELEGRAM_ALLOWED_USERS (your Telegram user id) and DAYDESK_GITHUB_TOKEN (below)
+docker build -t day-desk-sandbox:1 ~/path/to/software-factory/tenant/hermes/sandbox
 hermes -p day-desk model             # choose your ChatGPT or Codex subscription
 hermes -p day-desk gateway setup     # Telegram
 hermes -p day-desk gateway install   # start it at login
@@ -243,11 +244,56 @@ hermes -p day-desk cron create "every 5m" --no-agent --script factory-watch.sh -
 `factory-watch` sends one message for each WorkItem that newly waits on you, and an error message
 when factory-mcp does not answer. Reply to the message, and Day Desk answers the escalation with
 you. After `factory update` deploys a new version, run `hermes profile update day-desk` so Day
-Desk gets the new skill.
+Desk gets the new skill. `factory update` does not rebuild Day Desk's sandbox image: when the
+deploy changes `tenant/hermes/sandbox/Dockerfile`, run the `docker build` command above again and
+`hermes -p day-desk gateway restart`.
 
-Day Desk has no shell, file tools, browser or subagents (`agent.disabled_toolsets` in
-`tenant/hermes/config.yaml`): all it can change, it changes through a factory tool you approve.
-It cannot tick or take in a WorkItem itself (factory-mcp does), merge, label or push.
+Day Desk has no file tools, browser or subagents (`agent.disabled_toolsets` in
+`tenant/hermes/config.yaml`). It cannot tick or take in a WorkItem itself (factory-mcp does),
+merge or label, and it never pushes except the first commit of an empty repo (ADR-0021; the
+skill has the full list). Its shell runs in a Docker container from `tenant/hermes/sandbox/`, with
+git, gh and python3. It uses the shell to make the first commit of an empty repo and to clone and
+read a repo. Hermes does not ask you before a shell command, so Day Desk shows you each command
+that changes GitHub and waits for your yes in chat. The container has no host directory it can
+write, and one secret, `DAYDESK_GITHUB_TOKEN`. From the host, Hermes mounts only Day Desk's
+skills and its caches of files sent in chat (images, documents, audio, web pages), read-only
+under `/root/.hermes`. `~/.hermes/profiles/day-desk/.env`, `~/.ssh`, `~/.config` and your other
+files are not mounted. Treat anything you send Day Desk in chat as visible to the shell.
+
+### The shell's GitHub token
+
+Make a fine-grained token at GitHub → Settings → Developer settings → Fine-grained tokens:
+
+- Resource owner: your account. Repository access: Only select repositories, the ones the
+  factory works on. Add each new repo to the token when you create it. Expiration: 90 days, then
+  make a new one.
+- Repository permissions: Contents read and write, and Pull requests read and write. Metadata
+  read is added for you. Give nothing else. Without Workflows, GitHub refuses a push that changes
+  `.github/workflows/`.
+- Without Administration, the shell cannot create a repo. You create the empty repo on GitHub,
+  and factory_bootstrap_repo does the rest, including its first commit. If you add
+  Administration, the token can create repos, but it can also delete a repo and change branch
+  protection. Day Desk's skill asks you to create each repo either way.
+
+Open `~/.hermes/profiles/day-desk/.env` in an editor and add the line
+`DAYDESK_GITHUB_TOKEN=<the token>`. Do not type the token on a command line. Every repo the
+factory works on needs branch protection on its default branch (ADR-0008): a token that can push
+could otherwise push there.
+
+To turn the shell on in a profile installed before ADR-0021, build the image as above, add the
+token, then run the following. `hermes profile update` keeps your config.yaml, so these commands
+make the same changes as `tenant/hermes/config.yaml`:
+
+```bash
+hermes profile update day-desk
+hermes -p day-desk config set agent.disabled_toolsets '[code_execution, file, browser, computer_use, delegation]'
+hermes -p day-desk config set terminal.backend docker
+hermes -p day-desk config set terminal.docker_image day-desk-sandbox:1
+hermes -p day-desk config set terminal.container_persistent false
+hermes -p day-desk config set terminal.cwd /day-desk
+hermes -p day-desk config set terminal.env_passthrough '[DAYDESK_GITHUB_TOKEN]'
+hermes -p day-desk gateway restart
+```
 
 ### Check that it works
 
@@ -258,9 +304,10 @@ After setting it up, check in Telegram that Day Desk:
 3. enables a ready repo only after you approve the `factory_add_repo` call;
 4. starts an issue only after you approve `factory_approve_issue`, and a worker starts on it
    within a minute;
-5. cannot run `ls` or read `~/.hermes/profiles/day-desk/.env` when asked to: it has no tool
-   for either. If it can, the gateway ignored `disabled_toolsets`; stop it (`hermes -p day-desk
-   gateway stop`) until that is fixed;
+5. runs `whoami; pwd; env | cut -d= -f1` in the sandbox and gets `daydesk`, `/day-desk` and
+   no `FACTORY_MCP_TOKEN`, and cannot read `~/.hermes/profiles/day-desk/.env`, `~/.ssh` or
+   `~/.config/gh` when asked to. If it can, the gateway runs the shell on the host; stop it
+   (`hermes -p day-desk gateway stop`) until that is fixed;
 6. relays a factory-watch message, and your reply to it resolves the WorkItem once you approve;
 7. turns a goal of two issues into one `factory_start_plan` call that you approve once, and then
    answers "what needs me?" with the second issue waiting for the first.

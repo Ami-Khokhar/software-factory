@@ -24,10 +24,20 @@ mcp_servers:
         - factory_retire_lesson
 
 agent:
-  # Day Desk works only through the factory tools. A shell, file tools or a subagent would run as
-  # the owner: they could read the factory's token from the profile's .env and call any tool with
-  # no approval, or open issues and push. factory-watch runs as a no-agent script and needs none.
-  disabled_toolsets: [terminal, code_execution, file, browser, computer_use, delegation]
+  # The shell runs in the Docker sandbox below (ADR-0021). These stay off because they run on the
+  # host as the owner, where they could read the profile's .env and call factory tools with no
+  # approval: code_execution's script calls tools back on the host, and file, browser,
+  # computer_use and delegation add nothing the shell needs. factory-watch runs as a no-agent script.
+  disabled_toolsets: [code_execution, file, browser, computer_use, delegation]
+
+terminal:
+  # A container per session, from tenant/hermes/sandbox. It gets no host directory it can write and
+  # one secret: the GitHub token, which the image's gh wrapper hands to gh as GH_TOKEN.
+  backend: docker
+  docker_image: "day-desk-sandbox:1"
+  container_persistent: false  # no bind mount from the host; the container goes with the session
+  cwd: /day-desk  # the image user's home, which it can write; Hermes's tmpfs over /root is root's
+  env_passthrough: [DAYDESK_GITHUB_TOKEN]
 
 approvals:
   timeout: 900  # no answer in 15 minutes is a no

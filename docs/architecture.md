@@ -7,6 +7,8 @@ are in [decisions.md](decisions.md).
 ## Components
 
 ```
+                      Day Desk's shell (Docker sandbox) ──► GitHub: git, gh, one token
+                          ▲
 Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory CLI (scripts/factory)
                           │ MCP tools; each write needs the owner's yes       │ MCP tools
                           ▼                                                   ▼
@@ -37,8 +39,9 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 - **pr-gatekeeper** reviews every PR and merges it on MERGE. factory-mcp has no merge tool
   (ADR-0004).
 - **Day Desk** is the owner's front door in Telegram (ADR-0013). The `factory` CLI calls the same
-  tools. For a new repo, one owner-approved tool prepares a setup PR with only missing controls;
-  the owner merges it before normal worker passes start (ADR-0019). One owner approval of
+  tools. Day Desk's shell runs in a Docker sandbox whose one secret is a GitHub token (ADR-0021).
+  For a new repo, one owner-approved tool prepares a setup PR with only missing controls; the
+  owner merges it before normal worker passes start (ADR-0019). One owner approval of
   `factory_start_plan` opens all the issues of a plan, and they run in order (ADR-0024).
 
 ## What crosses each boundary
@@ -51,6 +54,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | factory-mcp → GitHub | The `factory/<issue>` branch, a PR in the gate's body format, labels, comments | `patches.py`, `github.py`, `documents.pr_body` |
 | Keychain → factory-mcp → GitHub | A gate secret's value: `security`'s stdout, then `gh secret set`'s stdin, with the factory's token; never logged or returned | `gate_secrets.py` |
 | Day Desk, CLI → factory-mcp | MCP tool calls, each one marked read or write | `tools.py` |
+| Day Desk's shell → GitHub | git and gh traffic from the Docker sandbox, with a fine-grained token for the factory's repos and no Administration; no other secret or host file | `tenant/hermes/config.yaml`, `tenant/hermes/sandbox/Dockerfile` |
 
 ## Code map
 
@@ -174,6 +178,7 @@ owner's decision (ADR-0006).
 | A truncated output yields no Result: the runner's comes last | `Foreman.poll` | `test_hardening`: `test_a_result_line_left_in_a_truncated_output_is_not_read` |
 | The protected-path check sees the whole patch, whatever its base is called | `patches.apply` | `test_workers`: `test_a_protected_path_is_refused_whatever_name_the_base_has` |
 | Every write tool waits for the owner in Hermes | `tools.py`, `tenant/hermes/config.yaml` | `test_mcp_server`: `test_every_tool_declares_whether_it_writes`; `test_hermes`: `test_day_desk_sees_the_tools_it_needs_and_asks_before_each_write` |
+| Day Desk's shell is a Docker sandbox with one secret, and the host-side toolsets stay off (ADR-0021) | `tenant/hermes/config.yaml`, `tenant/hermes/sandbox/Dockerfile` | `test_hermes`: `test_only_the_shell_is_on_and_the_host_side_toolsets_stay_off`, `test_the_shell_runs_in_docker_with_the_github_token_as_its_only_secret`, `test_the_sandbox_hands_gh_the_token_the_config_passes_in` |
 
 ## Glossary
 
