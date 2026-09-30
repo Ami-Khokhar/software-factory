@@ -73,7 +73,10 @@ def build(store, foreman):
              "Prepare an owner-reviewed setup PR containing only missing gate files and the "
              "factory-standard block. Never merges or enables the repo. Requires a verify command "
              "when the gate config is missing. An empty repo first gets one commit with only a "
-             "README.md on its default branch; the result names it as initialCommit.",
+             "README.md on its default branch; the result names it as initialCommit. Also sets the "
+             "repo's missing gate Actions secrets from the owner's Keychain and never overwrites "
+             "one; `secrets` gives each name and status (set, already set, missing, failed), "
+             "never a value.",
              {"type": "object", "required": ["repo", "by"], "additionalProperties": False,
               "properties": {"repo": {"type": "string", "description": "owner/repo"},
                              "verify": {"type": "string", "description": "repo test command, if gate config is missing"},

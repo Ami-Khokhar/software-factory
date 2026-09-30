@@ -27,8 +27,11 @@ what factory_status returns.
    test/verify command and pass it as `verify`. The tool opens a setup PR containing only the
    missing controls. Tell the owner to review and merge that PR; do not start work before it is
    merged. If the result has `initialCommit`, the repo was empty: tell the owner that the tool
-   also pushed that one commit, which holds only a `README.md`, to the default branch. If the
-   tool refuses, report its reason word for word.
+   also pushed that one commit, which holds only a `README.md`, to the default branch. The tool
+   also sets the repo's gate secrets from the owner's Keychain: give each entry in `secrets` with
+   its name and status word for word. A `missing: ...` status holds the command the owner runs
+   once; after that, call factory_bootstrap_repo again. If the tool refuses, report its reason
+   word for word.
 3. Call factory_repo_check again after the owner merges the setup PR. If `ready` is false, give
    each failed check's detail and fix, and stop.
 4. If `enabled` is true, say so and stop. Otherwise call factory_add_repo with the repo and the

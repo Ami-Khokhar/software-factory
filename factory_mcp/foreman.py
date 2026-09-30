@@ -5,7 +5,7 @@ import os
 import time
 import uuid
 
-from . import documents, lessons, patches, repos, routing, workitem
+from . import documents, gate_secrets, lessons, patches, repos, routing, workitem
 from .github import GitHubError
 from .mcp import ToolError
 from .relay import RelayError
@@ -116,12 +116,13 @@ class Foreman:
         except ValueError as exc:
             raise ToolError(str(exc)) from None
         repo, files = plan["repo"], plan["files"]
+        secrets = gate_secrets.ensure(repo, self.config.github_token)
+        self.store.log("bootstrap_secrets", {"repo": repo, "by": by, "secrets": secrets})  # names, statuses
         if not files:
-            return {"repo": repo, "ready": True, "needsHumanMerge": False, "prNumber": None}
+            return {"repo": repo, "ready": True, "needsHumanMerge": False, "prNumber": None, "secrets": secrets}
         branch = "factory-bootstrap/" + plan["fingerprint"][:16]
         response = {"repo": repo, "ready": False, "needsHumanMerge": True,
-                    "changedPaths": sorted(files), "requiredSecrets": [
-                        "OPENCODE_GO_API_KEY", "GATEKEEPER_READ_TOKEN"]}
+                    "changedPaths": sorted(files), "secrets": secrets}
         existing = next((pr for pr in self.github.pulls_for_branch(repo, branch)
                          if pr["state"] == "open"), None)
         if existing:
@@ -160,8 +161,9 @@ class Foreman:
             "## What changed", "", *(f"- `{path}`: install the missing factory control" for path in paths), "",
             "## Proof of work", "", "```text",
             f"$ git diff --name-only --no-renames -z {plan['base_sha']} HEAD", *paths, "```", "",
-            "After the owner merges: confirm the repo has OPENCODE_GO_API_KEY and GATEKEEPER_READ_TOKEN "
-            "Actions secrets, then ask Day Desk to check and enable the repo.", "",
+            "The factory set the gate's Actions secrets from the owner's Keychain:",
+            *(f"- `{item['name']}`: {item['status']}" for item in secrets), "",
+            "After the owner merges: ask Day Desk to check and enable the repo.", "",
         ])
         try:
             pr = self.github.create_pull(repo, branch, plan["default_branch"],

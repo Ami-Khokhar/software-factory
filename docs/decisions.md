@@ -325,7 +325,7 @@ result record it. That push is not forced: if the repo got a commit since the ch
 nothing more is pushed. The controls never go straight to the default branch.
 
 **Consequence.** The owner no longer authors boilerplate, while the first change to a repo's
-authority remains a human merge. Gate Actions secrets still need to be configured for that repo.
+authority remains a human merge. ADR-0022 sets the gate's Actions secrets.
 
 ---
 
@@ -349,3 +349,29 @@ lesson, and a fingerprint that is not a candidate is refused.
 and every lesson has a named approver. A finding the gate saw on one WorkItem never becomes a
 lesson. When WorkOrders carry lessons, they stay data under the worker rules, like
 `findingsToAddress`.
+
+---
+
+## ADR-0022 — Bootstrap sets the gate's Actions secrets from the owner's Keychain
+
+**Context.** A repo's gate needs the Actions secrets `OPENCODE_GO_API_KEY` and
+`GATEKEEPER_READ_TOKEN`. After ADR-0019 the owner still added them by hand in each repo. The gate
+workflow calls the public wrapper Ami-Khokhar/pr-gatekeeper-workflow, but that wrapper checks out
+the private Ami-Khokhar/pr-gatekeeper with `GATEKEEPER_READ_TOKEN`, else the repo's own token,
+which cannot read another private repo. So the gate needs both while pr-gatekeeper is private. A
+secret value must never reach a model, a log or a PR.
+
+**Decision.** The owner stores each secret once in the login Keychain as a generic password with
+service `software-factory/<NAME>`. On each `factory_bootstrap_repo` call, factory-mcp, not a model,
+lists the repo's secret names with `gh secret list`, leaves alone a secret the repo has, reads a
+missing one with `security find-generic-password -w` and gives it to `gh secret set` on stdin,
+never in argv, with the factory's token as `GH_TOKEN`. gh does GitHub's libsodium encryption, so
+factory-mcp stays standard library only. It lists the names again to confirm. The result, the audit
+log and the setup PR body name each secret with a status: `set`, `already set`, `missing: ...` or
+`failed: <command> exited <code>`. Nothing reads stderr, where a failing command may echo a value.
+A missing or failed secret does not stop the setup PR: the owner adds it and calls the tool again.
+
+**Consequence.** Repo setup needs no manual secrets, only one `security add-generic-password` per
+secret on the owner's Mac. factory-mcp needs `gh` on its PATH and runs in the owner's login session
+(the launchd agent does) to read the Keychain. This supersedes the last sentence of ADR-0019's
+consequence.
