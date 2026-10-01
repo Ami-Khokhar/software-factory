@@ -179,7 +179,9 @@ Actions secrets (a fine-grained token needs the "Secrets" permission, a classic 
 scope). When `gh secret list` fails, its status ends with gh's first error line, tokens removed; a
 403 or "Resource not accessible" there means `FACTORY_GITHUB_TOKEN` lacks that permission.
 
-After the merge you need not enable the repo by hand: the first issue a trusted author marks
+After the merge you need not enable the repo by hand: the first issue a trusted author
+(`FACTORY_TRUSTED_AUTHORS`, or `FACTORY_OWNER` when that is empty; with neither, the factory searches
+for no one and logs `discover_skipped`) marks
 `factory:ready` there enables it (ADR-0027). So does the first plan, proposal or approval Day Desk
 makes there, which is the easy way into a repo that has no factory labels yet; `factory new` needs
 the label to exist. The factory checks the repo first and writes it to `repos.json` with who

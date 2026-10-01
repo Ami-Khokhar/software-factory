@@ -1,5 +1,6 @@
 """Any repo (ADR-0027): an issue a trusted author marks factory:ready enables its repo when the repo
 passes the check, and the author hears why when it does not."""
+import dataclasses
 import subprocess
 import tempfile
 import unittest
@@ -7,6 +8,7 @@ from pathlib import Path
 
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
+from factory_mcp.github import GitHubError
 from factory_mcp.mcp import ToolError
 from factory_mcp.repos import load
 from factory_mcp.store import Store
@@ -34,6 +36,10 @@ class AnyRepoTest(unittest.TestCase):
     def comments_on(self, repo, number):
         return [body for r, n, body in self.github.posted if (r, n) == (repo, number)]
 
+    def actions(self, action):
+        rows = self.foreman.store._db.execute("SELECT detail FROM audit WHERE action = ?", (action,)).fetchall()
+        return [row[0] for row in rows]
+
     def test_an_issue_in_an_unlisted_repo_that_passes_the_check_is_taken_in(self):
         self.github.add_issue(NEW, 3, author=OWNER)
         self.assertEqual(self.foreman.rebuild(), [f"{NEW}#3"])
@@ -57,6 +63,53 @@ class AnyRepoTest(unittest.TestCase):
         self.assertEqual(self.foreman.rebuild(), [])
         self.assertEqual((self.github.posted, self.manifest.exists()), ([], False))
         self.assertNotIn(NEW, self.foreman.config.repos)
+
+    def test_a_failing_search_is_logged_once_and_the_listed_repos_still_come_in(self):
+        def fail(author, label):
+            raise GitHubError(502, "Bad Gateway")
+        self.github.labelled_issues_by = fail
+        self.foreman.config = dataclasses.replace(self.foreman.config, repos=frozenset({"o/listed"}))
+        self.github.add_issue("o/listed", 5, author=OWNER)
+        self.assertEqual((self.foreman.rebuild(), self.foreman.rebuild()), (["o/listed#5"], []))
+        self.assertEqual(len(self.actions("search_failed")), 2)  # once for each trusted author, not each tick
+
+    def test_a_refusal_that_cannot_be_commented_is_still_logged_once(self):
+        def fail(repo, number, body):
+            raise GitHubError(403, "Resource not accessible")
+        self.github.comment = fail
+        self.github.add_issue(BARE, 3, author=OWNER)
+        self.foreman.rebuild()
+        self.foreman.rebuild()
+        logged = self.actions("repo_not_ready")
+        self.assertEqual(len(logged), 1, logged)
+        self.assertIn('"commentError": "GitHub 403: Resource not accessible"', logged[0])
+
+    def test_a_failure_of_the_factory_itself_is_logged_once_and_never_commented(self):
+        def unavailable(repo):
+            raise GitHubError(500, "Server Error")
+        cases = {"no repos.json": lambda: setattr(self.foreman, "config",
+                                                  dataclasses.replace(self.foreman.config, repos_file="")),
+                 "GitHub fails": lambda: setattr(self.github, "repository", unavailable)}
+        for name, break_it in cases.items():
+            with self.subTest(name):
+                self.setUp()
+                break_it()
+                self.github.add_issue(NEW, 3, author=OWNER)
+                self.assertEqual((self.foreman.rebuild(), self.foreman.rebuild()), ([], []))
+                self.assertEqual((self.github.posted, len(self.actions("discover_failed"))), ([], 1))
+
+    def test_with_no_author_to_search_the_factory_says_so_once(self):
+        self.foreman.config = dataclasses.replace(self.foreman.config, trusted_authors=frozenset(), owner="")
+        self.github.add_issue(NEW, 3, author=OWNER)
+        self.foreman.rebuild()
+        self.foreman.rebuild()
+        self.assertEqual(len(self.actions("discover_skipped")), 1)
+        self.assertIn("FACTORY_TRUSTED_AUTHORS or FACTORY_OWNER", self.actions("discover_skipped")[0])
+
+    def test_a_refused_plan_enables_nothing(self):
+        with self.assertRaisesRegex(ToolError, "a plan has 1 to 10 issues"):
+            self.foreman.start_plan(NEW, [], OWNER)
+        self.assertEqual((self.manifest.exists(), self.github.labels.get(NEW)), (False, None))
 
     def test_approving_an_issue_in_an_unlisted_repo_that_passes_the_check_enables_it(self):
         self.github.add_issue(NEW, 4, labels=("factory:proposed",), author=OWNER)
