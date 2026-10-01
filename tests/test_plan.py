@@ -54,7 +54,7 @@ class StartPlanTest(unittest.TestCase):
             ("no title", REPO, [{"title": " ", "body": ISSUE_BODY}], "issue 1 of the plan needs a title and a body"),
             ("11 issues", REPO, plan(*(f"T{n}" for n in range(11))), "a plan has 1 to 10 issues"),
             ("no issues", REPO, [], "a plan has 1 to 10 issues"),
-            ("a repo off the allowlist", "o/other", plan("One"), "o/other is not in FACTORY_REPOS"),
+            ("an unlisted repo with no repos.json to enable it in", "o/other", plan("One"), "FACTORY_REPOS_FILE is not set"),
         ]
         for case, repo, issues, reason in cases:
             with self.subTest(case), self.assertRaisesRegex(ToolError, reason):

@@ -88,7 +88,10 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 
 A tick comes from the background loop or from `factory_tick`.
 
-1. **Rebuild.** Every open `factory:ready` issue in an allowlisted repo that the store does not
+1. **Rebuild.** First, for each trusted author, one GitHub search for their open `factory:ready`
+   issues in any repo; a repo not listed yet is enabled when it passes the repo check, and an issue
+   in one that fails gets one comment with the fixes (ADR-0027). Then every open `factory:ready`
+   issue in an allowlisted repo that the store does not
    know is taken in, so a lost store fills again from GitHub.
 2. **Each live WorkItem** whose repo is allowlisted (#38): take its lease or skip it; observe
    GitHub (the issue, the PR on `factory/<issue>`, the gate's verdicts and check run); reconcile the

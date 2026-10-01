@@ -65,6 +65,10 @@ class FakeGitHub:
         return [i for (r, _), i in sorted(self.issues.items()) if r == repo and i["state"] == "open"
                 and label in {n["name"] for n in i["labels"]}]
 
+    def labelled_issues_by(self, author, label):
+        return [dict(i, repo=r) for (r, _), i in sorted(self.issues.items()) if i["state"] == "open"
+                and i["user"]["login"].lower() == author.lower() and label in {n["name"] for n in i["labels"]}]
+
     def pulls_for_branch(self, repo, branch):
         return [p for p in self.pulls if p["repo"] == repo and p["head"]["ref"] == branch]
 

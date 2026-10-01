@@ -20,6 +20,10 @@ BOOTSTRAP_PREFIX = "factory-bootstrap/"
 MAX_PLAN_ISSUES = 10  # one approval covers this many issues at most (ADR-0024)
 
 
+class RepoNotReady(ToolError):
+    """The repo failed the repo check: its author can fix that, so discovery tells them (ADR-0027)."""
+
+
 class Foreman:
     def __init__(self, store, github, config, relay=None):
         self.store = store
@@ -41,6 +45,12 @@ class Foreman:
             return self.store.get(wi["id"])
         self.store.log("intake", {"state": wi["state"]}, wi["id"])
         return wi
+
+    def _enabled(self, repo, by):
+        """The allowlist's spelling of `repo`. A repo that is not listed yet is enabled first when it
+        passes the repo check, and refused with the failed checks when it does not (ADR-0027)."""
+        listed = self.config.listed(repo)
+        return listed if listed is not None else self.add_repo(repo, by)["repo"]
 
     def _allowlisted(self, repo):
         """The allowlist's spelling of `repo`, so one repo has one WorkItem id."""
@@ -70,7 +80,7 @@ class Foreman:
 
     def approve_issue(self, repo, number, by):
         """A person's go on an issue: label it factory:ready and take it in. Idempotent."""
-        repo = self._allowlisted(repo)
+        repo = self._enabled(repo, by)
         existing = self.store.get(workitem.workitem_id(repo, number))
         if existing and existing["state"] in workitem.TERMINAL:
             raise ToolError(f"{existing['id']} is {existing['state']}; open a new issue for more work")
@@ -92,7 +102,7 @@ class Foreman:
             raise ToolError("FACTORY_CHECKOUT_ROOT is not set, so there is no place for the worker checkout")
         failed = [c for c in repos.check(self.github, repo) if not c["ok"]]
         if failed:
-            raise ToolError(f"{repo} is not ready: " + " ".join(f"{c['detail']}. {c['fix']}" for c in failed))
+            raise RepoNotReady(f"{repo} is not ready: " + " ".join(f"{c['detail']}. {c['fix']}" for c in failed))
         # One spelling per repo: the allowlist's if it lists the repo, else GitHub's
         listed = self.config.listed(repo)
         repo = listed or self.github.repository(repo)["full_name"]
@@ -232,7 +242,9 @@ class Foreman:
         return secrets
 
     def rebuild(self):
-        """Intake every open `factory:ready` issue the store does not know (ADR-0009: GitHub is the truth)."""
+        """Intake every open `factory:ready` issue the store does not know (ADR-0009: GitHub is the truth),
+        in the listed repos and in any repo where a trusted author marked one (ADR-0027)."""
+        self._discover()
         found = []
         for repo in sorted(self.config.repos):
             for issue in self.github.labelled_issues(repo, workitem.READY):
@@ -248,6 +260,51 @@ class Foreman:
                             self.store.log("rebuild_skipped", {"reason": str(exc)},
                                            workitem.workitem_id(repo, issue["number"]))
         return found
+
+    def _discover(self):
+        """Enable each repo, not listed yet, where a trusted author has an open factory:ready issue.
+        A repo that fails the check gets one comment on the issue, so the author learns why."""
+        authors = self.config.trusted_authors or ({self.config.owner} if self.config.owner else set())
+        if not authors and "no-authors" not in self._skipped:  # once per process, not once a minute
+            self._skipped.add("no-authors")
+            self.store.log("discover_skipped", {"reason": "set FACTORY_TRUSTED_AUTHORS or FACTORY_OWNER, "
+                                                "so the factory knows whose factory:ready issues to search for"})
+        for author in sorted(authors):
+            try:
+                issues = self.github.labelled_issues_by(author, workitem.READY)
+            except GitHubError as exc:
+                key = ("search", author, str(exc))
+                if key not in self._skipped:  # once per process, not once a minute
+                    self._skipped.add(key)
+                    self.store.log("search_failed", {"author": author, "error": str(exc)})
+                continue
+            for issue in issues:
+                repo, number = issue["repo"], issue["number"]
+                if self.config.listed(repo) is not None:
+                    continue
+                try:
+                    self._enabled(repo, f"{author}, who marked {repo}#{number} factory:ready")
+                except RepoNotReady as exc:
+                    self._refuse_repo(repo, number, str(exc))
+                except (ToolError, GitHubError) as exc:  # the factory's own failure: the log, not the issue
+                    key = ("discover", repo, str(exc))
+                    if key not in self._skipped:
+                        self._skipped.add(key)
+                        self.store.log("discover_failed", {"repo": repo, "error": str(exc)},
+                                       workitem.workitem_id(repo, number))
+
+    def _refuse_repo(self, repo, number, reason):
+        wid = workitem.workitem_id(repo, number)
+        if any(e["action"] == "repo_not_ready" and e["detail"].get("reason") == reason
+               for e in self.store.history(wid)):
+            return
+        detail = {"reason": reason}  # the reason alone, so the next rebuild knows it was already said
+        try:
+            self.github.comment(repo, number, f"software-factory cannot take this issue yet: {reason}\n\n"
+                                "When the repo passes the check, the factory takes the issue on its own.")
+        except GitHubError as exc:  # the token may not reach the repo: say so in the log, keep ticking
+            detail["commentError"] = str(exc)
+        self.store.log("repo_not_ready", detail, wid)
 
     def tick(self, workitem_id=None):
         """Reconcile one WorkItem, or rebuild from GitHub and reconcile every live one. A WorkItem
@@ -565,7 +622,7 @@ class Foreman:
 
     def propose_issue(self, repo, title, body):
         """Planner: open an issue labelled factory:proposed. A person adds factory:ready."""
-        repo = self._allowlisted(repo)
+        repo = self._enabled(repo, "factory_propose_issue")
         criteria, missing = workitem.parse_acceptance(body)
         if missing or not criteria:
             raise ToolError("The body needs an '## Acceptance' list of "
@@ -577,7 +634,6 @@ class Foreman:
     def start_plan(self, repo, issues, by):
         """The owner's one approval of a whole plan (ADR-0024): check every issue, then open them in
         order, each labelled factory:ready and depending on the one before it. A failed check opens none."""
-        repo = self._allowlisted(repo)
         if not isinstance(by, str) or not by.strip():
             raise ToolError("a plan needs the name of the person who approved it")
         if not isinstance(issues, list) or not 1 <= len(issues) <= MAX_PLAN_ISSUES:
@@ -586,6 +642,7 @@ class Foreman:
             problem = self._plan_problem(item)
             if problem:
                 raise ToolError(f"issue {position} of the plan {problem}. No issue was opened")
+        repo = self._enabled(repo, by)  # after the plan's checks: a refused plan enables nothing
         opened, taken = [], []
         for item in issues:
             body = f"Depends on #{opened[-1]['issue']}\n\n{item['body']}" if opened else item["body"]

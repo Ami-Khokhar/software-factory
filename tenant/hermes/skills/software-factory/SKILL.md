@@ -22,6 +22,9 @@ one with `waitingOn`, the issue it waits for. Report only what factory_status re
 
 ## Enable a repo
 
+A repo that passes factory_repo_check is enabled on first use: the first approval, proposal or plan
+there enables it. The steps below are for a repo that does not pass yet.
+
 1. Call factory_repo_check with the repo as owner/repo.
    If a failed check's fix says the repo has refs but no commit on its default branch, give the
    owner that fix word for word and stop: the owner pushes a first commit to that branch by hand.
@@ -79,7 +82,7 @@ instead. It opens the issue labelled `factory:proposed`; nothing starts until "S
 Call factory_approve_issue with the repo, the issue number, and the owner's name as `by`. It
 labels the issue `factory:ready`, and the factory starts. If it refuses, give the reason word for
 word. The usual causes are a missing `## Acceptance` list, an author the factory does not trust,
-and a repo that is not enabled.
+and a repo that fails factory_repo_check.
 
 ## Answer an escalation
 
