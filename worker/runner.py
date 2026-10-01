@@ -53,7 +53,6 @@ def now():
 # A fetch starts `git maintenance run --auto`, which detaches by default and can delete a pack
 # while the clone that follows copies it (#94). In the foreground, it is done before the clone.
 FOREGROUND_MAINTENANCE = (("maintenance.autoDetach", "false"), ("gc.autoDetach", "false"))
-FETCH_SECONDS = 900  # a fetch now includes its auto repack, which takes longer on a large checkout
 
 
 def git_env():
@@ -99,10 +98,10 @@ def origin_repo(cwd):
 def prepare(cwd, order, branch, work):
     """Fetch in the persistent checkout, then make `work` a fresh copy on `branch` at the commit this
     WorkOrder builds on. Returns that commit. The copy has no remote, so a push has nowhere to go."""
-    git(cwd, "fetch", "-q", "--prune", "origin", timeout=FETCH_SECONDS)
+    git(cwd, "fetch", "-q", "--prune", "origin")
     if order["kind"] == "fix":
         base = order.get("headSha")
-        git(cwd, "fetch", "-q", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}", timeout=FETCH_SECONDS)
+        git(cwd, "fetch", "-q", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}")
     else:
         base = order.get("baseSha") or git(cwd, "rev-parse", "origin/HEAD")
     if not base:
