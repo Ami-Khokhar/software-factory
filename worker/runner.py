@@ -3,7 +3,11 @@
 
 agent-relay starts this with the agent's args and the task input as the last argument:
 
-    runner.py [--image IMAGE] -- <harness argv...> <task input>
+    runner.py [--image IMAGE] [--credential HOST_FILE:CONTAINER_DIR ...] [--env KEY=VALUE ...]
+              -- <harness argv...> <task input>
+
+Any harness can run here: the relay agent names its command, the credential files it logs in with
+and the env it needs, and the runner knows none of them by name (#98).
 
 The relay task's cwd is the persistent checkout of the WorkOrder's repo. It is never mounted into a
 container: each pass gets a fresh copy of it, and only the copy is mounted. The harness runs in a
@@ -35,9 +39,6 @@ git merge-base --is-ancestor "$FACTORY_BASE" HEAD || exit 3
 git diff --binary "$FACTORY_BASE" HEAD
 """
 MAX_PATCH_BYTES = 2_000_000
-FREEBUFF_CREDENTIALS = os.path.expanduser("~/.config/manicode/credentials.json")
-FREEBUFF_SETTINGS = {"freebuffModel": "z-ai/glm-5.3-flash"}
-CONTAINER_CONFIG_DIR = "/home/node/.config/manicode"
 CONTAINER_HOME = "/tmp/factory-home"
 
 
@@ -49,9 +50,16 @@ def now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# A fetch starts `git maintenance run --auto`, which detaches by default and can delete a pack
+# while the clone that follows copies it (#94). In the foreground, it is done before the clone.
+FOREGROUND_MAINTENANCE = {"GIT_CONFIG_COUNT": "2",
+                          "GIT_CONFIG_KEY_0": "maintenance.autoDetach", "GIT_CONFIG_VALUE_0": "false",
+                          "GIT_CONFIG_KEY_1": "gc.autoDetach", "GIT_CONFIG_VALUE_1": "false"}
+
+
 def git(cwd, *args, timeout=300):
     done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout,
-                          env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+                          env=dict(os.environ, GIT_TERMINAL_PROMPT="0", **FOREGROUND_MAINTENANCE))
     if done.returncode != 0:
         raise WorkerError(f"git {args[0]} failed: {(done.stderr or done.stdout).strip()[-300:]}")
     return done.stdout.strip()
@@ -135,8 +143,10 @@ class Sandbox:
     """`docker run` for one WorkOrder. Killed on SIGTERM, because the relay kills this process on a
     timeout or a cancel and a container outlives the docker CLI that started it."""
 
-    def __init__(self, image, agent_dir, label):
-        self.image, self.agent_dir, self.label = image, agent_dir, label
+    def __init__(self, image, label, credentials=(), harness_env=None):
+        """credentials: (scratch dir, container dir) pairs; they and harness_env reach the harness only."""
+        self.image, self.label = image, label
+        self.credentials, self.harness_env = list(credentials), dict(harness_env or {})
         self.names = []
         signal.signal(signal.SIGTERM, self._stop)
 
@@ -145,8 +155,9 @@ class Sandbox:
             subprocess.Popen(["docker", "kill", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         sys.exit(143)
 
-    def run(self, argv, seconds, mount, with_agent_dir=False, env=None):
-        """Returns (exit code, stdout, stderr). Only `mount` (and Freebuff's config, when asked) is visible."""
+    def run(self, argv, seconds, mount, harness=False, env=None):
+        """Returns (exit code, stdout, stderr). Only `mount` (and, for the harness, its credentials)
+        is visible."""
         name = f"factory-worker-{uuid.uuid4().hex[:12]}"
         self.names.append(name)
         cmd = ["docker", "run", "--rm", "--init", "--name", name, "--label", f"factory-worker={self.label}",
@@ -155,10 +166,12 @@ class Sandbox:
         # All phases modify or inspect the host-owned work copy. The scratch home is mode 1777
         # in the image, so this UID can also create tool state without using the host's HOME.
         cmd += ["--user", f"{os.getuid()}:{os.getgid()}", "-e", f"HOME={CONTAINER_HOME}"]
-        if with_agent_dir:
-            # The 0600 credential copy is in a 0700 scratch dir owned by the host user. Match
-            # that owner so the harness can read it inside the container.
-            cmd += ["-v", f"{self.agent_dir}:{CONTAINER_CONFIG_DIR}"]
+        if harness:
+            # Each 0600 credential copy is in a 0700 scratch dir owned by the host user, which the
+            # container runs as, so the harness can read it and write its own state next to it.
+            for scratch, target in self.credentials:
+                cmd += ["-v", f"{scratch}:{target}"]
+            env = dict(self.harness_env, **(env or {}))
         for key, value in (env or {}).items():
             cmd += ["-e", f"{key}={value}"]
         # `timeout` inside the container ends it on its own if this process is killed first.
@@ -191,9 +204,41 @@ def collect(sandbox, work, base, goal):
     return diff if diff.endswith("\n") else diff + "\n"
 
 
+def credential_copies(specs, scratch):
+    """Copy each HOST_FILE of `HOST_FILE:CONTAINER_DIR` into its own 0700 dir under `scratch`, as
+    0600. Returns (scratch dir, container dir) pairs. A missing file fails before any container."""
+    copies = []
+    for n, spec in enumerate(specs):
+        host, sep, target = spec.rpartition(":")
+        if not sep or not host or not target.startswith("/"):
+            raise WorkerError(f"--credential {spec!r} is not HOST_FILE:/container/dir")
+        host = os.path.expanduser(host)
+        if not os.path.isfile(host):
+            raise WorkerError(f"no model credential at {host}")
+        directory = os.path.join(scratch, f"credential-{n}")
+        os.mkdir(directory, 0o700)
+        copy = os.path.join(directory, os.path.basename(host))
+        shutil.copyfile(host, copy)
+        os.chmod(copy, 0o600)
+        copies.append((directory, target))
+    return copies
+
+
+def env_pairs(specs):
+    pairs = {}
+    for spec in specs:
+        key, sep, value = spec.partition("=")
+        if not sep or not key:
+            raise WorkerError(f"--env {spec!r} is not KEY=VALUE")
+        pairs[key] = value
+    return pairs
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--image", default=IMAGE)
+    parser.add_argument("--credential", action="append", default=[])
+    parser.add_argument("--env", action="append", default=[])
     parser.add_argument("rest", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     rest = args.rest[1:] if args.rest[:1] == ["--"] else args.rest
@@ -204,7 +249,7 @@ def main(argv=None):
     result = {"schemaVersion": "factory.result/v1", "workOrderId": None, "status": "failed",
               "evidence": [], "startedAt": now()}
     scratch = tempfile.mkdtemp(prefix="factory-run-")
-    agent_dir, work = os.path.join(scratch, "agent"), os.path.join(scratch, "work")
+    work = os.path.join(scratch, "work")
     try:
         order = workorder_from(text)
         result["workOrderId"] = order["id"]
@@ -216,22 +261,12 @@ def main(argv=None):
         verify = verify_command(cwd, base)
         if not verify:
             raise WorkerError("the base commit has no .github/pr-gatekeeper.json verify command")
-        if not os.path.isfile(FREEBUFF_CREDENTIALS):
-            raise WorkerError(f"no model credential at {FREEBUFF_CREDENTIALS}")
-        os.mkdir(agent_dir, 0o700)
-        credentials = os.path.join(agent_dir, "credentials.json")
-        settings = os.path.join(agent_dir, "settings.json")
-        shutil.copyfile(FREEBUFF_CREDENTIALS, credentials)
-        os.chmod(credentials, 0o600)
-        with open(settings, "w") as stream:
-            json.dump(FREEBUFF_SETTINGS, stream)
-        os.chmod(settings, 0o600)
+        credentials = credential_copies(args.credential, scratch)
+        harness_env = env_pairs(args.env)
         seconds = max(120, order["budget"]["wallMs"] // 1000 - 60)
         ensure_docker()
-        sandbox = Sandbox(args.image, agent_dir, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]))
-        harness_seconds = max(1, int(seconds * 0.7))
-        code, out, err = sandbox.run([*harness, text], harness_seconds, work, with_agent_dir=True,
-                                     env={"FREEBUFF_TIMEOUT_SECONDS": str(max(1, harness_seconds - 15))})
+        sandbox = Sandbox(args.image, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]), credentials, harness_env)
+        code, out, err = sandbox.run([*harness, text], seconds * 0.7, work, harness=True)
         print((out + err)[-4000:], flush=True)  # for the relay log; the Result line comes last
         if code == 124:
             raise WorkerError("the harness timed out")

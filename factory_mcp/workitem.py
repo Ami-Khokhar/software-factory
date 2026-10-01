@@ -18,6 +18,7 @@ ROUNDS_PER_PROBLEM = 2
 # terminalReason of a PR merged without a MERGE verdict on its head (contracts, obligation 5).
 UNGATED = "merged without a pr-gatekeeper MERGE verdict on"
 DEPENDS_ON = re.compile(r"^\s*depends on #(\d+)\b", re.I | re.M)
+WORKER = re.compile(r"^\s*worker:\s*(\S+)\s*$", re.I | re.M)
 
 
 def workitem_id(repo, number):
@@ -60,6 +61,11 @@ def depends_on(body):
     return [int(number) for number in DEPENDS_ON.findall(body or "")]
 
 
+def workers_named(body):
+    """The relay agents that `Worker: <id>` lines choose, in order (#100)."""
+    return WORKER.findall(body or "")
+
+
 def intake(repo, issue):
     """A new WorkItem (stateVersion 0) for an open issue, or a ValueError saying what is missing."""
     if "pull_request" in issue:
@@ -85,7 +91,7 @@ def observe(github, wi):
     """The GitHub facts a WorkItem is reconciled against."""
     issue = github.issue(wi["repo"], wi["issueNumber"])
     facts = {"issue": {"state": issue["state"], "labels": sorted(labels(issue)),
-                       "dependsOn": depends_on(issue.get("body"))},
+                       "dependsOn": depends_on(issue.get("body")), "workers": workers_named(issue.get("body"))},
              "pr": None, "verdicts": [], "gate": None}
     pulls = github.pulls_for_branch(wi["repo"], wi["branch"])
     if pulls:

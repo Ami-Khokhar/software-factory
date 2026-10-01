@@ -256,6 +256,8 @@ AGENTS.md is a protected path, so a person merges each copy.
 
 ## ADR-0016 — Freebuff is the factory's coding worker
 
+**Superseded by ADR-0026.**
+
 **Context.** The owner wants GLM 5.3 Flash through Freebuff for worker passes. Freebuff 0.0.203
 has a terminal UI but no noninteractive task/result command, while agent-relay needs a bounded
 command and the factory needs a trustworthy Result.
@@ -506,6 +508,30 @@ does not install it.
 
 ---
 
+## ADR-0026 — pi, headless, is the factory's coding worker
+
+**Amended by ADR-0028**: pi is one worker among any the relay registers.
+
+Supersedes ADR-0016.
+
+**Context.** Freebuff has no headless mode, so `worker/freebuff.py` drove its terminal UI and
+accepted a pass only when Freebuff's session log recorded `Main prompt finished`. On agent-relay#43
+it never did, and the pass timed out with no work handed back. A worker that needs its UI scraped
+cannot run day to day without a person. pi runs the same model, GLM 5.3 Flash through OpenCode Go,
+with `pi --print`, which exits when the prompt is done.
+
+**Decision.** The relay agent `pi-glm-factory` runs `worker/runner.py` with `pi --print` and the
+model in its args. The runner copies only `~/.pi/agent/auth.json` into a 0700 scratch directory,
+mounts it in the container, and points `PI_CODING_AGENT_DIR` at it. The image pins pi and sets
+`PYTHONDONTWRITEBYTECODE`, because the runner commits everything the harness leaves, and a test run
+would otherwise leave `__pycache__` in the patch. The Freebuff adapter is deleted.
+
+**Consequence.** A pass ends on the harness's exit code, not on a log line in a UI, and a non-zero
+exit fails it before any patch is collected. The model key is the owner's OpenCode Go key. The
+sandbox, the patch handoff and the base-commit verify are unchanged.
+
+---
+
 ## ADR-0027 — A repo joins the factory on first use
 
 Supersedes ADR-0014 for how a repo joins the allowlist.
@@ -528,3 +554,43 @@ to listed repos.
 without the gate and the factory standard. `repos.json` remains the readable record of every repo
 the factory enabled. A failing search is logged once per process and does not stop the tick. The
 search API's index can lag behind a new label by a minute or so.
+
+---
+
+## ADR-0028 — The relay agent, not the runner, chooses the harness
+
+Amends ADR-0026.
+
+**Context.** agent-relay exists so that any registered agent can take a task, and the owner wants
+the worker tied to no model or harness. After ADR-0026, `worker/runner.py` copied only pi's login
+and the image held only pi, so an agent that ran Codex or OpenCode through the runner could not
+log in.
+
+**Decision.** The runner takes `--credential HOST_FILE:CONTAINER_DIR` and `--env KEY=VALUE` from its
+relay agent's args. Each credential is a 0600 copy in its own 0700 scratch directory, mounted in the
+harness container only; the env reaches only the harness. The runner names no harness. The image
+pins pi, Codex and OpenCode, and creates the scratch HOME's XDG directories writable by any UID, so a
+credential mount there leaves no root-owned parent. An agent may name another image with `--image`.
+
+**Consequence.** Adding a worker is an agent definition in the relay and an entry in
+`FACTORY_WORKERS`, with no factory change, and routing's failover can move between harnesses.
+Nothing is copied back from the sandbox, so a login that rotates its tokens should not be used
+there: Codex needs an API-key login.
+
+---
+
+## ADR-0029 — An issue chooses its worker with `Worker:` lines
+
+**Context.** The owner wants to choose the worker for a piece of work, as agent-relay allows, and
+not only through the order of `FACTORY_WORKERS`. agent-relay also registers agents that run on the
+host with no sandbox, so an issue's text must not be able to reach any relay agent.
+
+**Decision.** A `Worker: <relay agent id>` line in the issue chooses the worker; several lines give
+an order, and routing's failover stays within them. The lines are read from the issue on each
+tick, like `Depends on #n`, so editing the issue changes the choice and the WorkItem schema does not
+change. Only agents in `FACTORY_WORKERS` may be named: a name outside it sends the WorkItem to
+`human_waiting` with the allowed names, before any task is submitted. `factory new -w <id>` writes
+the line, and Day Desk writes it when the owner names a worker.
+
+**Consequence.** The owner, or Day Desk for them, picks the harness and model per issue.
+`FACTORY_WORKERS` stays the allowlist of sandboxed workers and the default order.
