@@ -1,11 +1,18 @@
-"""Ops numbers computed from the audit history: escalation, the autonomy rate, and whether the
-lessons the owner approved are working."""
+"""Ops numbers computed from the audit history: escalation, the autonomy rate, whether the
+lessons the owner approved are working, and the weekly report's numbers."""
 import json
+import re
+from collections import Counter
+from datetime import timedelta, timezone
 
 from .workitem import UNGATED
 
 HUMAN_STATES = ("human_waiting", "blocked")
+ESCALATED = HUMAN_STATES + ("exhausted",)  # foreman.ATTENTION: entering one tells the owner
 REACHED_END = frozenset({"merged", "closed", "cancelled", "exhausted"})
+WEEK = timedelta(days=7)
+TOP_REASONS = 3
+SHA = re.compile(r"\b[0-9a-f]{40}\b")
 
 
 def escalation(wi, history):
@@ -82,6 +89,60 @@ def lesson_effect(lessons, workorders_of):
                        "sent": len(sent), "recurred": recurred,
                        "workItems": sorted(sent), "notWorking": recurred >= 3}
     return effect
+
+
+def ended_at(history):
+    """When a WorkItem reached an end state: the time of the first audit entry that moved it into
+    one, or None."""
+    return next((h["at"] for h in history if h["detail"].get("to") in REACHED_END), None)
+
+
+def ended_between(workitems, history_of, since, until):
+    """The WorkItems that reached an end state after `since` and up to `until`. Times are audit
+    timestamps (store.now()), which compare as text; the end is inclusive, so a report counts
+    what was logged in its own second, and one week never shares an entry with the next."""
+    ended = []
+    for wi in workitems:
+        at = ended_at(history_of(wi["id"])) if wi["state"] in REACHED_END else None
+        if at is not None and since < at <= until:
+            ended.append(wi)
+    return ended
+
+
+def escalation_reasons(workitems, history_of, since, until):
+    """Why WorkItems went to human_waiting, blocked or exhausted after `since` and up to `until`,
+    as {"reason", "count"}, most frequent first. The audit entry of each move records the reason
+    as `escalation`; equal reasons are one group once commit shas are taken out of them."""
+    counts = Counter()
+    for wi in workitems:
+        for h in history_of(wi["id"]):
+            to = h["detail"].get("to")
+            if to in ESCALATED and h["detail"].get("from") != to and since < h["at"] <= until:
+                reason = h["detail"].get("escalation") or f"{to}, reason not recorded ({h['action']})"
+                counts[SHA.sub("<sha>", reason)] += 1
+    return [{"reason": reason, "count": count}
+            for reason, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
+
+
+def weekly(workitems, history_of, candidates, effect, now):
+    """The weekly report's numbers for the 7 days before `now` (an aware datetime: the clock) and
+    the 7 days before those. `candidates` are lessons.candidates of each allowlisted repo, each
+    with its repo; `effect` is lesson_effect of the approved lessons."""
+    until, since, before = (_stamp(now - WEEK * weeks) for weeks in (0, 1, 2))
+    reasons = escalation_reasons(workitems, history_of, since, until)
+    return {"since": since, "until": until,
+            "autonomy": autonomy(ended_between(workitems, history_of, since, until), history_of),
+            "autonomyWeekBefore": autonomy(ended_between(workitems, history_of, before, since),
+                                           history_of),
+            "escalated": sum(group["count"] for group in reasons),
+            "topReasons": reasons[:TOP_REASONS],
+            "newCandidates": [c for c in candidates if since < c["candidateSince"] <= until],
+            "notWorking": [e for e in effect.values() if e["notWorking"]]}
+
+
+def _stamp(moment):
+    """An aware datetime in the audit log's format (store.now())."""
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _grouped(orders):

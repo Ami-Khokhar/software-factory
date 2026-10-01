@@ -306,14 +306,23 @@ class Foreman:
         if new["state"] in ("human_waiting", "blocked") and not new.get("owner"):
             new = dict(new, owner=self.config.owner or new["repo"].split("/")[0])
         stored = self.store.put(new)
-        self.store.log(action, dict(detail, **{"from": old["state"], "to": stored["state"]}), old["id"])
-        if stored["state"] in ATTENTION and old["state"] != stored["state"]:
+        detail = dict(detail, **{"from": old["state"], "to": stored["state"]})
+        escalated = stored["state"] in ATTENTION and old["state"] != stored["state"]
+        if escalated:  # the weekly report groups these (metrics.escalation_reasons)
+            detail["escalation"] = self._reason(stored)
+        self.store.log(action, detail, old["id"])
+        if escalated:
             self._notify(stored)
         return stored
 
+    @staticmethod
+    def _reason(wi):
+        """Why a WorkItem needs a person, on one line."""
+        return " ".join(str(wi.get("blockedOn") or wi.get("terminalReason") or wi["state"]).split())
+
     def _notify(self, wi):
         """Tell the owner on the issue. A failed comment is logged; it never blocks the transition."""
-        reason = " ".join(str(wi.get("blockedOn") or wi.get("terminalReason") or wi["state"]).split())
+        reason = self._reason(wi)
         ask = ("Nothing more will happen until a person decides: call `factory_resolve_human` with "
                "`retry`, `regate` or `close`." if wi["state"] != "exhausted" else
                "The WorkItem has used its budget and stopped.")

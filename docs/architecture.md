@@ -77,12 +77,12 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/gate_secrets.py` | A repo's gate Actions secrets, set from the owner's Keychain through `gh` (ADR-0022) |
 | `factory_mcp/lessons.py` | Lesson candidates from the audit log, and `lessons.json` (ADR-0020) |
 | `factory_mcp/routing.py` | Which worker takes the next attempt: locality first, then one that has not failed |
-| `factory_mcp/metrics.py` | The escalation text, the autonomy rate, and whether each lesson works |
+| `factory_mcp/metrics.py` | The escalation text, the autonomy rate, whether each lesson works, and the weekly report's numbers |
 | `factory_mcp/config.py` | Settings from the environment and `repos.json` |
 | `worker/runner.py` | Runs one WorkOrder in the sandbox and prints its Result |
 | `worker/freebuff.py` | Runs one Freebuff/GLM prompt through a PTY and checks its completion log |
 | `worker/Dockerfile` | The sandbox image: git, Python, Node and Freebuff, and no GitHub credential |
-| `scripts/factory` | The owner's CLI: `new`, `add-repo`, `status`, `watch`, `retry`/`regate`/`close`, `start`/`stop`, `update`, `serve` |
+| `scripts/factory` | The owner's CLI: `new`, `add-repo`, `status`, `watch`, `report`, `retry`/`regate`/`close`, `start`/`stop`, `update`, `serve` |
 | `scripts/install-services.sh` | The launchd services for agent-relay and factory-mcp |
 | `scripts/rehearsal.py` | One issue end to end, with the real agent-relay and a stand-in GitHub. Its scripted worker hands back a patch, as `worker/runner.py` does, and factory-mcp pushes it |
 

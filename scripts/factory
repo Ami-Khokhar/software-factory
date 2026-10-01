@@ -5,6 +5,7 @@
   factory add-repo <owner/repo>           check a repo and enable it (it needs pr-gatekeeper)
   factory status [<owner/repo#n>]
   factory watch                           print each WorkItem that newly waits on you (Hermes cron)
+  factory report                          the last 7 days in one message: autonomy, escalations, lessons
   factory retry  <owner/repo#n> <note>    try again; the note goes to the worker as a finding
   factory regate <owner/repo#n> <note>    you pushed a fix yourself; the gate reviews it again
   factory close  <owner/repo#n> <note>    give up on this WorkItem
@@ -100,6 +101,59 @@ def cmd_watch(_):
                   "Reply to this message with retry, regate or close, and a note.")
     STATE.mkdir(parents=True, exist_ok=True)
     seen_file.write_text(json.dumps(waiting))
+
+
+REPORT_WIDTH = 110  # characters per line; 20 such lines fit one Telegram message (4096)
+LISTED = 5  # lesson candidates or lessons named one per line; the count gives the rest
+
+
+def clip(line):
+    return line if len(line) <= REPORT_WIDTH else line[:REPORT_WIDTH - 3] + "..."
+
+
+def flat(text):
+    return " ".join(str(text).split())
+
+
+def share(autonomy):
+    if autonomy["ended"]:
+        text = (f"{autonomy['autonomous']} of {autonomy['ended']} ended WorkItems needed no person "
+                f"({autonomy['rate']:.0%})")
+    else:
+        text = "nothing ended"
+    if autonomy["unknown"]:
+        text += f", and {autonomy['unknown']} rebuilt from GitHub (unknown)"
+    return text
+
+
+def report_lines(report):
+    """factory_report as at most 19 lines, or one line when nothing ended and nothing escalated."""
+    week = f"{report['since'][:10]} to {report['until'][:10]}"
+    this = report["autonomy"]
+    if not this["ended"] and not this["unknown"] and not report["escalated"]:
+        lines = [f"Factory week {week}: nothing ended and nothing escalated."]
+    else:
+        lines = [f"Factory week {week}",
+                 f"Autonomy: {share(this)}. The week before: {share(report['autonomyWeekBefore'])}.",
+                 f"Went to a person: {report['escalated']}"
+                 + (". Top reasons:" if report["topReasons"] else "")]
+        lines += [f"  {group['count']}x {flat(group['reason'])}" for group in report["topReasons"]]
+    if report["newCandidates"]:
+        lines.append(f"New lesson candidates: {len(report['newCandidates'])}")
+        lines += [f"  [{c['repo']}] {flat(c['problem'])} (on {c['workItems']} WorkItems)"
+                  for c in report["newCandidates"][:LISTED]]
+    if report["notWorking"]:
+        lines.append(f"Lessons not working: {len(report['notWorking'])}")
+        lines += [f"  [{e['repo']}] {flat(e['text'])} (recurred on {e['recurred']} of {e['sent']})"
+                  for e in report["notWorking"][:LISTED]]
+    return [clip(line) for line in lines]
+
+
+def cmd_report(_):
+    """For a Hermes no-agent cron job, Mondays at 09:00 (ADR-0025): the week in one message. It
+    always prints, so Hermes always sends it; when factory-mcp does not answer, the exit is
+    non-zero, which Hermes delivers as an error alert. It changes nothing."""
+    print("\n".join(report_lines(call("factory_report"))))
 
 
 def cmd_new(args):
@@ -328,6 +382,8 @@ def main(argv):
         cmd_status(args)
     elif command == "watch":
         cmd_watch(args)
+    elif command == "report":
+        cmd_report(args)
     elif command in ("retry", "regate", "close"):
         cmd_resolve(command, args)
     elif command == "stop":
