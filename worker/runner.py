@@ -49,9 +49,16 @@ def now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# A fetch starts `git maintenance run --auto`, which detaches by default and can delete a pack
+# while the clone that follows copies it (#94). In the foreground, it is done before the clone.
+FOREGROUND_MAINTENANCE = {"GIT_CONFIG_COUNT": "2",
+                          "GIT_CONFIG_KEY_0": "maintenance.autoDetach", "GIT_CONFIG_VALUE_0": "false",
+                          "GIT_CONFIG_KEY_1": "gc.autoDetach", "GIT_CONFIG_VALUE_1": "false"}
+
+
 def git(cwd, *args, timeout=300):
     done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout,
-                          env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+                          env=dict(os.environ, GIT_TERMINAL_PROMPT="0", **FOREGROUND_MAINTENANCE))
     if done.returncode != 0:
         raise WorkerError(f"git {args[0]} failed: {(done.stderr or done.stdout).strip()[-300:]}")
     return done.stdout.strip()
