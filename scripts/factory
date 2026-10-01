@@ -5,6 +5,7 @@
   factory add-repo <owner/repo>           check a repo and enable it (it needs pr-gatekeeper)
   factory status [<owner/repo#n>]
   factory watch                           print each WorkItem that newly waits on you (Hermes cron)
+  factory drive-queue                     the escalations Day Desk may still answer (its job's monitor)
   factory report                          the last 7 days in one message: autonomy, escalations, lessons
   factory retry  <owner/repo#n> <note>    try again; the note goes to the worker as a finding
   factory regate <owner/repo#n> <note>    you pushed a fix yourself; the gate reviews it again
@@ -19,6 +20,7 @@
 Settings: ~/.config/factory-mcp/env. Secrets: ~/.config/factory-mcp/secrets (FACTORY_MCP_TOKEN).
 FACTORY_GITHUB_TOKEN comes from `gh auth token` unless the secrets file sets it.
 """
+import calendar
 import http.client
 import json
 import os
@@ -84,6 +86,19 @@ def call(tool, arguments=None, timeout=60):
     return value
 
 
+AGENT_GRACE_SECONDS = 1800  # how long Day Desk may take on an escalation before the owner hears of it
+
+
+def waits_on_owner(wi, driving, now):
+    """Whether the owner must answer `wi` now. When Day Desk drives (ADR-0030), it answers first;
+    the owner hears of one it may not answer, or one it has left for AGENT_GRACE_SECONDS."""
+    if wi["state"] not in ("human_waiting", "blocked"):
+        return False
+    if not driving or not wi.get("agentMayResolve"):
+        return True
+    return now - calendar.timegm(time.strptime(wi["updatedAt"], "%Y-%m-%dT%H:%M:%SZ")) >= AGENT_GRACE_SECONDS
+
+
 def cmd_watch(_):
     """For a Hermes no-agent cron job (ADR-0013): print each WorkItem that newly waits on the owner,
     once. Printing nothing sends nothing. When factory-mcp does not answer, the exit is non-zero,
@@ -93,14 +108,23 @@ def cmd_watch(_):
         seen = json.loads(seen_file.read_text())
     except (OSError, ValueError):
         seen = {}
+    driving = bool(read_env(CONFIG / "secrets").get("FACTORY_AGENT_TOKEN"))
     waiting = {wi["id"]: [wi["state"], wi.get("blockedOn")] for wi in call("factory_status")["workItems"]
-               if wi["state"] in ("human_waiting", "blocked")}
+               if waits_on_owner(wi, driving, time.time())}
     for workitem_id, (state, reason) in sorted(waiting.items()):
         if seen.get(workitem_id) != [state, reason]:
             print(f"{workitem_id} is {state}: {reason}\n"
                   "Reply to this message with retry, regate or close, and a note.")
     STATE.mkdir(parents=True, exist_ok=True)
     seen_file.write_text(json.dumps(waiting))
+
+
+def cmd_drive_queue(_):
+    """For the monitor_script of Day Desk's driving job (ADR-0030): the escalations Day Desk may
+    still answer, one per line. Hermes runs the agent only when this output changes."""
+    for wi in call("factory_status")["workItems"]:
+        if wi.get("agentMayResolve"):
+            print(f"{wi['id']} is {wi['state']}: {wi.get('blockedOn')}")
 
 
 REPORT_WIDTH = 110  # characters per line; 20 such lines fit one Telegram message (4096)
@@ -387,6 +411,8 @@ def main(argv):
         cmd_status(args)
     elif command == "watch":
         cmd_watch(args)
+    elif command == "drive-queue":
+        cmd_drive_queue(args)
     elif command == "report":
         cmd_report(args)
     elif command in ("retry", "regate", "close"):

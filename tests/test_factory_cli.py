@@ -11,6 +11,7 @@ import socket
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -158,14 +159,36 @@ class WatchTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def watch(self, *workitems):
-        """What one cron run prints, given the WorkItems factory_status returns."""
-        status = {"workItems": [{"id": i, "state": s, "blockedOn": b} for i, s, b in workitems]}
+    def watch(self, *workitems, driving=False, command=None):
+        """What one cron run prints, given the WorkItems factory_status returns. Each is (id, state,
+        blockedOn) or a full row. `driving`: the secrets hold FACTORY_AGENT_TOKEN."""
+        status = {"workItems": [w if isinstance(w, dict) else {"id": w[0], "state": w[1], "blockedOn": w[2]}
+                                for w in workitems]}
+        secrets = {"FACTORY_AGENT_TOKEN": "a"} if driving else {}
         printed = io.StringIO()
         with mock.patch.object(cli, "call", lambda tool, arguments=None: status), \
-                contextlib.redirect_stdout(printed):
-            cli.cmd_watch([])
+                mock.patch.object(cli, "read_env", lambda path: secrets), contextlib.redirect_stdout(printed):
+            (command or cli.cmd_watch)([])
         return printed.getvalue()
+
+    def test_while_day_desk_drives_the_owner_hears_only_what_it_may_not_answer_or_left_too_long(self):
+        now = time.time()
+        stamp = lambda ago: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - ago))
+        fresh = {"id": "o/r#7", "state": "blocked", "blockedOn": "verify exited 1", "agentMayResolve": True,
+                 "updatedAt": stamp(60)}
+        answered = {"id": "o/r#8", "state": "human_waiting", "blockedOn": "HUMAN", "agentMayResolve": False,
+                    "updatedAt": stamp(60)}
+        printed = self.watch(fresh, answered, driving=True)
+        self.assertNotIn("o/r#7", printed)  # Day Desk answers it first
+        self.assertIn("o/r#8 is human_waiting: HUMAN", printed)  # Day Desk answered it once already
+        self.assertIn("o/r#7 is blocked", self.watch(dict(fresh, updatedAt=stamp(1801)), answered, driving=True))
+        self.assertIn("o/r#7 is blocked", self.watch(dict(fresh, blockedOn="new reason")))  # not driving
+
+    def test_the_drive_queue_lists_only_what_day_desk_may_still_answer(self):
+        rows = [{"id": "o/r#7", "state": "blocked", "blockedOn": "verify exited 1", "agentMayResolve": True},
+                {"id": "o/r#8", "state": "human_waiting", "blockedOn": "HUMAN", "agentMayResolve": False},
+                {"id": "o/r#9", "state": "implementing", "blockedOn": None}]
+        self.assertEqual(self.watch(*rows, command=cli.cmd_drive_queue), "o/r#7 is blocked: verify exited 1\n")
 
     def test_each_escalation_is_reported_once(self):
         blocked = ("o/r#7", "blocked", "verify exited 1")

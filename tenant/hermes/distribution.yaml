@@ -6,6 +6,9 @@ env_requires:
   - name: FACTORY_MCP_TOKEN
     description: "factory-mcp's bearer token, from ~/.config/factory-mcp/secrets"
     required: true
+  - name: FACTORY_AGENT_TOKEN
+    description: "Day Desk's driving token, FACTORY_AGENT_TOKEN in ~/.config/factory-mcp/secrets (ADR-0030)"
+    required: true
   - name: TELEGRAM_BOT_TOKEN
     description: "The Telegram bot Day Desk speaks as"
     required: true

@@ -2,19 +2,30 @@
 from datetime import datetime, timezone
 
 from . import lessons, metrics, repos
-from .foreman import MAX_PLAN_ISSUES
+from .foreman import MAX_PLAN_ISSUES, agent_resolved
 from .mcp import Tool, ToolError
 
+# What Day Desk may call when it drives the factory with FACTORY_AGENT_TOKEN (ADR-0030). Setting up
+# a repo, its gate secrets, and the lessons workers read stay with the owner's token.
+AGENT_TOOLS = frozenset({"factory_status", "factory_repo_check", "factory_lessons", "factory_report",
+                         "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
+                         "factory_resolve_human"})
+WAITING = ("human_waiting", "blocked")
 
-def build(store, foreman):
+
+def build(store, foreman, agent=False):
+    def summary_of(wi):
+        row = {key: wi.get(key) for key in ("id", "state", "prNumber", "blockedOn", "waitingOn", "updatedAt")}
+        if wi["state"] in WAITING:
+            row["agentMayResolve"] = not agent_resolved(store.history(wi["id"]))
+        return row
+
     def status(args):
         workitem_id = args.get("id")
         if workitem_id is None:
             workitems = store.all()
-            summary = {"workItems": [
-                {key: wi.get(key) for key in ("id", "state", "prNumber", "blockedOn", "waitingOn",
-                                              "updatedAt")}
-                for wi in workitems], "autonomy": metrics.autonomy(workitems, store.history),
+            summary = {"workItems": [summary_of(wi) for wi in workitems],
+                       "autonomy": metrics.autonomy(workitems, store.history),
                 "repos": sorted(foreman.config.repos)}
             if foreman.config.lessons_file:
                 try:
@@ -133,7 +144,7 @@ def build(store, foreman):
                              "note": {"type": "string", "minLength": 1},
                              "by": {"type": "string", "minLength": 1, "description": "who decided"}}},
              "write", lambda args: {"workItem": foreman.resolve_human(
-                 args["id"], args["resolution"], args["note"], args["by"])}),
+                 args["id"], args["resolution"], args["note"], args["by"], agent=agent)}),
         Tool("factory_propose_issue",
              "Planner only: open an issue labelled factory:proposed. The body needs an "
              "'## Acceptance' list of '- <claim> — done when: <check>' bullets. A person adds "
@@ -196,4 +207,4 @@ def build(store, foreman):
                              "by": {"type": "string", "minLength": 1, "description": "who retired it"}}},
              "write", lambda args: foreman.retire_lesson(args["repo"], args["fingerprint"], args["by"])),
     ]
-    return {tool.name: tool for tool in tools}
+    return {tool.name: tool for tool in tools if not agent or tool.name in AGENT_TOOLS}

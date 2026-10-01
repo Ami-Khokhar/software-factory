@@ -252,10 +252,13 @@ tests need the packages in `requirements.txt`, installed once for the Python tha
 
 ## Day Desk: the factory in Telegram (Hermes)
 
-Day Desk is one Hermes agent you talk to in Telegram (ADR-0013). Through factory-mcp's tools it
-shows what needs you, checks and enables repos, plans and starts issues, and answers escalations.
-Hermes asks you to approve each tool call that changes something, with buttons in Telegram, and
-no answer in 15 minutes is a no. Its settings, skill and manner are the Hermes profile
+Day Desk is one Hermes agent you talk to in Telegram (ADR-0013), and it drives the factory for
+you (ADR-0030). Through factory-mcp's tools it shows what needs you, plans and starts issues, and
+answers the escalations a worker can fix: it retries with a note or sends a PR back to the gate,
+once per WorkItem, and never closes one. It calls those tools with its own token,
+`FACTORY_AGENT_TOKEN`, for which factory-mcp lists only them. Setting up a repo and approving or
+retiring a lesson still go through your token, and Hermes asks you to approve each of those calls
+with buttons in Telegram; no answer in 15 minutes is a no. Its settings, skill and manner are the Hermes profile
 distribution in `tenant/hermes/`, so they are reviewed like code.
 
 Set it up once:
@@ -263,8 +266,11 @@ Set it up once:
 ```bash
 hermes profile install ~/path/to/software-factory/tenant/hermes
 cp ~/.hermes/profiles/day-desk/.env.EXAMPLE ~/.hermes/profiles/day-desk/.env
-# fill in FACTORY_MCP_TOKEN (from ~/.config/factory-mcp/secrets), TELEGRAM_BOT_TOKEN,
-# TELEGRAM_ALLOWED_USERS (your Telegram user id) and DAYDESK_GITHUB_TOKEN (below)
+# Day Desk's driving token: a new secret, different from FACTORY_MCP_TOKEN, in factory-mcp's secrets
+printf 'FACTORY_AGENT_TOKEN=%s\n' "$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')" \
+  >> ~/.config/factory-mcp/secrets && factory update
+# fill in FACTORY_MCP_TOKEN and FACTORY_AGENT_TOKEN (from ~/.config/factory-mcp/secrets),
+# TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USERS (your Telegram user id) and DAYDESK_GITHUB_TOKEN (below)
 docker build -t day-desk-sandbox:1 ~/path/to/software-factory/tenant/hermes/sandbox
 hermes -p day-desk model             # choose your ChatGPT or Codex subscription
 hermes -p day-desk gateway setup     # Telegram
@@ -278,7 +284,15 @@ printf '#!/usr/bin/env bash\nexport PATH="/opt/homebrew/bin:/usr/local/bin:$PATH
   > ~/.hermes/profiles/day-desk/scripts/factory-report.sh
 hermes -p day-desk cron create "0 9 * * 1" --no-agent --script factory-report.sh --deliver telegram \
   --name factory-report
+printf '#!/usr/bin/env bash\nexport PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"\nexec "$HOME/.local/bin/factory" drive-queue\n' \
+  > ~/.hermes/profiles/day-desk/scripts/factory-drive-queue.sh
+hermes -p day-desk cron create "every 5m" --monitor-script factory-drive-queue.sh --skill software-factory \
+  --deliver telegram --name factory-drive "Run the 'Drive the factory' section of the software-factory skill."
 ```
+
+`factory-drive` runs the model only when the escalations Day Desk may answer change, and tells you
+what it chose for each. `factory-watch` tells you of an escalation Day Desk may not answer, or one
+it left for 30 minutes; without `FACTORY_AGENT_TOKEN` it tells you of every one at once.
 
 `factory-watch` sends one message for each WorkItem that newly waits on you, and an error message
 when factory-mcp does not answer. `factory-report` sends the week in one message every Monday at

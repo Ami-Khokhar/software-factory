@@ -28,6 +28,7 @@ class Config:
     trusted_authors: frozenset = frozenset()  # issue authors a worker may act for; empty: repo owner
     repos_file: str = ""  # repos.json (ADR-0014); empty: FACTORY_REPOS is the whole allowlist
     lessons_file: str = ""  # lessons.json (ADR-0020); empty: the factory keeps no lessons
+    agent_token: str = ""  # Day Desk's driving token (ADR-0030); empty: only the owner's token works
 
     def listed(self, repo):
         """The allowlist's spelling of `repo`, or None. GitHub repo names ignore case."""
@@ -53,6 +54,10 @@ class Config:
         if not token:
             # An open Foreman would let anything that reaches the port drive the factory.
             raise ValueError("FACTORY_MCP_TOKEN is required")
+        agent_token = env.get("FACTORY_AGENT_TOKEN", "")
+        if agent_token and agent_token == token:
+            # The token is how factory-mcp tells the agent from the owner; one token would hide it.
+            raise ValueError("FACTORY_AGENT_TOKEN must differ from FACTORY_MCP_TOKEN")
         repos_file = env.get("FACTORY_REPOS_FILE", "")
         repos = frozenset(r.strip() for r in env.get("FACTORY_REPOS", "").split(",") if r.strip()) \
             | frozenset(entry["name"] for entry in manifest.load(repos_file))
@@ -86,4 +91,5 @@ class Config:
                                       if a.strip()),
             repos_file=repos_file,
             lessons_file=env.get("FACTORY_LESSONS_FILE", ""),
+            agent_token=agent_token,
         )
