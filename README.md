@@ -3,7 +3,7 @@
 A person states a goal as a GitHub issue with checkable acceptance criteria. The factory drives
 it to a reviewed, merged pull request, and asks the person only when it is stuck.
 
-- **Front door:** Day Desk, one Hermes agent in Telegram ([`tenant/hermes/`](tenant/hermes/)), and
+- **Front door and driver:** Day Desk, one Hermes agent in Telegram, drives the factory within factory-mcp's guards (ADR-0030) ([`tenant/hermes/`](tenant/hermes/)), and
   the `factory` command. Day Desk can prepare a one-time repo setup PR for your merge.
 - **Foreman:** factory-mcp, in this repo. It owns every WorkItem's state and makes every decision.
 - **Workers:** [agent-relay](https://github.com/Ami-Khokhar/agent-relay) runs any registered harness
@@ -29,7 +29,8 @@ FACTORY_MCP_TOKEN=<secret> FACTORY_REPOS=owner/repo FACTORY_GITHUB_TOKEN=<token>
 
 | Variable | Meaning |
 |---|---|
-| `FACTORY_MCP_TOKEN` | Required. The bearer token every client sends: Day Desk's `.env` and the `factory` command's secrets file hold it |
+| `FACTORY_MCP_TOKEN` | Required. The owner's bearer token: the `factory` command and Day Desk's owner-only tools send it |
+| `FACTORY_AGENT_TOKEN` | Day Desk's driving token (ADR-0030); with it, factory-mcp lists only the driving tools. Must differ from `FACTORY_MCP_TOKEN` |
 | `FACTORY_REPOS` | Comma-separated repo allowlist |
 | `FACTORY_REPOS_FILE` | `repos.json`, the repos a factory tool enabled; they join the allowlist (ADR-0014). `factory serve` sets `~/.config/factory-mcp/repos.json` |
 | `FACTORY_LESSONS_FILE` | `lessons.json`, the lessons the owner approved from repeated gate findings (ADR-0020). `factory serve` sets `~/.config/factory-mcp/lessons.json` |

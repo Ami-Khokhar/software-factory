@@ -20,6 +20,11 @@ BOOTSTRAP_PREFIX = "factory-bootstrap/"
 MAX_PLAN_ISSUES = 10  # one approval covers this many issues at most (ADR-0024)
 
 
+def agent_resolved(history):
+    """Whether Day Desk, driving, already resolved this WorkItem once (ADR-0030)."""
+    return any(h["action"] == "human_resolved" and h["detail"].get("agent") for h in history)
+
+
 class Foreman:
     def __init__(self, store, github, config, relay=None):
         self.store = store
@@ -533,14 +538,18 @@ class Foreman:
                 "cause named in attempts, then call factory_resolve_human."))
         return self._write(wi, new, "attempt_failed", reason=reason, worker=wi.get("worker"))
 
-    def resolve_human(self, workitem_id, resolution, note, by):
-        """A person's answer to human_waiting or blocked (ADR-0006): retry, regate or close."""
+    def resolve_human(self, workitem_id, resolution, note, by, agent=False):
+        """A person's answer to human_waiting or blocked (ADR-0006): retry, regate or close. Day Desk,
+        driving (`agent`), answers each WorkItem once; after that the owner decides (ADR-0030)."""
         if not self.store.acquire(workitem_id, self.holder):
             raise ToolError(f"{workitem_id} is being ticked; try again")
         try:
             wi = self.store.get(workitem_id)
             if wi is None or wi["state"] not in ("human_waiting", "blocked"):
                 raise ToolError(f"{workitem_id} is not waiting on a person")
+            if agent and agent_resolved(self.store.history(workitem_id)):
+                raise ToolError(f"Day Desk already resolved {workitem_id} once, so the owner decides now: "
+                                f"factory retry|regate|close {workitem_id} <note>")
             if resolution == "retry":
                 new = dict(wi, state="changes_requested" if wi.get("prNumber") else "ready")
             elif resolution == "regate" and wi.get("prNumber"):
@@ -550,7 +559,7 @@ class Foreman:
             else:
                 raise ToolError("resolution must be retry, regate (needs a PR) or close")
             return self._write(wi, dict(new, blockedOn=None, attempts=[]), "human_resolved",
-                               resolution=resolution, note=note, by=by)
+                               resolution=resolution, note=note, by=by, **({"agent": True} if agent else {}))
         finally:
             self.store.release(workitem_id, self.holder)
 

@@ -10,7 +10,7 @@ are in [decisions.md](decisions.md).
                       Day Desk's shell (Docker sandbox) ──► GitHub: git, gh, one token
                           ▲
 Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory CLI (scripts/factory)
-                          │ MCP tools; each write needs the owner's yes       │ MCP tools
+                          │ MCP tools: drives with its token; setup asks you  │ MCP tools
                           ▼                                                   ▼
             ┌────────────────────────────── factory-mcp ──────────────────────────────┐
             │ the Foreman: for each WorkItem, take the lease, observe GitHub,         │
@@ -37,7 +37,9 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
   comments, and rebuilds its WorkItems from them when its store is lost (ADR-0009).
 - **pr-gatekeeper** reviews every PR and merges it on MERGE. factory-mcp has no merge tool
   (ADR-0004).
-- **Day Desk** is the owner's front door in Telegram (ADR-0013). The `factory` CLI calls the same
+- **Day Desk** is the owner's front door in Telegram (ADR-0013), and it drives the factory: with
+  `FACTORY_AGENT_TOKEN` it plans, starts issues and answers each escalation once, and factory-mcp
+  lists only `tools.AGENT_TOOLS` for that token (ADR-0030). The `factory` CLI calls the same
   tools. Day Desk's shell runs in a Docker sandbox whose one secret is a GitHub token (ADR-0021).
   For a new repo, one owner-approved tool prepares a setup PR with only missing controls, after it
   pushes one README-only commit to an empty repo's default branch; the owner merges the PR before

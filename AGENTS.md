@@ -8,7 +8,8 @@ software-factory turns a GitHub issue with checkable acceptance criteria into a 
 pull request. factory-mcp, the Foreman, holds each WorkItem's state and makes every decision: it
 sends WorkOrders to sandboxed workers through agent-relay, checks what they return, opens the pull
 request and follows pr-gatekeeper's verdict. Day Desk, a Hermes agent in Telegram, is the owner's
-front door. A model never decides a state transition or a merge (ADR-0010, ADR-0013).
+front door and drives the factory within guards that factory-mcp enforces in code: a model never
+merges, and Day Desk answers each escalation once before the owner decides (ADR-0030).
 
 ## Layout
 
@@ -37,7 +38,8 @@ python3 scripts/rehearsal.py <agent-relay checkout>      # one issue end to end,
 
 - factory-mcp and the worker runner use only the Python standard library. `requirements.txt` is
   for the tests.
-- Every tool declares whether it reads or writes, and Hermes asks the owner before each write. A
+- Every tool declares whether it reads or writes. Hermes asks the owner before each write outside
+  `tools.AGENT_TOOLS`, the tools Day Desk drives with its own token. A
   new tool goes into the lists in `tests/test_mcp_server.py` and `tests/test_hermes.py` on
   purpose.
 - A contract change updates the schema, the code that writes and reads it, `docs/contracts.md`

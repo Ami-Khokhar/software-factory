@@ -3,26 +3,35 @@
 # Telegram settings. Secrets live in the profile's .env, never here.
 
 mcp_servers:
-  factory:
-    # factory-mcp listens on loopback only. If you set FACTORY_PORT, set the same port here.
+  # Day Desk drives the factory (ADR-0030). factory-mcp listens on loopback only; if you set
+  # FACTORY_PORT, set the same port in both entries. factory_tick and factory_intake stay out of
+  # both: factory-mcp ticks on its own.
+  factory_drive:
     url: "http://127.0.0.1:43125/mcp"
     headers:
-      Authorization: "Bearer ${FACTORY_MCP_TOKEN}"
-    trust: untrusted  # every tool without readOnlyHint waits for the owner's yes in Telegram
+      Authorization: "Bearer ${FACTORY_AGENT_TOKEN}"  # factory-mcp lists only the driving tools for it
+    trust: full  # no yes per call: factory-mcp's guards bound these tools, and the token names the caller
     tools:
-      include:  # factory_tick and factory_intake stay out: factory-mcp ticks on its own
+      include:
         - factory_status
         - factory_repo_check
-        - factory_bootstrap_repo
-        - factory_add_repo
+        - factory_lessons
+        - factory_report
         - factory_approve_issue
         - factory_propose_issue
         - factory_start_plan
         - factory_resolve_human
-        - factory_lessons
+  factory:
+    url: "http://127.0.0.1:43125/mcp"
+    headers:
+      Authorization: "Bearer ${FACTORY_MCP_TOKEN}"
+    trust: untrusted  # each call waits for the owner's yes in Telegram
+    tools:
+      include:  # a repo's setup and gate secrets, and the lessons its workers read, stay the owner's
+        - factory_bootstrap_repo
+        - factory_add_repo
         - factory_approve_lesson
         - factory_retire_lesson
-        - factory_report
 
 agent:
   # The shell runs in the Docker sandbox below (ADR-0021). These stay off because they run on the

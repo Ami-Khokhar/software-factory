@@ -146,7 +146,8 @@ and does not depend on delivery.
 
 ## ADR-0010 — OpenBot is the control plane; decisions stay deterministic
 
-**Superseded by ADR-0013** for the front door. Decisions stay deterministic.
+**Superseded by ADR-0013** for the front door. Decisions stay deterministic; ADR-0030 lets Day Desk make
+the calls the owner made, within guards in code.
 
 **Context.** The factory needs durable goals, governance, an audit trail, human-in-the-loop
 channels and schedules. OpenBot has all of these (Jobs, CEL policy, audit, Telegram, routines).
@@ -193,7 +194,7 @@ history, not correctness.
 
 ## ADR-0013 — Hermes is the front door
 
-**Superseded by ADR-0021** for the shell. Day Desk still has no file tools or subagents.
+**Superseded by ADR-0021** for the shell, and **by ADR-0030** for the owner's yes on each write. Day Desk still has no file tools or subagents.
 
 **Context.** OpenBot gave the factory two Bots, a CEL policy and a 15-minute routine that ran a
 model to tick WorkItems, which factory-mcp's own background tick already does. A person's yes was
@@ -549,3 +550,31 @@ credential mount there leaves no root-owned parent. An agent may name another im
 `FACTORY_WORKERS`, with no factory change, and routing's failover can move between harnesses.
 Nothing is copied back from the sandbox, so a login that rotates its tokens should not be used
 there: Codex needs an API-key login.
+
+---
+
+## ADR-0030 — Day Desk drives the factory; factory-mcp keeps the guards
+
+Supersedes ADR-0013 for the owner's yes on each write, and amends ADR-0010.
+
+**Context.** The owner wants Hermes to drive the factory and to be asked only for what the guards
+cannot decide. Every factory write waited for the owner's yes, and every escalation waited for the
+owner, even when the next step was plain: retry with a note, or send a PR back to a gate whose
+reviewer failed. A guard on Day Desk could not rest on the `by` a model writes into a call.
+
+**Decision.** factory-mcp accepts a second token, `FACTORY_AGENT_TOKEN`. With it, factory-mcp lists
+and runs only `tools.AGENT_TOOLS`: status, repo check, lessons, report, and approving, proposing,
+planning and resolving. A repo's setup, its gate secrets and the lessons workers read stay on the
+owner's token. Day Desk's profile reaches the agent tools through a `trust: full` server with that
+token, and the rest through the `trust: untrusted` server, which asks the owner. With the agent
+token, `factory_resolve_human` resolves each WorkItem at most once; the next escalation waits for
+the owner, and the audit log marks the call as the agent's. A Hermes cron job, `factory-drive`,
+runs the skill's "Drive the factory" section whenever `factory drive-queue` changes; the skill
+retries or regates only for reasons it names and never closes. `factory watch` tells the owner of
+an escalation Day Desk may not answer, or one it left for 30 minutes. factory-mcp keeps its own
+tick loop: the guards and the state machine do not depend on Hermes running.
+
+**Consequence.** Most escalations a worker can fix get a second pass without the owner, and the
+owner hears of the rest. A model still never merges, and nothing Day Desk calls can pass the
+sandbox, the protected paths, the size limits, the trusted authors or the budget of passes. A
+wrong retry costs at most one pass from that budget.

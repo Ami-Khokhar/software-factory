@@ -11,12 +11,13 @@ from factory_mcp.store import Store
 from tests.fakes import workitem
 
 TOKEN = "test-token"
+AGENT = "agent-token"
 
 
 class McpServerTest(unittest.TestCase):
     def setUp(self):
         self.store = Store(":memory:")
-        config = Config(mcp_token=TOKEN, repos=frozenset({"o/r"}), port=0)
+        config = Config(mcp_token=TOKEN, repos=frozenset({"o/r"}), port=0, agent_token=AGENT)
         self.server = make_server(config, self.store)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.url = f"http://127.0.0.1:{self.server.server_port}/mcp"
@@ -36,8 +37,9 @@ class McpServerTest(unittest.TestCase):
         except urllib.error.HTTPError as err:
             return err.code, None
 
-    def rpc(self, method, params=None):
-        status, body = self.post({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}})
+    def rpc(self, method, params=None, token=TOKEN):
+        status, body = self.post({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}},
+                                 {"Authorization": f"Bearer {token}"})
         self.assertEqual(status, 200)
         return body
 
@@ -63,6 +65,22 @@ class McpServerTest(unittest.TestCase):
                                   "factory_bootstrap_repo", "factory_approve_lesson",
                                   "factory_retire_lesson", "factory_start_plan"})
         self.assertTrue(all(t["inputSchema"]["type"] == "object" for t in tools))
+
+    def test_the_agent_token_lists_and_runs_only_the_driving_tools(self):
+        """Day Desk drives with FACTORY_AGENT_TOKEN (ADR-0030). The token, not the model, decides what
+        it may call. A new tool joins AGENT_TOOLS on purpose."""
+        listed = {t["name"] for t in self.rpc("tools/list", token=AGENT)["result"]["tools"]}
+        self.assertEqual(listed, {"factory_status", "factory_repo_check", "factory_lessons", "factory_report",
+                                  "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
+                                  "factory_resolve_human"})
+        refused = self.rpc("tools/call", {"name": "factory_bootstrap_repo",
+                                          "arguments": {"repo": "o/r", "by": "day-desk"}}, token=AGENT)
+        self.assertIn("error", refused)  # an unknown tool for this token, not a call that ran
+
+    def test_a_call_with_the_agent_token_is_audited_as_the_agents(self):
+        self.store.put(workitem())
+        self.rpc("tools/call", {"name": "factory_status", "arguments": {"id": "o/r#1"}}, token=AGENT)
+        self.assertEqual(self.store.history("o/r#1")[0]["detail"]["caller"], "agent")
 
     def test_status_call_is_audited(self):
         self.store.put(workitem())

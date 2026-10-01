@@ -1,6 +1,6 @@
-"""The Day Desk profile (tenant/hermes, ADR-0013, ADR-0021): it sees the factory tools it needs,
-every factory write waits for the owner's yes, and its only shell runs in a Docker sandbox that
-gets the GitHub token and nothing else from the host."""
+"""The Day Desk profile (tenant/hermes, ADR-0013, ADR-0021, ADR-0030): it drives the factory with the
+agent token, every other factory write waits for the owner's yes, and its only shell runs in a
+Docker sandbox that gets the GitHub token and nothing else from the host."""
 import re
 import unittest
 from pathlib import Path
@@ -12,29 +12,30 @@ from factory_mcp.config import Config
 
 PROFILE = Path(__file__).resolve().parent.parent / "tenant" / "hermes"
 CONFIG = yaml.safe_load((PROFILE / "config.yaml").read_text())
-SERVER = CONFIG["mcp_servers"]["factory"]
+DRIVE, OWNER = CONFIG["mcp_servers"]["factory_drive"], CONFIG["mcp_servers"]["factory"]
 TERMINAL = CONFIG["terminal"]
 
 
 class ProfileTest(unittest.TestCase):
     def test_day_desk_reaches_factory_mcp_where_it_listens_by_default(self):
-        self.assertEqual(SERVER["url"], f"http://127.0.0.1:{Config(mcp_token='t', repos=frozenset()).port}/mcp")
+        for server in (DRIVE, OWNER):
+            self.assertEqual(server["url"], f"http://127.0.0.1:{Config(mcp_token='t', repos=frozenset()).port}/mcp")
 
-    def test_day_desk_sees_the_tools_it_needs_and_asks_before_each_write(self):
-        """Hermes asks the owner before any tool on an untrusted server that is not marked
-        read-only (tests/test_mcp_server.py checks the marks). A new tool is added here on purpose."""
-        self.assertEqual(SERVER["trust"], "untrusted")
-        self.assertIn("factory_bootstrap_repo", SERVER["tools"]["include"])
-        self.assertIn("factory_start_plan", SERVER["tools"]["include"])
-        self.assertIn("factory_report", SERVER["tools"]["include"])
+    def test_day_desk_drives_with_the_agent_token_and_asks_the_owner_for_the_rest(self):
+        """ADR-0030: the driving tools run with no yes per call, on the agent token, which makes
+        factory-mcp list only them; the other writes wait for the owner on an untrusted server. A
+        new tool is added here on purpose."""
+        self.assertEqual((DRIVE["trust"], DRIVE["headers"]["Authorization"]), ("full", "Bearer ${FACTORY_AGENT_TOKEN}"))
+        self.assertEqual(set(DRIVE["tools"]["include"]), tools.AGENT_TOOLS)
+        self.assertEqual((OWNER["trust"], OWNER["headers"]["Authorization"]), ("untrusted", "Bearer ${FACTORY_MCP_TOKEN}"))
         real = set(tools.build(None, None))
-        self.assertEqual(real - set(SERVER["tools"]["include"]), {"factory_tick", "factory_intake"})
-        self.assertLessEqual(set(SERVER["tools"]["include"]), real)
+        self.assertEqual(set(OWNER["tools"]["include"]), real - tools.AGENT_TOOLS - {"factory_tick", "factory_intake"})
 
     def test_the_skill_names_only_tools_day_desk_has(self):
         text = (PROFILE / "skills" / "software-factory" / "SKILL.md").read_text()
         self.assertEqual(yaml.safe_load(text.split("---")[1])["name"], "software-factory")
-        self.assertLessEqual(set(re.findall(r"factory_[a-z_]+", text)), set(SERVER["tools"]["include"]))
+        self.assertLessEqual(set(re.findall(r"factory_[a-z_]+", text)),
+                             set(DRIVE["tools"]["include"]) | set(OWNER["tools"]["include"]))
 
     def test_the_install_asks_for_every_secret_the_config_uses(self):
         manifest = yaml.safe_load((PROFILE / "distribution.yaml").read_text())

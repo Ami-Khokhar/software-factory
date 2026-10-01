@@ -49,8 +49,13 @@ class Handler(BaseHTTPRequestHandler):
         # which the specification requires servers to guard against.
         if "Origin" in self.headers:
             return self._send(403, {"error": "origin_not_allowed"})
-        expected = f"Bearer {self.server.config.mcp_token}".encode()
-        if not hmac.compare_digest(self.headers.get("Authorization", "").encode(), expected):
+        sent = self.headers.get("Authorization", "").encode()
+        config = self.server.config
+        if hmac.compare_digest(sent, f"Bearer {config.mcp_token}".encode()):
+            caller = "owner"
+        elif config.agent_token and hmac.compare_digest(sent, f"Bearer {config.agent_token}".encode()):
+            caller = "agent"  # Day Desk driving (ADR-0030): the token says so, not the model
+        else:
             return self._send(401, {"error": "unauthorized"}, [("www-authenticate", "Bearer")])
         try:
             length = int(self.headers.get("content-length") or 0)
@@ -64,7 +69,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return self._send(400, {"jsonrpc": "2.0", "id": None,
                                     "error": {"code": -32700, "message": "Parse error"}})
-        response = mcp.handle(message, self.server.tools, self.server.audit)
+        response = mcp.handle(message, self.server.tools[caller], self.server.audit[caller])
         if response is None:
             return self._send(202)
         self._send(200, response)
@@ -77,9 +82,12 @@ def make_server(config, store, github=None, relay=None):
     foreman = Foreman(store, github or GitHub(config.github_token, config.github_api), config,
                       relay or Relay(config.relay_url))
     server.foreman = foreman
-    server.tools = tools.build(store, foreman)
-    server.audit = lambda name, args, ok: store.log(
-        f"tool:{name}", {"args": args, "ok": ok}, workitem_id=args.get("id"))
+    server.tools = {"owner": tools.build(store, foreman), "agent": tools.build(store, foreman, agent=True)}
+
+    def audit(caller):
+        return lambda name, args, ok: store.log(
+            f"tool:{name}", {"args": args, "ok": ok, "caller": caller}, workitem_id=args.get("id"))
+    server.audit = {caller: audit(caller) for caller in server.tools}
     return server
 
 
