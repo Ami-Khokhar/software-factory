@@ -22,6 +22,7 @@ mcp_servers:
         - factory_lessons
         - factory_approve_lesson
         - factory_retire_lesson
+        - factory_report
 
 agent:
   # The shell runs in the Docker sandbox below (ADR-0021). These stay off because they run on the

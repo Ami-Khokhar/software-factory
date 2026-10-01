@@ -26,16 +26,18 @@ MAX_PER_WORKORDER = 10
 
 
 def _blocking_fingerprints(history):
-    """Each blocking finding in the verdicts the audit log holds, as (fingerprint, problem)."""
+    """Each blocking finding in the verdicts the audit log holds, as (fingerprint, problem, at)."""
     for entry in history:
         if entry["action"] == "reconcile":
             for finding in entry["detail"].get("blocking") or []:
-                yield finding["fingerprint"], finding["problem"]
+                yield finding["fingerprint"], finding["problem"], entry["at"]
 
 
 def candidates(store, repo):
     """Blocking findings the gate reported on 2+ WorkItems of one repo: the lessons to offer,
-    each with the gate's latest wording of the problem, since a fingerprint is a one-way hash.
+    each with the gate's latest wording of the problem, since a fingerprint is a one-way hash,
+    and `candidateSince`: when it became a candidate, the gate's first report of it on its
+    second WorkItem (the weekly report's "new").
 
     Distinct WorkItems, not rounds: one problem stuck across one WorkItem's rounds is one sight
     of it, not two (the fingerprint already sent the second round to a person, ADR-0005).
@@ -44,12 +46,16 @@ def candidates(store, repo):
     for wi in store.all():
         if wi["repo"].lower() != repo.lower():
             continue
-        sightings = dict(_blocking_fingerprints(store.history(wi["id"])))  # the last problem wins
-        for fingerprint, problem in sightings.items():
-            known = seen.setdefault(fingerprint, {"fingerprint": fingerprint, "workItems": 0})
-            known["workItems"] += 1
+        sightings = {}  # fingerprint -> (the last problem, the first time)
+        for fingerprint, problem, at in _blocking_fingerprints(store.history(wi["id"])):
+            sightings[fingerprint] = (problem, sightings.get(fingerprint, (problem, at))[1])
+        for fingerprint, (problem, first) in sightings.items():
+            known = seen.setdefault(fingerprint, {"fingerprint": fingerprint, "firsts": []})
+            known["firsts"].append(first)
             known["problem"] = problem
-    return sorted((known for known in seen.values() if known["workItems"] > 1),
+    return sorted(({"fingerprint": known["fingerprint"], "workItems": len(known["firsts"]),
+                    "problem": known["problem"], "candidateSince": sorted(known["firsts"])[1]}
+                   for known in seen.values() if len(known["firsts"]) > 1),
                   key=lambda known: -known["workItems"])
 
 

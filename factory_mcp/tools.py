@@ -1,4 +1,6 @@
 """The factory tools that Day Desk (Hermes) and the factory CLI call. Each one declares its effect."""
+from datetime import datetime, timezone
+
 from . import lessons, metrics, repos
 from .foreman import MAX_PLAN_ISSUES
 from .mcp import Tool, ToolError
@@ -48,6 +50,17 @@ def build(store, foreman):
         except ValueError as exc:
             raise ToolError(str(exc)) from None
         return {"repo": repo, "candidates": lessons.candidates(store, repo), "lessons": approved}
+
+    def report(_args):
+        try:
+            approved = lessons.load(foreman.config.lessons_file)
+        except (ValueError, OSError) as exc:  # a broken or unreadable lessons.json: say so and fail
+            raise ToolError(str(exc)) from None
+        candidates = [dict(candidate, repo=repo) for repo in sorted(foreman.config.repos)
+                      for candidate in lessons.candidates(store, repo)]
+        return metrics.weekly(store.all(), store.history, candidates,
+                              metrics.lesson_effect(approved, store.all_workorders),
+                              datetime.now(timezone.utc))
 
     tools = [
         Tool("factory_status",
@@ -153,6 +166,13 @@ def build(store, foreman):
              {"type": "object", "required": ["repo"], "additionalProperties": False,
               "properties": {"repo": {"type": "string", "description": "owner/repo"}}},
              "read", show_lessons),
+        Tool("factory_report",
+             "The weekly report's numbers for the 7 days to now: the autonomy rate of the "
+             "WorkItems that ended in them and in the 7 days before, how many WorkItems went to a "
+             "person or ran out of passes and the 3 most frequent reasons why, the lesson "
+             "candidates that are new, and the lessons flagged as not working. Changes nothing.",
+             {"type": "object", "properties": {}, "additionalProperties": False},
+             "read", report),
         Tool("factory_approve_lesson",
              "A person's go on one lesson for a repo: the factory passes it to this repo's future "
              "workers as a past gate finding to avoid. The fingerprint must be a candidate from "

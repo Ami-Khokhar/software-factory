@@ -26,6 +26,7 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(SERVER["trust"], "untrusted")
         self.assertIn("factory_bootstrap_repo", SERVER["tools"]["include"])
         self.assertIn("factory_start_plan", SERVER["tools"]["include"])
+        self.assertIn("factory_report", SERVER["tools"]["include"])
         real = set(tools.build(None, None))
         self.assertEqual(real - set(SERVER["tools"]["include"]), {"factory_tick", "factory_intake"})
         self.assertLessEqual(set(SERVER["tools"]["include"]), real)

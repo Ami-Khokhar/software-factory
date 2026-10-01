@@ -476,3 +476,27 @@ plan. The owner edits or removes the line and retries, or closes. Code makes eac
 the issues of a plan. A plan cannot name `.github/` or `AGENTS.md`, even to say that they must not
 change. A second call opens the issues again. `factory_propose_issue` and `factory_approve_issue`
 stay for single issues.
+
+---
+
+## ADR-0025 — A weekly report, computed by code, tells the owner where the factory needs a person
+
+**Context.** The owner wants the factory to improve with little manual work. The audit log records
+every escalation and every gate finding, and `factory_status` shows the autonomy rate on request,
+but nothing told the owner, without asking, which reasons sent WorkItems to a person this week or
+which lessons stopped working. Those are the inputs for the next change to the factory.
+
+**Decision.** `factory report` prints one message for the 7 days to now: the autonomy rate of the
+WorkItems that ended in them and in the 7 days before, how many WorkItems went to `human_waiting`,
+`blocked` or `exhausted` and the 3 most frequent reasons, the lesson candidates that became
+candidates in the window, and the lessons flagged as not working. The numbers come from
+`metrics.weekly` over WorkItems and the audit log, through the read tool `factory_report`; the CLI
+only formats them, at most 20 lines. Each move into one of those states records its reason in the
+audit entry as `escalation`; reasons are grouped after commit shas are taken out. A Hermes no-agent
+cron job, like `factory-watch`, delivers it to Telegram every Monday at 09:00. No model runs, and
+nothing changes.
+
+**Consequence.** The owner sees the week's escalation reasons without asking and can turn one into
+an issue for the factory. Escalations logged before this change have no recorded reason and count
+as "reason not recorded". The schedule is set up once on the owner's machine (RUNBOOK); a deploy
+does not install it.

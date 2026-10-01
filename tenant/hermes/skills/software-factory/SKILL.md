@@ -101,6 +101,13 @@ factory_status shows each lesson's effect; offer to retire or rewrite one it fla
 4. To stop a lesson, call factory_retire_lesson with the repo, its fingerprint and the owner's
    name as `by`.
 
+## Show the weekly report
+
+The owner gets the weekly report in Telegram every Monday. When they ask for it at another time,
+call factory_report. Give the autonomy rate of the 7 days to now and of the 7 days before, how
+many WorkItems went to a person and the top reasons with their counts, the new lesson candidates
+and the lessons flagged as not working. Report only what factory_report returns.
+
 ## Use the shell
 
 The `terminal` tool runs in a Docker sandbox with git, gh and python3. gh and git already have

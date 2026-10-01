@@ -241,10 +241,18 @@ printf '#!/usr/bin/env bash\nexport PATH="/opt/homebrew/bin:/usr/local/bin:$PATH
   > ~/.hermes/profiles/day-desk/scripts/factory-watch.sh
 hermes -p day-desk cron create "every 5m" --no-agent --script factory-watch.sh --deliver telegram \
   --name factory-watch
+printf '#!/usr/bin/env bash\nexport PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"\nexec "$HOME/.local/bin/factory" report\n' \
+  > ~/.hermes/profiles/day-desk/scripts/factory-report.sh
+hermes -p day-desk cron create "0 9 * * 1" --no-agent --script factory-report.sh --deliver telegram \
+  --name factory-report
 ```
 
 `factory-watch` sends one message for each WorkItem that newly waits on you, and an error message
-when factory-mcp does not answer. Reply to the message, and Day Desk answers the escalation with
+when factory-mcp does not answer. `factory-report` sends the week in one message every Monday at
+09:00 (ADR-0025): the autonomy rate of the WorkItems that ended in the last 7 days and in the 7
+days before, how many went to a person or ran out of passes and the 3 most frequent reasons why,
+the new lesson candidates and the lessons flagged as not working. Run `factory report` to see it
+at any other time, or ask Day Desk. It runs no model and changes nothing. Reply to the message, and Day Desk answers the escalation with
 you. After `factory update` deploys a new version, run `hermes profile update day-desk` so Day
 Desk gets the new skill. `factory update` does not rebuild Day Desk's sandbox image: when the
 deploy changes `tenant/hermes/sandbox/Dockerfile`, run the `docker build` command above again and

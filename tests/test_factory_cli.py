@@ -1,6 +1,6 @@
 """scripts/factory: `update` deploys a branch only when its tests pass, and follows it to main once
-merged; `add-repo` asks factory-mcp, as Day Desk does; `watch` reports each escalation once; `stop`
-sends the relay its token."""
+merged; `add-repo` asks factory-mcp, as Day Desk does; `watch` reports each escalation once;
+`report` fits the week in one message; `stop` sends the relay its token."""
 import contextlib
 import importlib.machinery
 import importlib.util
@@ -171,6 +171,56 @@ class WatchTest(unittest.TestCase):
                 mock.patch.object(cli, "read_env", lambda path: {"FACTORY_MCP_TOKEN": "t"}), \
                 self.assertRaisesRegex(SystemExit, "factory-mcp is not running"):
             cli.cmd_watch([])
+
+
+class ReportTest(unittest.TestCase):
+    NONE_ENDED = {"ended": 0, "autonomous": 0, "unknown": 0, "rate": None}
+    EMPTY = {"since": "2026-09-28T03:30:00Z", "until": "2026-10-05T03:30:00Z",
+             "autonomy": NONE_ENDED, "autonomyWeekBefore": NONE_ENDED, "escalated": 0,
+             "topReasons": [], "newCandidates": [], "notWorking": []}
+
+    def report(self, **numbers):
+        """The lines `factory report` prints, given what factory_report returns. It reads only."""
+        calls, printed = [], io.StringIO()
+
+        def call(tool, arguments=None):
+            calls.append(tool)
+            return dict(self.EMPTY, **numbers)
+
+        with mock.patch.object(cli, "call", call), contextlib.redirect_stdout(printed):
+            cli.cmd_report([])
+        self.assertEqual(calls, ["factory_report"])
+        return printed.getvalue().splitlines()
+
+    def test_a_week_where_nothing_ended_or_escalated_is_one_line(self):
+        self.assertEqual(self.report(),
+                         ["Factory week 2026-09-28 to 2026-10-05: nothing ended and nothing escalated."])
+
+    def test_a_week_gives_both_autonomy_rates_and_the_top_reasons(self):
+        lines = self.report(autonomy={"ended": 4, "autonomous": 3, "unknown": 0, "rate": 0.75},
+                            escalated=3, topReasons=[{"reason": "pr-gatekeeper decided HUMAN", "count": 2},
+                                                     {"reason": "verify\n exited 1", "count": 1}])
+        self.assertEqual(lines, [
+            "Factory week 2026-09-28 to 2026-10-05",
+            "Autonomy: 3 of 4 ended WorkItems needed no person (75%). The week before: nothing ended.",
+            "Went to a person: 3. Top reasons:",
+            "  2x pr-gatekeeper decided HUMAN",
+            "  1x verify exited 1"])
+
+    def test_a_full_week_fits_one_telegram_message(self):
+        long = "a finding that runs on\n" * 30
+        lines = self.report(
+            autonomy={"ended": 9, "autonomous": 2, "unknown": 1, "rate": 0.222},
+            autonomyWeekBefore={"ended": 3, "autonomous": 3, "unknown": 2, "rate": 1.0},
+            escalated=40, topReasons=[{"reason": long, "count": 10}] * 3,
+            newCandidates=[{"repo": "o/r", "fingerprint": f"f{n}", "problem": long, "workItems": 2}
+                           for n in range(12)],
+            notWorking=[{"repo": "o/r", "text": long, "sent": 4, "recurred": 3}] * 12)
+        self.assertLessEqual(len(lines), 20)
+        self.assertLessEqual(max(len(line) for line in lines), cli.REPORT_WIDTH)
+        self.assertIn("New lesson candidates: 12", lines)
+        self.assertIn("Lessons not working: 12", lines)
+        self.assertIn("2 of 9 ended WorkItems needed no person (22%), and 1 rebuilt from GitHub", lines[1])
 
 
 class StatusTest(unittest.TestCase):
