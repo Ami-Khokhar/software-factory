@@ -549,3 +549,21 @@ credential mount there leaves no root-owned parent. An agent may name another im
 `FACTORY_WORKERS`, with no factory change, and routing's failover can move between harnesses.
 Nothing is copied back from the sandbox, so a login that rotates its tokens should not be used
 there: Codex needs an API-key login.
+
+---
+
+## ADR-0029 — An issue chooses its worker with `Worker:` lines
+
+**Context.** The owner wants to choose the worker for a piece of work, as agent-relay allows, and
+not only through the order of `FACTORY_WORKERS`. agent-relay also registers agents that run on the
+host with no sandbox, so an issue's text must not be able to reach any relay agent.
+
+**Decision.** A `Worker: <relay agent id>` line in the issue chooses the worker; several lines give
+an order, and routing's failover stays within them. The lines are read from the issue on each
+tick, like `Depends on #n`, so editing the issue changes the choice and the WorkItem schema does not
+change. Only agents in `FACTORY_WORKERS` may be named: a name outside it sends the WorkItem to
+`human_waiting` with the allowed names, before any task is submitted. `factory new -w <id>` writes
+the line, and Day Desk writes it when the owner names a worker.
+
+**Consequence.** The owner, or Day Desk for them, picks the harness and model per issue.
+`FACTORY_WORKERS` stays the allowlist of sandboxed workers and the default order.

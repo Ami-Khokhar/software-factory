@@ -9,10 +9,11 @@ from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.routing import route
 from factory_mcp.store import Store
-from tests.fakes import FakeGitHub, FakeRelay, result_line
+from tests.fakes import ISSUE_BODY, FakeGitHub, FakeRelay, result_line
 
 REPO, ID = "o/r", "o/r#7"
 WORKERS = (("codex", "hosted"), ("pi-glm", "local"))
+THREE = WORKERS + (("opencode-glm", "local"),)
 ENV = dict(os.environ, GIT_AUTHOR_NAME="w", GIT_AUTHOR_EMAIL="w@x", GIT_COMMITTER_NAME="w",
            GIT_COMMITTER_EMAIL="w@x")
 
@@ -53,6 +54,13 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(route(WORKERS, False, {"codex", "pi-glm"}), "codex")
         self.assertIsNone(route((("codex", "hosted"),), True, set()))
 
+    def test_an_issue_that_names_workers_routes_only_to_them_in_its_order(self):
+        self.assertEqual(route(THREE, False, set(), ("opencode-glm", "pi-glm")), "opencode-glm")
+        self.assertEqual(route(THREE, False, {"opencode-glm"}, ("opencode-glm", "pi-glm")), "pi-glm")
+        self.assertEqual(route(THREE, False, {"opencode-glm", "pi-glm"}, ("opencode-glm", "pi-glm")),
+                         "opencode-glm")  # both failed: the first named again, never codex
+        self.assertIsNone(route(THREE, True, set(), ("codex",)))  # a local-only repo, a hosted choice
+
 
 class WorkerTest(unittest.TestCase):
     def setUp(self):
@@ -73,9 +81,9 @@ class WorkerTest(unittest.TestCase):
         with open(os.path.join(self.work, name), "w") as handle:
             handle.write(text)
 
-    def foreman(self, **config):
+    def foreman(self, body=ISSUE_BODY, **config):
         self.github, self.relay = GitBackedGitHub(self.bare), FakeRelay()
-        self.github.add_issue(REPO, 7)
+        self.github.add_issue(REPO, 7, body=body)
         config = Config(mcp_token="t", repos=frozenset({REPO}), git_url=self.bare, **config)
         foreman = Foreman(Store(":memory:"), self.github, config, self.relay)
         foreman.intake(REPO, 7)
@@ -118,6 +126,22 @@ class WorkerTest(unittest.TestCase):
         self.assertIn("patch not pushed: git apply failed", wi["attempts"][0])
         wi = foreman.tick(ID)["workItem"]
         self.assertEqual(self.relay.tasks[wi["providerTaskId"]]["agentId"], "pi-glm")
+
+    def test_an_issue_with_a_worker_line_goes_to_that_worker_and_fails_over_only_to_named_ones(self):
+        foreman = self.foreman(body=f"Worker: opencode-glm\nWorker: pi-glm\n\n{ISSUE_BODY}", workers=THREE)
+        wi = foreman.tick(ID)["workItem"]
+        self.assertEqual(self.relay.tasks[wi["providerTaskId"]]["agentId"], "opencode-glm")
+        self.relay.finish(wi["providerTaskId"], output="no Result")
+        foreman.tick(ID)  # the failed attempt
+        wi = foreman.tick(ID)["workItem"]  # the next pass: the second named worker, not codex
+        self.assertEqual(self.relay.tasks[wi["providerTaskId"]]["agentId"], "pi-glm")
+
+    def test_an_issue_that_names_an_agent_not_in_factory_workers_goes_to_a_person(self):
+        foreman = self.foreman(body=f"Worker: codex-unsandboxed\n\n{ISSUE_BODY}", workers=WORKERS)
+        wi = foreman.tick(ID)["workItem"]
+        self.assertEqual(wi["state"], "human_waiting")
+        self.assertIn("names codex-unsandboxed, which is not in FACTORY_WORKERS (codex, pi-glm)", wi["blockedOn"])
+        self.assertEqual(self.relay.tasks, {})
 
     def test_a_patch_to_a_protected_path_is_never_pushed(self):
         # A pushed workflow file runs (`on: push`) with the repo's secrets before any later check.

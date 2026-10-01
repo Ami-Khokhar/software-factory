@@ -47,6 +47,10 @@ last steps, and what it needs from you.
 - Make each check readable from the result: a test that must pass, a command that must print
   something, a file that must contain something. "Works well" is not a check.
 - Say what must not change. The worker reads the issue literally.
+- To choose the worker, add a `Worker: <relay agent id>` line (or `factory new ... -w <id>`).
+  Several lines give an order, and a failed attempt moves only to the next one named. The agent
+  must be in `FACTORY_WORKERS`; another name sends the issue to you. Without the line, the factory
+  uses `FACTORY_WORKERS` in order (ADR-0029).
 - Only you (`FACTORY_TRUSTED_AUTHORS`) can open issues the factory acts on. Issues from other
   people are skipped, even with the label.
 
@@ -54,7 +58,7 @@ last steps, and what it needs from you.
 
 | Command | What it does |
 |---|---|
-| `factory new <repo> <title> "<claim> \| <check>" ... [-d <text>]` | Opens a `factory:ready` issue |
+| `factory new <repo> <title> "<claim> \| <check>" ... [-d <text>] [-w <worker>]` | Opens a `factory:ready` issue; each `-w` adds a `Worker:` line |
 | `factory status [<repo#n>]` | What the factory is doing, and what it needs from you |
 | `factory retry\|regate\|close <repo#n> <note>` | Answers an escalation |
 | `factory add-repo <owner/repo>` | Makes a repo a factory target (it needs pr-gatekeeper) |

@@ -339,11 +339,13 @@ class Foreman:
             if wi["state"] != "ready" or wi.get("waitingOn"):
                 return wi
             # a retry says why the last attempt failed, or what a person said
-            return self.dispatch(wi, "implement", self._human_findings(wi) + self._attempt_findings(wi))
+            return self.dispatch(wi, "implement", self._human_findings(wi) + self._attempt_findings(wi),
+                                 facts["issue"]["workers"])
         if wi["state"] == "changes_requested":  # findings travel as data (ADR-0007)
             findings = [{key: f[key] for key in ("fingerprint", "path", "line", "problem")}
                         for f in (blocking(facts["verdicts"][-1]) if facts["verdicts"] else [])]
-            return self.dispatch(wi, "fix", findings + self._human_findings(wi) + self._attempt_findings(wi))
+            return self.dispatch(wi, "fix", findings + self._human_findings(wi) + self._attempt_findings(wi),
+                                 facts["issue"]["workers"])
         if wi["state"] == "dispatching":  # the intent was written, the relay call may not have landed
             return self.submit(wi, self._order(wi))
         if wi["state"] == "implementing":
@@ -421,7 +423,7 @@ class Foreman:
     def _default_branch(self, repo):
         return self.github.repository(repo)["default_branch"]
 
-    def dispatch(self, wi, kind, findings=()):
+    def dispatch(self, wi, kind, findings=(), named=()):
         # Workers of one repo share its checkout, so one pass runs per repo; the rest wait their turn.
         if any(other["repo"] == wi["repo"] and other["id"] != wi["id"] and other["state"] in WORKING
                for other in self.store.all()):
@@ -431,9 +433,16 @@ class Foreman:
             return self._write(wi, dict(wi, state="exhausted", terminalReason=(
                 f"{len(orders)} worker passes used; FACTORY_MAX_PASSES is {self.config.max_passes}")),
                 "exhausted")
+        allowed = [agent for agent, _ in self.config.workers]
+        unknown = [agent for agent in named if agent not in allowed]
+        if unknown:  # the relay also holds agents with no sandbox; an issue must not reach them
+            return self._write(wi, dict(wi, state="human_waiting", blockedOn=(
+                f"the issue's Worker: line names {', '.join(unknown)}, which is not in FACTORY_WORKERS "
+                f"({', '.join(allowed)}). Name one of those, or add the agent to FACTORY_WORKERS, then retry")),
+                "unknown_worker", workers=unknown)
         failed = {h["detail"].get("worker") for h in self.store.history(wi["id"])
                   if h["action"] == "attempt_failed"}
-        worker = routing.route(self.config.workers, self.config.local_only(wi["repo"]), failed)
+        worker = routing.route(self.config.workers, self.config.local_only(wi["repo"]), failed, named)
         if worker is None:
             return self._write(wi, dict(wi, state="human_waiting", blockedOn=(
                 f"{wi['repo']} is local-only and FACTORY_WORKERS has no local worker")), "no_worker")

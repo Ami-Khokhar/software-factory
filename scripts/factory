@@ -158,13 +158,17 @@ def cmd_report(_):
 
 def cmd_new(args):
     if len(args) < 3:
-        die('usage: factory new <owner/repo> <title> "<claim> | <check>" ... [-d <description>]')
+        die('usage: factory new <owner/repo> <title> "<claim> | <check>" ... [-d <description>] [-w <worker>]')
     repo, title, rest = args[0], args[1], args[2:]
-    description, bullets = title, []
+    description, bullets, workers = title, [], []
     while rest:
         item = rest.pop(0)
         if item == "-d":
             description = rest.pop(0) if rest else description
+        elif item == "-w":  # a relay agent in FACTORY_WORKERS; repeat for a failover order
+            if not rest:
+                die("-w needs a worker: a relay agent id from FACTORY_WORKERS")
+            workers.append(rest.pop(0))
         elif " | " in item:
             claim, check = item.split(" | ", 1)
             bullets.append(f"- {claim.strip()} — done when: {check.strip()}")
@@ -172,7 +176,8 @@ def cmd_new(args):
             die(f'an acceptance item needs "<claim> | <check>": {item}')
     if not bullets:
         die("give at least one acceptance item")
-    body = f"{description}\n\n## Acceptance\n" + "\n".join(bullets) + "\n"
+    chosen = "".join(f"Worker: {worker}\n" for worker in workers)
+    body = f"{description}\n\n" + (f"{chosen}\n" if chosen else "") + "## Acceptance\n" + "\n".join(bullets) + "\n"
     done = subprocess.run(["gh", "issue", "create", "-R", repo, "--title", title,
                            "--label", "factory:ready", "--body-file", "-"], input=body, text=True)
     sys.exit(done.returncode)
