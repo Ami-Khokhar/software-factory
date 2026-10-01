@@ -141,7 +141,7 @@ class ApproveIssueTest(unittest.TestCase):
                  ("a closed issue", REPO, 8, "o/r#8 is closed"),
                  ("no acceptance checks", REPO, 9, "needs an '## Acceptance' list"),
                  ("an issue that does not exist", REPO, 404, "o/r#404 does not exist"),
-                 ("a repo off the allowlist", "o/other", 7, "o/other is not in FACTORY_REPOS or repos.json")]
+                 ("an unlisted repo with no repos.json to enable it in", "o/other", 7, "FACTORY_REPOS_FILE is not set")]
         for case, repo, number, reason in cases:
             with self.subTest(case), self.assertRaisesRegex(ToolError, reason):
                 self.foreman.approve_issue(repo, number, "amteshwar")

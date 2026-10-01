@@ -30,7 +30,7 @@ FACTORY_MCP_TOKEN=<secret> FACTORY_REPOS=owner/repo FACTORY_GITHUB_TOKEN=<token>
 | Variable | Meaning |
 |---|---|
 | `FACTORY_MCP_TOKEN` | Required. The bearer token every client sends: Day Desk's `.env` and the `factory` command's secrets file hold it |
-| `FACTORY_REPOS` | Comma-separated repo allowlist |
+| `FACTORY_REPOS` | Comma-separated repos to enable at start. Other repos are enabled on first use (ADR-0027) |
 | `FACTORY_REPOS_FILE` | `repos.json`, the repos a factory tool enabled; they join the allowlist (ADR-0014). `factory serve` sets `~/.config/factory-mcp/repos.json` |
 | `FACTORY_LESSONS_FILE` | `lessons.json`, the lessons the owner approved from repeated gate findings (ADR-0020). `factory serve` sets `~/.config/factory-mcp/lessons.json` |
 | `FACTORY_GITHUB_TOKEN` | GitHub REST token (fine-grained: issues, pull requests, contents, secrets read and write) |
