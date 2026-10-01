@@ -3,7 +3,11 @@
 
 agent-relay starts this with the agent's args and the task input as the last argument:
 
-    runner.py [--image IMAGE] -- <harness argv...> <task input>
+    runner.py [--image IMAGE] [--credential HOST_FILE:CONTAINER_DIR ...] [--env KEY=VALUE ...]
+              -- <harness argv...> <task input>
+
+Any harness can run here: the relay agent names its command, the credential files it logs in with
+and the env it needs, and the runner knows none of them by name (#98).
 
 The relay task's cwd is the persistent checkout of the WorkOrder's repo. It is never mounted into a
 container: each pass gets a fresh copy of it, and only the copy is mounted. The harness runs in a
@@ -35,8 +39,6 @@ git merge-base --is-ancestor "$FACTORY_BASE" HEAD || exit 3
 git diff --binary "$FACTORY_BASE" HEAD
 """
 MAX_PATCH_BYTES = 2_000_000
-PI_AUTH = os.path.expanduser("~/.pi/agent/auth.json")
-CONTAINER_AGENT_DIR = "/home/node/.pi/agent"
 CONTAINER_HOME = "/tmp/factory-home"
 
 
@@ -141,8 +143,10 @@ class Sandbox:
     """`docker run` for one WorkOrder. Killed on SIGTERM, because the relay kills this process on a
     timeout or a cancel and a container outlives the docker CLI that started it."""
 
-    def __init__(self, image, agent_dir, label):
-        self.image, self.agent_dir, self.label = image, agent_dir, label
+    def __init__(self, image, label, credentials=(), harness_env=None):
+        """credentials: (scratch dir, container dir) pairs; they and harness_env reach the harness only."""
+        self.image, self.label = image, label
+        self.credentials, self.harness_env = list(credentials), dict(harness_env or {})
         self.names = []
         signal.signal(signal.SIGTERM, self._stop)
 
@@ -151,8 +155,9 @@ class Sandbox:
             subprocess.Popen(["docker", "kill", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         sys.exit(143)
 
-    def run(self, argv, seconds, mount, with_agent_dir=False, env=None):
-        """Returns (exit code, stdout, stderr). Only `mount` (and the agent dir, when asked) is visible."""
+    def run(self, argv, seconds, mount, harness=False, env=None):
+        """Returns (exit code, stdout, stderr). Only `mount` (and, for the harness, its credentials)
+        is visible."""
         name = f"factory-worker-{uuid.uuid4().hex[:12]}"
         self.names.append(name)
         cmd = ["docker", "run", "--rm", "--init", "--name", name, "--label", f"factory-worker={self.label}",
@@ -161,10 +166,12 @@ class Sandbox:
         # All phases modify or inspect the host-owned work copy. The scratch home is mode 1777
         # in the image, so this UID can also create tool state without using the host's HOME.
         cmd += ["--user", f"{os.getuid()}:{os.getgid()}", "-e", f"HOME={CONTAINER_HOME}"]
-        if with_agent_dir:
-            # The 0600 credential copy is in a 0700 scratch dir owned by the host user. Match
-            # that owner so the harness can read it inside the container.
-            cmd += ["-v", f"{self.agent_dir}:{CONTAINER_AGENT_DIR}", "-e", f"PI_CODING_AGENT_DIR={CONTAINER_AGENT_DIR}"]
+        if harness:
+            # Each 0600 credential copy is in a 0700 scratch dir owned by the host user, which the
+            # container runs as, so the harness can read it and write its own state next to it.
+            for scratch, target in self.credentials:
+                cmd += ["-v", f"{scratch}:{target}"]
+            env = dict(self.harness_env, **(env or {}))
         for key, value in (env or {}).items():
             cmd += ["-e", f"{key}={value}"]
         # `timeout` inside the container ends it on its own if this process is killed first.
@@ -197,9 +204,41 @@ def collect(sandbox, work, base, goal):
     return diff if diff.endswith("\n") else diff + "\n"
 
 
+def credential_copies(specs, scratch):
+    """Copy each HOST_FILE of `HOST_FILE:CONTAINER_DIR` into its own 0700 dir under `scratch`, as
+    0600. Returns (scratch dir, container dir) pairs. A missing file fails before any container."""
+    copies = []
+    for n, spec in enumerate(specs):
+        host, sep, target = spec.rpartition(":")
+        if not sep or not host or not target.startswith("/"):
+            raise WorkerError(f"--credential {spec!r} is not HOST_FILE:/container/dir")
+        host = os.path.expanduser(host)
+        if not os.path.isfile(host):
+            raise WorkerError(f"no model credential at {host}")
+        directory = os.path.join(scratch, f"credential-{n}")
+        os.mkdir(directory, 0o700)
+        copy = os.path.join(directory, os.path.basename(host))
+        shutil.copyfile(host, copy)
+        os.chmod(copy, 0o600)
+        copies.append((directory, target))
+    return copies
+
+
+def env_pairs(specs):
+    pairs = {}
+    for spec in specs:
+        key, sep, value = spec.partition("=")
+        if not sep or not key:
+            raise WorkerError(f"--env {spec!r} is not KEY=VALUE")
+        pairs[key] = value
+    return pairs
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--image", default=IMAGE)
+    parser.add_argument("--credential", action="append", default=[])
+    parser.add_argument("--env", action="append", default=[])
     parser.add_argument("rest", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     rest = args.rest[1:] if args.rest[:1] == ["--"] else args.rest
@@ -210,7 +249,7 @@ def main(argv=None):
     result = {"schemaVersion": "factory.result/v1", "workOrderId": None, "status": "failed",
               "evidence": [], "startedAt": now()}
     scratch = tempfile.mkdtemp(prefix="factory-run-")
-    agent_dir, work = os.path.join(scratch, "agent"), os.path.join(scratch, "work")
+    work = os.path.join(scratch, "work")
     try:
         order = workorder_from(text)
         result["workOrderId"] = order["id"]
@@ -222,16 +261,12 @@ def main(argv=None):
         verify = verify_command(cwd, base)
         if not verify:
             raise WorkerError("the base commit has no .github/pr-gatekeeper.json verify command")
-        if not os.path.isfile(PI_AUTH):
-            raise WorkerError(f"no model credential at {PI_AUTH}")
-        os.mkdir(agent_dir, 0o700)
-        credential = os.path.join(agent_dir, "auth.json")
-        shutil.copyfile(PI_AUTH, credential)
-        os.chmod(credential, 0o600)
+        credentials = credential_copies(args.credential, scratch)
+        harness_env = env_pairs(args.env)
         seconds = max(120, order["budget"]["wallMs"] // 1000 - 60)
         ensure_docker()
-        sandbox = Sandbox(args.image, agent_dir, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]))
-        code, out, err = sandbox.run([*harness, text], seconds * 0.7, work, with_agent_dir=True)
+        sandbox = Sandbox(args.image, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]), credentials, harness_env)
+        code, out, err = sandbox.run([*harness, text], seconds * 0.7, work, harness=True)
         print((out + err)[-4000:], flush=True)  # for the relay log; the Result line comes last
         if code == 124:
             raise WorkerError("the harness timed out")

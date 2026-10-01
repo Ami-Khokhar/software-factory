@@ -77,31 +77,30 @@ class RunnerTest(unittest.TestCase):
         (root / "harness.py").write_text(HARNESS)
         self.harness = root / "harness.py"
         self.marker = root / "ran-on-the-host"
-        auth = root / "auth.json"
-        auth.write_text('{"opencode-go": {"type": "api", "key": "k"}}')
+        self.auth = root / "auth.json"
+        self.auth.write_text('{"opencode-go": {"type": "api", "key": "k"}}')
+        self.flags = ["--credential", f"{self.auth}:/home/node/.pi/agent"]
         self.mounts = []
         self.harness_runs = []
 
-        def local_run(sandbox, argv, seconds, mount, with_agent_dir=False, env=None):
+        def local_run(sandbox, argv, seconds, mount, harness=False, env=None):
             """Sandbox.run without Docker: the same argv in the mounted directory, marked sandboxed."""
             self.mounts.append(mount)
-            if with_agent_dir:
-                credential = Path(sandbox.agent_dir) / "auth.json"
+            if harness:
                 self.harness_runs.append({
                     "argv": argv,
                     "seconds": seconds,
-                    "env": env,
-                    "agent_dir": sorted(os.listdir(sandbox.agent_dir)),
-                    "credential": credential.read_text(),
-                    "directory_mode": credential.parent.stat().st_mode & 0o777,
-                    "credential_mode": credential.stat().st_mode & 0o777,
+                    "env": dict(sandbox.harness_env, **(env or {})),
+                    "credentials": [{"target": target, "files": {
+                        name: ((Path(scratch) / name).read_text(), (Path(scratch) / name).stat().st_mode & 0o777)
+                        for name in os.listdir(scratch)}, "mode": Path(scratch).stat().st_mode & 0o777}
+                        for scratch, target in sandbox.credentials],
                 })
             done = subprocess.run(argv, cwd=mount, capture_output=True, text=True, timeout=60,
                                   env=dict(os.environ, **SANDBOX_ENV, **(env or {})))
             return done.returncode, done.stdout, done.stderr
 
-        patches = [mock.patch.object(runner, "PI_AUTH", str(auth)),
-                   mock.patch.object(runner.Sandbox, "run", local_run),
+        patches = [mock.patch.object(runner.Sandbox, "run", local_run),
                    mock.patch.object(runner, "ensure_docker", lambda: None),
                    mock.patch.dict(os.environ, {"FACTORY_TEST_MARKER": str(self.marker)})]
         for p in patches:
@@ -118,7 +117,7 @@ class RunnerTest(unittest.TestCase):
         os.chdir(self.checkout)
         try:
             with redirect_stdout(out):
-                runner.main(["--", sys.executable, str(self.harness), mode, text])
+                runner.main([*self.flags, "--", sys.executable, str(self.harness), mode, text])
         finally:
             os.chdir(cwd)
         return json.loads(out.getvalue().strip().splitlines()[-1]), order
@@ -139,16 +138,30 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(documents.check_result(result, order), [])
         self.assertEqual((self.apply_on(self.base, result["patch"]["diff"]) / "app.txt").read_text(), "fixed\n")
 
-    def test_harness_gets_a_private_copy_of_pis_login_and_its_budget(self):
+    def test_the_harness_gets_a_private_copy_of_each_credential_its_env_and_its_budget(self):
+        key = Path(self.tmp.name) / "codex.json"
+        key.write_text('{"OPENAI_API_KEY": "sk"}')
+        self.flags = ["--credential", f"{self.auth}:/home/node/.pi/agent",
+                      "--credential", f"{key}:/tmp/factory-home/.codex", "--env", "CODEX_HOME=/tmp/factory-home/.codex"]
         result, _ = self.run_order("fix")
         self.assertEqual(result["status"], "completed", result.get("error"))
         self.assertEqual(len(self.harness_runs), 1)
         run = self.harness_runs[0]
         self.assertEqual(run["argv"][:-1], [sys.executable, str(self.harness), "fix"])
         self.assertEqual(run["argv"][-1].splitlines()[0], "You are a factory worker. Carry out the WorkOrder below in this checkout of o/r.")
-        self.assertEqual((run["seconds"], run["env"]), (798, None))
-        self.assertEqual((run["agent_dir"], run["credential"], run["directory_mode"], run["credential_mode"]),
-                         (["auth.json"], '{"opencode-go": {"type": "api", "key": "k"}}', 0o700, 0o600))
+        self.assertEqual((run["seconds"], run["env"]), (798, {"CODEX_HOME": "/tmp/factory-home/.codex"}))
+        self.assertEqual(run["credentials"], [
+            {"target": "/home/node/.pi/agent", "mode": 0o700,
+             "files": {"auth.json": ('{"opencode-go": {"type": "api", "key": "k"}}', 0o600)}},
+            {"target": "/tmp/factory-home/.codex", "mode": 0o700,
+             "files": {"codex.json": ('{"OPENAI_API_KEY": "sk"}', 0o600)}}])
+
+    def test_a_missing_credential_fails_the_pass_with_its_path_before_any_container(self):
+        missing = Path(self.tmp.name) / "nowhere.json"
+        self.flags = ["--credential", f"{missing}:/home/node/.pi/agent"]
+        result, _ = self.run_order("fix")
+        self.assertEqual((result["status"], result["error"]), ("failed", f"no model credential at {missing}"))
+        self.assertEqual(self.mounts, [])
 
     def test_uncommitted_work_is_collected(self):
         result, _ = self.run_order("nocommit")
@@ -229,16 +242,16 @@ class SandboxTest(unittest.TestCase):
     def test_every_sandbox_command_uses_the_host_user_and_writable_home(self):
         with mock.patch.object(runner.subprocess, "run", return_value=SimpleNamespace(
                 returncode=0, stdout="", stderr="")) as run:
-            sandbox = runner.Sandbox("image", "/private/credentials", "label")
-            sandbox.run(["pi"], 10, "/private/work", with_agent_dir=True)
+            sandbox = runner.Sandbox("image", "label", [("/private/credential-0", "/home/node/.pi/agent")],
+                                     {"PI_CODING_AGENT_DIR": "/home/node/.pi/agent"})
+            sandbox.run(["pi"], 10, "/private/work", harness=True)
             sandbox.run(["sh", "-c", "git diff"], 10, "/private/work")
         harness, collect = (call.args[0] for call in run.call_args_list)
         for command in (harness, collect):
             self.assertIn("--user", command)
             self.assertIn(f"{os.getuid()}:{os.getgid()}", command)
             self.assertIn(f"HOME={runner.CONTAINER_HOME}", command)
-        for item in (f"/private/credentials:{runner.CONTAINER_AGENT_DIR}",
-                     f"PI_CODING_AGENT_DIR={runner.CONTAINER_AGENT_DIR}"):
+        for item in ("/private/credential-0:/home/node/.pi/agent", "PI_CODING_AGENT_DIR=/home/node/.pi/agent"):
             self.assertIn(item, harness)
             self.assertNotIn(item, collect)
 
