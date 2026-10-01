@@ -67,8 +67,8 @@ class UpdateTest(unittest.TestCase):
         cli.cmd_update([])  # nothing new: no restart
         self.assertEqual(len(self.restarts), 1)
 
-    def test_a_freebuff_adapter_update_rebuilds_the_worker_image(self):
-        self.commit("worker/freebuff.py", "# adapter update\n")
+    def test_a_dockerfile_update_rebuilds_the_worker_image(self):
+        self.commit("worker/Dockerfile", "FROM scratch\n")
         git(self.dev, "push", "-q", "origin", "HEAD:main")
         with mock.patch.object(cli, "run") as run:
             cli.cmd_update([])

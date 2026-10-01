@@ -41,7 +41,7 @@ if mode == "plant":  # a filter driver and hooks, which run wherever git touches
         open(path, "w").write("#!/bin/sh\n" + trap + "\n")
         os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
 if mode == "fail":
-    print("Freebuff could not prove completion", file=sys.stderr)
+    print("pi could not reach the model", file=sys.stderr)
     sys.exit(17)
 print("DONE")
 '''
@@ -78,7 +78,7 @@ class RunnerTest(unittest.TestCase):
         self.harness = root / "harness.py"
         self.marker = root / "ran-on-the-host"
         auth = root / "auth.json"
-        auth.write_text("{}")
+        auth.write_text('{"opencode-go": {"type": "api", "key": "k"}}')
         self.mounts = []
         self.harness_runs = []
 
@@ -86,13 +86,13 @@ class RunnerTest(unittest.TestCase):
             """Sandbox.run without Docker: the same argv in the mounted directory, marked sandboxed."""
             self.mounts.append(mount)
             if with_agent_dir:
-                credential = Path(sandbox.agent_dir) / "credentials.json"
+                credential = Path(sandbox.agent_dir) / "auth.json"
                 self.harness_runs.append({
                     "argv": argv,
                     "seconds": seconds,
                     "env": env,
+                    "agent_dir": sorted(os.listdir(sandbox.agent_dir)),
                     "credential": credential.read_text(),
-                    "settings": (credential.parent / "settings.json").read_text(),
                     "directory_mode": credential.parent.stat().st_mode & 0o777,
                     "credential_mode": credential.stat().st_mode & 0o777,
                 })
@@ -100,7 +100,7 @@ class RunnerTest(unittest.TestCase):
                                   env=dict(os.environ, **SANDBOX_ENV, **(env or {})))
             return done.returncode, done.stdout, done.stderr
 
-        patches = [mock.patch.object(runner, "FREEBUFF_CREDENTIALS", str(auth)),
+        patches = [mock.patch.object(runner, "PI_AUTH", str(auth)),
                    mock.patch.object(runner.Sandbox, "run", local_run),
                    mock.patch.object(runner, "ensure_docker", lambda: None),
                    mock.patch.dict(os.environ, {"FACTORY_TEST_MARKER": str(self.marker)})]
@@ -139,17 +139,16 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(documents.check_result(result, order), [])
         self.assertEqual((self.apply_on(self.base, result["patch"]["diff"]) / "app.txt").read_text(), "fixed\n")
 
-    def test_harness_gets_private_freebuff_credentials_forced_model_and_its_budget(self):
+    def test_harness_gets_a_private_copy_of_pis_login_and_its_budget(self):
         result, _ = self.run_order("fix")
         self.assertEqual(result["status"], "completed", result.get("error"))
         self.assertEqual(len(self.harness_runs), 1)
         run = self.harness_runs[0]
         self.assertEqual(run["argv"][:-1], [sys.executable, str(self.harness), "fix"])
         self.assertEqual(run["argv"][-1].splitlines()[0], "You are a factory worker. Carry out the WorkOrder below in this checkout of o/r.")
-        self.assertEqual(run["env"], {"FREEBUFF_TIMEOUT_SECONDS": "783"})
-        self.assertEqual((run["credential"], json.loads(run["settings"]), run["directory_mode"],
-                          run["credential_mode"]),
-                         ("{}", {"freebuffModel": "z-ai/glm-5.3-flash"}, 0o700, 0o600))
+        self.assertEqual((run["seconds"], run["env"]), (798, None))
+        self.assertEqual((run["agent_dir"], run["credential"], run["directory_mode"], run["credential_mode"]),
+                         (["auth.json"], '{"opencode-go": {"type": "api", "key": "k"}}', 0o700, 0o600))
 
     def test_uncommitted_work_is_collected(self):
         result, _ = self.run_order("nocommit")
@@ -164,7 +163,7 @@ class RunnerTest(unittest.TestCase):
     def test_a_failed_harness_fails_the_pass_before_collecting(self):
         result, _ = self.run_order("fail")
         self.assertEqual((result["status"], result["error"]),
-                         ("failed", "the harness exited 17: Freebuff could not prove completion"))
+                         ("failed", "the harness exited 17: pi could not reach the model"))
 
     def test_a_checkout_of_another_repo_is_refused(self):
         result, _ = self.run_order("fix", repo="o/other")
@@ -215,15 +214,17 @@ class SandboxTest(unittest.TestCase):
         with mock.patch.object(runner.subprocess, "run", return_value=SimpleNamespace(
                 returncode=0, stdout="", stderr="")) as run:
             sandbox = runner.Sandbox("image", "/private/credentials", "label")
-            sandbox.run(["freebuff"], 10, "/private/work", with_agent_dir=True)
+            sandbox.run(["pi"], 10, "/private/work", with_agent_dir=True)
             sandbox.run(["sh", "-c", "git diff"], 10, "/private/work")
         harness, collect = (call.args[0] for call in run.call_args_list)
         for command in (harness, collect):
             self.assertIn("--user", command)
             self.assertIn(f"{os.getuid()}:{os.getgid()}", command)
             self.assertIn(f"HOME={runner.CONTAINER_HOME}", command)
-        self.assertIn(f"/private/credentials:{runner.CONTAINER_CONFIG_DIR}", harness)
-        self.assertNotIn(f"/private/credentials:{runner.CONTAINER_CONFIG_DIR}", collect)
+        for item in (f"/private/credentials:{runner.CONTAINER_AGENT_DIR}",
+                     f"PI_CODING_AGENT_DIR={runner.CONTAINER_AGENT_DIR}"):
+            self.assertIn(item, harness)
+            self.assertNotIn(item, collect)
 
 
 class EnsureDockerTest(unittest.TestCase):

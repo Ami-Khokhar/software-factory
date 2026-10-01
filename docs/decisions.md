@@ -254,6 +254,8 @@ AGENTS.md is a protected path, so a person merges each copy.
 
 ## ADR-0016 — Freebuff is the factory's coding worker
 
+**Superseded by ADR-0026.**
+
 **Context.** The owner wants GLM 5.3 Flash through Freebuff for worker passes. Freebuff 0.0.203
 has a terminal UI but no noninteractive task/result command, while agent-relay needs a bounded
 command and the factory needs a trustworthy Result.
@@ -501,3 +503,25 @@ nothing changes.
 an issue for the factory. Escalations logged before this change have no recorded reason and count
 as "reason not recorded". The schedule is set up once on the owner's machine (RUNBOOK); a deploy
 does not install it.
+
+---
+
+## ADR-0026 — pi, headless, is the factory's coding worker
+
+Supersedes ADR-0016.
+
+**Context.** Freebuff has no headless mode, so `worker/freebuff.py` drove its terminal UI and
+accepted a pass only when Freebuff's session log recorded `Main prompt finished`. On agent-relay#43
+it never did, and the pass timed out with no work handed back. A worker that needs its UI scraped
+cannot run day to day without a person. pi runs the same model, GLM 5.3 Flash through OpenCode Go,
+with `pi --print`, which exits when the prompt is done.
+
+**Decision.** The relay agent `pi-glm-factory` runs `worker/runner.py` with `pi --print` and the
+model in its args. The runner copies only `~/.pi/agent/auth.json` into a 0700 scratch directory,
+mounts it in the container, and points `PI_CODING_AGENT_DIR` at it. The image pins pi and sets
+`PYTHONDONTWRITEBYTECODE`, because the runner commits everything the harness leaves, and a test run
+would otherwise leave `__pycache__` in the patch. The Freebuff adapter is deleted.
+
+**Consequence.** A pass ends on the harness's exit code, not on a log line in a UI, and a non-zero
+exit fails it before any patch is collected. The model key is the owner's OpenCode Go key. The
+sandbox, the patch handoff and the base-commit verify are unchanged.
