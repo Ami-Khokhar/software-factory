@@ -59,6 +59,9 @@ standard in the repo's AGENTS.md ask:
   Those paths need a person, and factory_start_plan refuses a plan that names them.
 - Put the issues in the order they must run: each one can build on the ones before it. A plan
   has at most 10 issues.
+- When the owner names a worker, put a `Worker: <relay agent id>` line in each issue body it
+  is for, before `## Acceptance`; several lines give an order. Use only an agent the owner named.
+  If the agent is not in FACTORY_WORKERS, the issue waits for the owner with that reason.
 
 Show the owner the whole plan in chat: each issue in order, with its title and acceptance. Then
 call factory_start_plan once, with the repo, all the issues in order as `title` and `body`, and

@@ -117,6 +117,7 @@ The states are the enum in `schemas/workitem.schema.json`.
 | `issued`, `planned` | the issue gains `factory:ready` | `ready` |
 | `ready` | the tick dispatches an implement WorkOrder, once each `Depends on #n` issue is closed with a merged PR on `factory/<n>` | `dispatching`, then `implementing` once the relay accepts |
 | `ready` | a `Depends on #n` issue is open | `ready` with `waitingOn: n`; nothing is dispatched |
+| `ready`, `changes_requested` | a `Worker:` line names an agent that is not in `FACTORY_WORKERS` | `human_waiting`; nothing is dispatched |
 | `ready` | a `Depends on #n` issue closed without a merged PR, ended `cancelled` or `exhausted`, or does not exist | `human_waiting` |
 | `implementing` | the task completed, the Result is valid and the guards pass | `pr_open`, or `reviewing` when the PR already exists |
 | `implementing` | the task failed, or the Result or a guard failed | back to `ready` (`changes_requested` for a fix) with an `attempts` entry; `blocked` after 2 |

@@ -30,6 +30,22 @@ def git(cwd, *args):
                           text=True).stdout.strip()
 
 
+class NewIssueTest(unittest.TestCase):
+    def new(self, *args):
+        with mock.patch.object(cli.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run, \
+                self.assertRaises(SystemExit):
+            cli.cmd_new(["o/r", "Greet by name", "greet says hello | test_greet passes", *args])
+        return run.call_args.kwargs["input"]
+
+    def test_each_w_names_a_worker_in_a_worker_line_in_order(self):
+        self.assertEqual(self.new("-w", "opencode-glm-factory", "-w", "pi-glm-factory"),
+                         "Greet by name\n\nWorker: opencode-glm-factory\nWorker: pi-glm-factory\n\n"
+                         "## Acceptance\n- greet says hello — done when: test_greet passes\n")
+
+    def test_without_w_the_issue_has_no_worker_line(self):
+        self.assertEqual(self.new(), "Greet by name\n\n## Acceptance\n- greet says hello — done when: test_greet passes\n")
+
+
 class UpdateTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()

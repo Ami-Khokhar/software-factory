@@ -525,3 +525,21 @@ would otherwise leave `__pycache__` in the patch. The Freebuff adapter is delete
 **Consequence.** A pass ends on the harness's exit code, not on a log line in a UI, and a non-zero
 exit fails it before any patch is collected. The model key is the owner's OpenCode Go key. The
 sandbox, the patch handoff and the base-commit verify are unchanged.
+
+---
+
+## ADR-0029 — An issue chooses its worker with `Worker:` lines
+
+**Context.** The owner wants to choose the worker for a piece of work, as agent-relay allows, and
+not only through the order of `FACTORY_WORKERS`. agent-relay also registers agents that run on the
+host with no sandbox, so an issue's text must not be able to reach any relay agent.
+
+**Decision.** A `Worker: <relay agent id>` line in the issue chooses the worker; several lines give
+an order, and routing's failover stays within them. The lines are read from the issue on each
+tick, like `Depends on #n`, so editing the issue changes the choice and the WorkItem schema does not
+change. Only agents in `FACTORY_WORKERS` may be named: a name outside it sends the WorkItem to
+`human_waiting` with the allowed names, before any task is submitted. `factory new -w <id>` writes
+the line, and Day Desk writes it when the owner names a worker.
+
+**Consequence.** The owner, or Day Desk for them, picks the harness and model per issue.
+`FACTORY_WORKERS` stays the allowlist of sandboxed workers and the default order.
