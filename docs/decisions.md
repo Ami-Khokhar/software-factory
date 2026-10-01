@@ -508,6 +508,8 @@ does not install it.
 
 ## ADR-0026 — pi, headless, is the factory's coding worker
 
+**Amended by ADR-0028**: pi is one worker among any the relay registers.
+
 Supersedes ADR-0016.
 
 **Context.** Freebuff has no headless mode, so `worker/freebuff.py` drove its terminal UI and
@@ -525,6 +527,28 @@ would otherwise leave `__pycache__` in the patch. The Freebuff adapter is delete
 **Consequence.** A pass ends on the harness's exit code, not on a log line in a UI, and a non-zero
 exit fails it before any patch is collected. The model key is the owner's OpenCode Go key. The
 sandbox, the patch handoff and the base-commit verify are unchanged.
+
+---
+
+## ADR-0028 — The relay agent, not the runner, chooses the harness
+
+Amends ADR-0026.
+
+**Context.** agent-relay exists so that any registered agent can take a task, and the owner wants
+the worker tied to no model or harness. After ADR-0026, `worker/runner.py` copied only pi's login
+and the image held only pi, so an agent that ran Codex or OpenCode through the runner could not
+log in.
+
+**Decision.** The runner takes `--credential HOST_FILE:CONTAINER_DIR` and `--env KEY=VALUE` from its
+relay agent's args. Each credential is a 0600 copy in its own 0700 scratch directory, mounted in the
+harness container only; the env reaches only the harness. The runner names no harness. The image
+pins pi, Codex and OpenCode, and creates the scratch HOME's XDG directories writable by any UID, so a
+credential mount there leaves no root-owned parent. An agent may name another image with `--image`.
+
+**Consequence.** Adding a worker is an agent definition in the relay and an entry in
+`FACTORY_WORKERS`, with no factory change, and routing's failover can move between harnesses.
+Nothing is copied back from the sandbox, so a login that rotates its tokens should not be used
+there: Codex needs an API-key login.
 
 ---
 

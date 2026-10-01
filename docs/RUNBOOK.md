@@ -71,7 +71,7 @@ last steps, and what it needs from you.
 
 | Part | It can | It cannot |
 |---|---|---|
-| Worker (pi, GLM 5.3 Flash) | Edit and commit in a throwaway container that holds a fresh copy of one repo and a copy of pi's login credential | Push, open PRs, read your files, or use your GitHub account: it has no GitHub credential, and its copy has no remote |
+| Worker (any relay agent: pi, Codex, OpenCode, ...) | Edit and commit in a throwaway container that holds a fresh copy of one repo and a copy of its harness's login files | Push, open PRs, read your files, or use your GitHub account: it has no GitHub credential, and its copy has no remote |
 | worker/runner.py | Run the repo's gate `verify` command from the base commit, in the same sandbox | Accept a patch whose tests fail |
 | factory-mcp | Push `factory/<issue>` and open the PR. It refuses a patch that touches a protected path (`.github/`, `AGENTS.md`) before the push, then checks the pushed branch and the size limits | Merge. There is no merge tool |
 | pr-gatekeeper | Review and merge, or ask for changes, or send the PR to a person (HUMAN) | Be bypassed by the factory: a HUMAN verdict waits for you |
@@ -90,23 +90,36 @@ What the design does not protect against:
 - **An unprotected `main`.** Nothing in the factory pushes to `main`, but branch protection is the
   independent backstop (ADR-0008). Turn it on where your plan allows it.
 
-## pi worker
+## Workers
 
-Run `pi` once on the owner machine and log in to OpenCode Go (`/login`). The worker runner copies
-only `~/.pi/agent/auth.json` into each disposable container and points `PI_CODING_AGENT_DIR` at
-that copy; it never mounts the host's pi sessions, settings or GitHub credential. The model comes
-from the agent's args below, not from the host's pi default. The harness, patch collection, and
-verification run as the same host UID with a writable container-only HOME. Build the image with
-`docker build -t factory-worker:latest worker/`. The image pins pi 0.87.1. Later, `factory update`
-rebuilds the image when `worker/Dockerfile` changes. In `~/.config/agent-relay/agents.json`,
-register a command agent like this (replace the two host paths):
+Any agent registered in agent-relay can be a factory worker. Each one runs `worker/runner.py`,
+which gives its harness a sandbox and holds no harness name (ADR-0028). The agent's args say
+which harness runs, with which model, and what it logs in with:
+
+- `--credential HOST_FILE:CONTAINER_DIR` copies one login file into a fresh 0700 directory, mounts
+  it at `CONTAINER_DIR` in the harness container only, and fails the pass when the file is missing.
+  Repeat it for each file. The runner never copies a file back, so a harness that rotates its
+  login in the sandbox leaves the host's copy as it was.
+- `--env KEY=VALUE` sets env in the harness container only.
+- `--image IMAGE` picks another image; the default `factory-worker:latest` has pinned pi, Codex
+  and OpenCode.
+
+The harness, patch collection, and verification run as the same host UID with a writable
+container-only HOME (`/tmp/factory-home`). Build the image with
+`docker build -t factory-worker:latest worker/`; `factory update` rebuilds it when
+`worker/Dockerfile` changes. Register each worker in `~/.config/agent-relay/agents.json`
+(replace the host paths), list it in `FACTORY_WORKERS` (preferred first, `:local` or `:hosted`),
+restart factory-mcp, and reload agent-relay's registry if it is already running. Two that passed a
+live pass on 2026-10-01, both GLM 5.3 Flash through OpenCode Go:
 
 ```json
 {
   "id": "pi-glm-factory",
   "name": "pi (GLM 5.3 Flash), sandboxed factory worker",
   "command": "python3",
-  "args": ["/absolute/path/to/software-factory/worker/runner.py", "--",
+  "args": ["/absolute/path/to/software-factory/worker/runner.py",
+           "--credential", "/Users/you/.pi/agent/auth.json:/home/node/.pi/agent",
+           "--env", "PI_CODING_AGENT_DIR=/home/node/.pi/agent", "--",
            "pi", "--print", "--provider", "opencode-go", "--model", "glm-5.3-flash",
            "--models", "opencode-go/glm-5.3-flash"],
   "cwd": "/absolute/path/to/factory-work",
@@ -116,11 +129,20 @@ register a command agent like this (replace the two host paths):
 }
 ```
 
-Set `FACTORY_WORKERS=pi-glm-factory:local` in `~/.config/factory-mcp/env` and restart
-factory-mcp; reload agent-relay's registry if it is already running. `pi --print` exits when the
-prompt is done; a non-zero exit fails the pass, and the WorkItem follows the usual retry/block
-path. The runner still requires a patch and passes the repo's base-commit `verify` command before
-factory-mcp pushes anything.
+For OpenCode, the same with `"id": "opencode-glm-factory"` and these args:
+
+```json
+["/absolute/path/to/software-factory/worker/runner.py",
+ "--credential", "/Users/you/.local/share/opencode/auth.json:/tmp/factory-home/.local/share/opencode", "--",
+ "opencode", "run", "--model", "opencode-go/glm-5.3-flash"]
+```
+
+For Codex, log it in with an API key (`codex login --with-api-key`), not a ChatGPT login: a
+ChatGPT login refreshes its tokens, and a refresh in the sandbox can leave the host's copy stale.
+Use `--credential ~/.codex/auth.json:/tmp/factory-home/.codex`, `--env CODEX_HOME=/tmp/factory-home/.codex`
+and `codex exec --skip-git-repo-check`. A harness ends a pass with its exit code; a non-zero exit
+fails it, and the WorkItem follows the usual retry/block path. The runner still requires a patch
+and passes the repo's base-commit `verify` command before factory-mcp pushes anything.
 
 ## Adding a repo
 
@@ -196,7 +218,7 @@ nothing from you. `factory start` checks all three.
 | WorkItem store and audit log | `~/.local/state/factory-mcp/factory.sqlite3` |
 | Logs | `~/.local/state/factory-mcp/server.log`, `~/.local/state/agent-relay/relay.log` |
 | Worker checkouts | `$FACTORY_CHECKOUT_ROOT/<owner>/<repo>` |
-| Worker definition | `pi-glm-factory` in `~/.config/agent-relay/agents.json` |
+| Worker definitions | The agents in `FACTORY_WORKERS`, in `~/.config/agent-relay/agents.json` |
 | launchd services | `com.agent-relay`, `com.software-factory.factory-mcp` in `~/Library/LaunchAgents` |
 
 To deploy a new version, run `factory update`. It fast-forwards the deployed checkout (and moves

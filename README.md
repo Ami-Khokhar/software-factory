@@ -6,8 +6,8 @@ it to a reviewed, merged pull request, and asks the person only when it is stuck
 - **Front door:** Day Desk, one Hermes agent in Telegram ([`tenant/hermes/`](tenant/hermes/)), and
   the `factory` command. Day Desk can prepare a one-time repo setup PR for your merge.
 - **Foreman:** factory-mcp, in this repo. It owns every WorkItem's state and makes every decision.
-- **Workers:** [agent-relay](https://github.com/Ami-Khokhar/agent-relay) runs pi with GLM 5.3 Flash,
-  headless, in a Docker sandbox ([`worker/`](worker/)).
+- **Workers:** [agent-relay](https://github.com/Ami-Khokhar/agent-relay) runs any registered harness
+  (pi, Codex, OpenCode, ...) headless, in a Docker sandbox ([`worker/`](worker/)).
 - **Gate and merge authority:** pr-gatekeeper.
 - **Source of truth:** GitHub.
 
