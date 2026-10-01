@@ -217,6 +217,8 @@ passes, and #37 then retires it.
 
 ## ADR-0014 — The allowlist is `FACTORY_REPOS` plus `repos.json`
 
+**Superseded by ADR-0027** for how a repo joins. `repos.json` still records it.
+
 **Context.** The allowlist lived only in `FACTORY_REPOS`, and `factory add-repo` edited the env
 file and restarted factory-mcp. A tool that enables a repo from chat cannot restart the process
 that serves it, and an allowlist the factory extends itself should be a file a person can read.
@@ -531,6 +533,31 @@ sandbox, the patch handoff and the base-commit verify are unchanged.
 
 ---
 
+## ADR-0027 — A repo joins the factory on first use
+
+Supersedes ADR-0014 for how a repo joins the allowlist.
+
+**Context.** The owner wants the factory to work on any of their repos, not only the ones listed
+ahead of time. An issue labelled `factory:ready` in a repo that was not listed was ignored without
+a word, and Day Desk's tools refused such a repo until the owner ran `factory add-repo`. The
+factory's token already reaches all the owner's repos.
+
+**Decision.** Each rebuild runs one GitHub issue search per trusted author (`FACTORY_TRUSTED_AUTHORS`,
+or `FACTORY_OWNER` when that is empty) for their open `factory:ready` issues in any repo. A repo
+that is not listed is enabled through the same path as `factory_add_repo`: the repo check, the
+worker checkout, the labels and an entry in `repos.json` that names who marked which issue. If the
+check fails, the issue gets one comment with the failed checks and their fixes, recorded in the
+audit log as `repo_not_ready`, and the next rebuild tries again. `factory_approve_issue`,
+`factory_propose_issue` and `factory_start_plan` enable a repo the same way. Lessons stay limited
+to listed repos.
+
+**Consequence.** Only trusted authors' issues are searched, and a worker still never touches a repo
+without the gate and the factory standard. `repos.json` remains the readable record of every repo
+the factory enabled. A failing search is logged once per process and does not stop the tick. The
+search API's index can lag behind a new label by a minute or so.
+
+---
+
 ## ADR-0028 — The relay agent, not the runner, chooses the harness
 
 Amends ADR-0026.
@@ -550,6 +577,24 @@ credential mount there leaves no root-owned parent. An agent may name another im
 `FACTORY_WORKERS`, with no factory change, and routing's failover can move between harnesses.
 Nothing is copied back from the sandbox, so a login that rotates its tokens should not be used
 there: Codex needs an API-key login.
+
+---
+
+## ADR-0029 — An issue chooses its worker with `Worker:` lines
+
+**Context.** The owner wants to choose the worker for a piece of work, as agent-relay allows, and
+not only through the order of `FACTORY_WORKERS`. agent-relay also registers agents that run on the
+host with no sandbox, so an issue's text must not be able to reach any relay agent.
+
+**Decision.** A `Worker: <relay agent id>` line in the issue chooses the worker; several lines give
+an order, and routing's failover stays within them. The lines are read from the issue on each
+tick, like `Depends on #n`, so editing the issue changes the choice and the WorkItem schema does not
+change. Only agents in `FACTORY_WORKERS` may be named: a name outside it sends the WorkItem to
+`human_waiting` with the allowed names, before any task is submitted. `factory new -w <id>` writes
+the line, and Day Desk writes it when the owner names a worker.
+
+**Consequence.** The owner, or Day Desk for them, picks the harness and model per issue.
+`FACTORY_WORKERS` stays the allowlist of sandboxed workers and the default order.
 
 ---
 

@@ -22,6 +22,11 @@ class Api(BaseHTTPRequestHandler):
             page = 2 if "page=2" in self.path else 1
             body, link = ([{"id": page}], f'<{base}/repos/o/r/issues/5/comments?page=2>; rel="next"'
                           if page == 1 else "")
+        elif self.path.startswith("/search/issues?"):
+            page = 2 if "page=2" in self.path else 1
+            item = {"number": page, "repository_url": f"https://api.github.com/repos/o/r{page}"}
+            body, link = ({"total_count": 2, "items": [item]},
+                          f'<{base}/search/issues?q=x&page=2>; rel="next"' if page == 1 else "")
         elif self.path == "/repos/o/r/contents/.github/pr-gatekeeper.json":
             text = base64.encodebytes(b'{"verify": "make test"}').decode()  # GitHub wraps it in lines
             body, link = {"type": "file", "encoding": "base64", "content": text}, ""
@@ -81,6 +86,12 @@ class GitHubClientTest(unittest.TestCase):
         self.assertEqual(len(Api.seen), 2)
         self.assertTrue(all(auth == "Bearer tok" for _, auth in Api.seen))
         self.assertIn("per_page=100", Api.seen[0][0])
+
+    def test_issues_by_an_author_and_label_come_from_every_repo_with_their_repo_named(self):
+        found = self.github.labelled_issues_by("amteshwar", "factory:ready")
+        self.assertEqual([(i["repo"], i["number"]) for i in found], [("o/r1", 1), ("o/r2", 2)])
+        self.assertEqual(Api.seen[0][0], "/search/issues?q=is%3Aissue+is%3Aopen+label%3A%22factory%3Aready%22"
+                                         "+author%3Aamteshwar&per_page=100")
 
     def test_a_file_is_its_decoded_text_or_none(self):
         self.assertEqual(self.github.file("o/r", ".github/pr-gatekeeper.json"), '{"verify": "make test"}')

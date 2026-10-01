@@ -49,6 +49,12 @@ class GitHub:
         return [i for i in self._get_all(f"/repos/{repo}/issues", labels=label, state="open")
                 if "pull_request" not in i]
 
+    def labelled_issues_by(self, author, label):
+        """Open issues labelled `label` that `author` opened, in any repo the token can see. Each
+        carries its `repo`, which the search API gives only as a URL."""
+        items = self._get_all("/search/issues", key="items", q=f'is:issue is:open label:"{label}" author:{author}')
+        return [dict(i, repo=i["repository_url"].split("/repos/", 1)[1]) for i in items]
+
     def pulls_for_branch(self, repo, branch):
         owner = repo.split("/")[0]
         return self._get_all(f"/repos/{repo}/pulls", head=f"{owner}:{branch}", state="all")

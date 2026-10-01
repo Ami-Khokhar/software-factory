@@ -47,6 +47,10 @@ last steps, and what it needs from you.
 - Make each check readable from the result: a test that must pass, a command that must print
   something, a file that must contain something. "Works well" is not a check.
 - Say what must not change. The worker reads the issue literally.
+- To choose the worker, add a `Worker: <relay agent id>` line (or `factory new ... -w <id>`).
+  Several lines give an order, and a failed attempt moves only to the next one named. The agent
+  must be in `FACTORY_WORKERS`; another name sends the issue to you. Without the line, the factory
+  uses `FACTORY_WORKERS` in order (ADR-0029).
 - Only you (`FACTORY_TRUSTED_AUTHORS`) can open issues the factory acts on. Issues from other
   people are skipped, even with the label.
 
@@ -54,7 +58,7 @@ last steps, and what it needs from you.
 
 | Command | What it does |
 |---|---|
-| `factory new <repo> <title> "<claim> \| <check>" ... [-d <text>]` | Opens a `factory:ready` issue |
+| `factory new <repo> <title> "<claim> \| <check>" ... [-d <text>] [-w <worker>]` | Opens a `factory:ready` issue; each `-w` adds a `Worker:` line |
 | `factory status [<repo#n>]` | What the factory is doing, and what it needs from you |
 | `factory retry\|regate\|close <repo#n> <note>` | Answers an escalation |
 | `factory add-repo <owner/repo>` | Makes a repo a factory target (it needs pr-gatekeeper) |
@@ -103,7 +107,9 @@ which harness runs, with which model, and what it logs in with:
 The harness, patch collection, and verification run as the same host UID with a writable
 container-only HOME (`/tmp/factory-home`). Build the image with
 `docker build -t factory-worker:latest worker/`; `factory update` rebuilds it when
-`worker/Dockerfile` changes. Register each worker in `~/.config/agent-relay/agents.json`
+`worker/Dockerfile` changes. An agent registered before #98 must add its `--credential` and
+`--env` flags: without them the runner mounts no login and the harness fails on its first call.
+Register each worker in `~/.config/agent-relay/agents.json`
 (replace the host paths), list it in `FACTORY_WORKERS` (preferred first, `:local` or `:hosted`),
 restart factory-mcp, and reload agent-relay's registry if it is already running. Two that passed a
 live pass on 2026-10-01, both GLM 5.3 Flash through OpenCode Go:
@@ -175,8 +181,15 @@ Actions secrets (a fine-grained token needs the "Secrets" permission, a classic 
 scope). When `gh secret list` fails, its status ends with gh's first error line, tokens removed; a
 403 or "Resource not accessible" there means `FACTORY_GITHUB_TOKEN` lacks that permission.
 
-Ask Day Desk to check and enable the repo after the merge. It will not start a worker for a repo
-whose controls are still missing. Existing valid gate files are preserved, and a conflicting
+After the merge you need not enable the repo by hand: the first issue a trusted author
+(`FACTORY_TRUSTED_AUTHORS`, or `FACTORY_OWNER` when that is empty; with neither, the factory searches
+for no one and logs `discover_skipped`) marks
+`factory:ready` there enables it (ADR-0027). So does the first plan, proposal or approval Day Desk
+makes there, which is the easy way into a repo that has no factory labels yet; `factory new` needs
+the label to exist. The factory checks the repo first and writes it to `repos.json` with who
+enabled it. If the repo fails the check, the factory comments once on the issue with the failed
+checks and their fixes, and takes the issue on its own once the repo passes. It never starts a
+worker for a repo whose controls are still missing. Existing valid gate files are preserved, and a conflicting
 standard or invalid gate config needs a person to fix it.
 
 ```bash

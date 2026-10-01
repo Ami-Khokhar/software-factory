@@ -90,7 +90,10 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 
 A tick comes from the background loop or from `factory_tick`.
 
-1. **Rebuild.** Every open `factory:ready` issue in an allowlisted repo that the store does not
+1. **Rebuild.** First, for each trusted author, one GitHub search for their open `factory:ready`
+   issues in any repo; a repo not listed yet is enabled when it passes the repo check, and an issue
+   in one that fails gets one comment with the fixes (ADR-0027). Then every open `factory:ready`
+   issue in an allowlisted repo that the store does not
    know is taken in, so a lost store fills again from GitHub.
 2. **Each live WorkItem** whose repo is allowlisted (#38): take its lease or skip it; observe
    GitHub (the issue, the PR on `factory/<issue>`, the gate's verdicts and check run); reconcile the
@@ -119,6 +122,7 @@ The states are the enum in `schemas/workitem.schema.json`.
 | `issued`, `planned` | the issue gains `factory:ready` | `ready` |
 | `ready` | the tick dispatches an implement WorkOrder, once each `Depends on #n` issue is closed with a merged PR on `factory/<n>` | `dispatching`, then `implementing` once the relay accepts |
 | `ready` | a `Depends on #n` issue is open | `ready` with `waitingOn: n`; nothing is dispatched |
+| `ready`, `changes_requested` | a `Worker:` line names an agent that is not in `FACTORY_WORKERS` | `human_waiting`; nothing is dispatched |
 | `ready` | a `Depends on #n` issue closed without a merged PR, ended `cancelled` or `exhausted`, or does not exist | `human_waiting` |
 | `implementing` | the task completed, the Result is valid and the guards pass | `pr_open`, or `reviewing` when the PR already exists |
 | `implementing` | the task failed, or the Result or a guard failed | back to `ready` (`changes_requested` for a fix) with an `attempts` entry; `blocked` after 2 |

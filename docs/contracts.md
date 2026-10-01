@@ -76,6 +76,9 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   dispatched. The Foreman sets it to null when the wait ends. WorkItems stored
   before this field have no `waitingOn`; readers treat that as null, so the
   store needs no migration.
+- **An issue's `Worker: <id>` lines choose its worker (ADR-0029).** They are read
+  from the issue on each tick, like `Depends on #n`, and are not stored in the
+  WorkItem. `WorkItem.worker` still records the agent of the current pass.
 - **Unknown properties are rejected** (`additionalProperties: false`) so a cell
   cannot smuggle vendor-specific fields across a boundary.
 

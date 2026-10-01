@@ -219,6 +219,25 @@ class RunnerTest(unittest.TestCase):
         packs = list((self.checkout / ".git" / "objects" / "pack").glob("*.pack"))
         self.assertEqual(len(packs), 1, "the repack was still running when the fetch returned")
 
+    def test_git_settings_the_environment_already_has_are_kept_beside_foreground_maintenance(self):
+        env = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "user.factorytest", "GIT_CONFIG_VALUE_0": "kept"}
+        with mock.patch.dict(os.environ, env):
+            self.assertEqual(runner.git(str(self.checkout), "config", "--get", "user.factorytest"), "kept")
+            self.assertEqual(runner.git(str(self.checkout), "config", "--get", "maintenance.autoDetach"), "false")
+
+    def test_a_git_command_that_times_out_is_named(self):
+        with mock.patch.object(runner.subprocess, "run", side_effect=subprocess.TimeoutExpired(["git"], 900)), \
+                self.assertRaisesRegex(runner.WorkerError, r"^git fetch timed out after 900s$"):
+            runner.git(str(self.checkout), "fetch", "-q", "origin", timeout=900)
+
+    def test_a_malformed_credential_or_env_fails_the_pass_before_any_container(self):
+        for flags, error in ((["--credential", "/tmp/nowhere"], "--credential '/tmp/nowhere' is not HOST_FILE:/container/dir"),
+                             (["--env", "NOEQUALS"], "--env 'NOEQUALS' is not KEY=VALUE")):
+            with self.subTest(error):
+                self.flags, self.mounts = flags, []
+                result, _ = self.run_order("fix")
+                self.assertEqual((result["status"], result["error"], self.mounts), ("failed", error, []))
+
     def test_the_harness_gets_a_copy_and_never_the_checkout(self):
         before = (sh(self.checkout, "rev-parse", "HEAD"), (self.checkout / ".git" / "config").read_text())
         result, _ = self.run_order("plant")

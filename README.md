@@ -31,7 +31,7 @@ FACTORY_MCP_TOKEN=<secret> FACTORY_REPOS=owner/repo FACTORY_GITHUB_TOKEN=<token>
 |---|---|
 | `FACTORY_MCP_TOKEN` | Required. The owner's bearer token: the `factory` command and Day Desk's owner-only tools send it |
 | `FACTORY_AGENT_TOKEN` | Day Desk's driving token (ADR-0030); with it, factory-mcp lists only the driving tools. Must differ from `FACTORY_MCP_TOKEN` |
-| `FACTORY_REPOS` | Comma-separated repo allowlist |
+| `FACTORY_REPOS` | Comma-separated repos to enable at start. Other repos are enabled on first use (ADR-0027) |
 | `FACTORY_REPOS_FILE` | `repos.json`, the repos a factory tool enabled; they join the allowlist (ADR-0014). `factory serve` sets `~/.config/factory-mcp/repos.json` |
 | `FACTORY_LESSONS_FILE` | `lessons.json`, the lessons the owner approved from repeated gate findings (ADR-0020). `factory serve` sets `~/.config/factory-mcp/lessons.json` |
 | `FACTORY_GITHUB_TOKEN` | GitHub REST token (fine-grained: issues, pull requests, contents, secrets read and write) |
@@ -43,12 +43,12 @@ FACTORY_MCP_TOKEN=<secret> FACTORY_REPOS=owner/repo FACTORY_GITHUB_TOKEN=<token>
 | `FACTORY_LOCAL_ONLY_REPOS` | Repos whose work may only go to `local` workers |
 | `FACTORY_MAX_PASSES`, `FACTORY_WALL_MS` | WorkOrder budget: worker passes per WorkItem (4), wall time per pass (20 min) |
 | `FACTORY_GIT_URL` | Where patch Results are pushed, default `https://github.com/{repo}.git` |
-| `FACTORY_OWNER` | GitHub login that owns escalations, default the repo owner |
+| `FACTORY_OWNER` | GitHub login that owns escalations, default the repo owner. When `FACTORY_TRUSTED_AUTHORS` is empty, the factory searches this login's `factory:ready` issues to find new repos |
 | `FACTORY_POLL_SECONDS` | Background tick interval, default 60; `0` turns it off, and only `factory_tick` ticks |
 | `FACTORY_GATE_WAIT_SECONDS` | No gate verdict on the PR head for this long sends it to a person, default 7200 |
 | `FACTORY_GITHUB_API` | GitHub REST base URL, default `https://api.github.com` (GitHub Enterprise, rehearsal) |
 | `FACTORY_CHECKOUT_ROOT` | Worker checkouts live at `<root>/<owner>/<repo>`; sent to the relay as the task cwd |
-| `FACTORY_TRUSTED_AUTHORS` | Issue authors a worker may act for, default the repo owner |
+| `FACTORY_TRUSTED_AUTHORS` | Issue authors a worker may act for, default the repo owner. Their `factory:ready` issues in any repo are searched for (ADR-0027); set this or `FACTORY_OWNER` for repos to join on first use |
 
 `python3 scripts/rehearsal.py <agent-relay checkout> [--lose-store]` runs one issue from
 `factory:ready` to `closed` with the real relay and a stand-in GitHub.
