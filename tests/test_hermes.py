@@ -50,7 +50,8 @@ class ProfileTest(unittest.TestCase):
 
     def test_the_shell_runs_in_docker_with_the_github_token_as_its_only_secret(self):
         """Any other terminal key could mount a host path or forward another variable, so the
-        set of keys is fixed. A skill could register variables too, so the skill declares none."""
+        set of keys is fixed. A skill could register variables too, at the top of its frontmatter
+        or under metadata.hermes, so the skill declares none in either place."""
         self.assertEqual(TERMINAL["backend"], "docker")
         runbook = (PROFILE.parent.parent / "docs" / "RUNBOOK.md").read_text()
         self.assertIn(f"docker build -t {TERMINAL['docker_image']} ", runbook)
@@ -60,8 +61,10 @@ class ProfileTest(unittest.TestCase):
                                              "env_passthrough"})
         skill = yaml.safe_load((PROFILE / "skills" / "software-factory" / "SKILL.md").read_text()
                                .split("---")[1])
-        self.assertFalse({"required_environment_variables", "required_credential_files", "setup",
-                          "prerequisites"} & set(skill))
+        hermes = (skill.get("metadata") or {}).get("hermes") or {}
+        for declared in (set(skill), set(hermes)):
+            self.assertFalse({"required_environment_variables", "required_credential_files", "setup",
+                              "prerequisites"} & declared)
 
     def test_the_sandbox_hands_gh_the_token_the_config_passes_in(self):
         dockerfile = (PROFILE / "sandbox" / "Dockerfile").read_text()

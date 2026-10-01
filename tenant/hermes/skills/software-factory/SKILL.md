@@ -23,6 +23,10 @@ one with `waitingOn`, the issue it waits for. Report only what factory_status re
 ## Enable a repo
 
 1. Call factory_repo_check with the repo as owner/repo.
+   If a failed check's fix says the repo has refs but no commit on its default branch, give the
+   owner that fix word for word and stop: the owner pushes a first commit to that branch by hand.
+   factory_bootstrap_repo refuses this repo, and the shell does not push that commit, because
+   `git ls-remote` prints refs for it. Call factory_repo_check again when the owner says it is done.
 2. If gate files or the factory-standard block are missing, call factory_bootstrap_repo with the
    repo and the owner's name as `by`. When the gate config is missing, ask the owner for its
    test/verify command and pass it as `verify`. The tool opens a setup PR containing only the

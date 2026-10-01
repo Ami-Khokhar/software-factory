@@ -18,7 +18,7 @@ def build(store, foreman):
                 try:
                     summary["lessonEffect"] = metrics.lesson_effect(
                         lessons.load(foreman.config.lessons_file), store.all_workorders)
-                except ValueError as exc:  # a hand-edited file: say what is wrong with it
+                except (ValueError, OSError) as exc:  # a hand-edited or unreadable file: say why
                     summary["lessonsError"] = str(exc)
             return summary
         wi = store.get(workitem_id)
@@ -45,7 +45,7 @@ def build(store, foreman):
             raise ToolError("FACTORY_LESSONS_FILE is not set, so the factory keeps no lessons")
         try:
             approved = lessons.for_repo(lessons.load(foreman.config.lessons_file), repo)
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:  # OSError: a file that exists but cannot be read
             raise ToolError(str(exc)) from None
         return {"repo": repo, "candidates": lessons.candidates(store, repo), "lessons": approved}
 
@@ -76,8 +76,8 @@ def build(store, foreman):
              "factory-standard block. Never merges or enables the repo. Requires a verify command "
              "when the gate config is missing. An empty repo first gets one commit with only a "
              "README.md on its default branch; the result names it as initialCommit. An open setup "
-             "PR is adopted; when its files differ from the plan, a commit is added to it (updatedSha) "
-             "and its body is rewritten to match. "
+             "PR is adopted; when its files differ from the plan, a commit is added to it (updatedSha), "
+             "and whenever the files or secret statuses it names change, its body is rewritten. "
              "Also sets the "
              "repo's missing gate Actions secrets from the owner's Keychain and never overwrites "
              "one; `secrets` gives each name and status (set, already set, missing, failed), "

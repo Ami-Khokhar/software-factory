@@ -300,6 +300,20 @@ class BootstrapActionTest(unittest.TestCase):
         self.assertEqual(self.secret_status(again),
                          {"OPENCODE_GO_API_KEY": "set", "GATEKEEPER_READ_TOKEN": "set"})
 
+    def test_a_retry_that_only_sets_a_secret_rewrites_the_setup_pr_body(self):
+        self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
+        self.assertIn("- `GATEKEEPER_READ_TOKEN`: missing: ", self.github.pulls[0]["body"])
+        self.commands.keychain = {"software-factory/OPENCODE_GO_API_KEY": KEY,
+                                  "software-factory/GATEKEEPER_READ_TOKEN": READ}
+
+        again = self.foreman.bootstrap_repo("o/r", "python3 -m unittest", "owner")
+
+        body = self.github.pulls[0]["body"]
+        self.assertNotIn("updatedSha", again)  # the files were already on the PR: no commit
+        self.assertIn("- `GATEKEEPER_READ_TOKEN`: set", body)
+        self.assertNotIn("missing: ", body)
+        self.assertNotIn(READ, body)
+
     def test_a_failing_gh_that_echoes_the_value_reports_only_its_name_and_exit_code(self):
         self.commands.keychain = {"software-factory/OPENCODE_GO_API_KEY": KEY,
                                   "software-factory/GATEKEEPER_READ_TOKEN": READ}

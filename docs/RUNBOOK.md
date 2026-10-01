@@ -134,9 +134,9 @@ README first: the tool pushes one initial commit with only a `README.md` to the 
 says so as `initialCommit` in its result, and then opens the setup PR. A repo that has refs but no
 commit on its default branch is refused: push a first commit there yourself. A repo has one setup
 PR: when one is open, asking again adopts it, and if the planned files changed (new templates, say),
-the tool adds one commit with them to that PR, returns it as `updatedSha` and rewrites the PR body
-to match (ADR-0023). It never force-pushes, and it refuses a repo with several open setup PRs:
-close all but one.
+the tool adds one commit with them to that PR and returns it as `updatedSha`. Whenever the files
+or the secret statuses change, it rewrites the PR body to match (ADR-0023). It never force-pushes,
+and it refuses a repo with several open setup PRs: close all but one.
 
 The tool also sets the gate's Actions secrets, so repo setup needs no secrets by hand (ADR-0022).
 Store each one once in your login Keychain; each command prompts for the value, so it stays out
@@ -269,7 +269,7 @@ Make a fine-grained token at GitHub → Settings → Developer settings → Fine
 - Resource owner: your account. Repository access: Only select repositories, the ones the
   factory works on. Add each new repo to the token when you create it. Expiration: 90 days, then
   make a new one.
-- Repository permissions: Contents read and write, and Pull requests read and write. Metadata
+- Repository permissions: Contents read and write, and Pull requests read only. Metadata
   read is added for you. Give nothing else. Without Workflows, GitHub refuses a push that changes
   `.github/workflows/`.
 - Without Administration, the shell cannot create a repo. You create the empty repo on GitHub,

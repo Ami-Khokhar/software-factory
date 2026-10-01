@@ -1,5 +1,6 @@
 """Lesson candidates from the audit log, and the owner-approved lessons file (ADR-0020)."""
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,6 +21,18 @@ def verdict_history(fingerprint=FP, problem="No test for the error path"):
     """One accepted verdict's audit entry, as Foreman.tick_one writes it."""
     return [("reconcile", {"headSha": "c1", "from": "reviewing", "to": "changes_requested",
                            "blocking": [{"fingerprint": fingerprint, "problem": problem}]})]
+
+
+def unreadable(path):
+    """The file system at `path`: the file is there, reading it fails."""
+    read_text = Path.read_text
+
+    def read(self, *args, **kwargs):
+        if str(self) == path:
+            raise PermissionError(13, "Permission denied", path)
+        return read_text(self, *args, **kwargs)
+
+    return mock.patch.object(Path, "read_text", read)
 
 
 def store_with(*repos_findings):
@@ -194,6 +207,25 @@ class ApproveRetireTest(unittest.TestCase):
         self.assertIn('needs "version": 1', summary["lessonsError"])
         self.assertNotIn("lessonEffect", summary)
 
+    def test_status_names_an_unreadable_lessons_file(self):
+        self.approve()
+        with unreadable(self.path):
+            summary = self.tools["factory_status"].fn({})
+        self.assertIn("Permission denied", summary["lessonsError"])
+        self.assertNotIn("lessonEffect", summary)
+
+    def test_an_unreadable_lessons_file_is_a_tool_error_that_names_it(self):
+        self.approve()
+        before = Path(self.path).read_text()
+        calls = {"factory_lessons": {"repo": REPO},
+                 "factory_approve_lesson": {"repo": REPO, "fingerprint": FP, "text": "t", "by": "o"},
+                 "factory_retire_lesson": {"repo": REPO, "fingerprint": FP, "by": "o"}}
+        for name, args in calls.items():
+            with self.subTest(name), unreadable(self.path):
+                with self.assertRaisesRegex(ToolError, re.escape(f"Permission denied: '{self.path}'")):
+                    self.tools[name].fn(args)
+        self.assertEqual(Path(self.path).read_text(), before)
+
     def test_retire_removes_the_lesson(self):
         self.approve()
         result = self.tools["factory_retire_lesson"].fn({"repo": REPO, "fingerprint": FP, "by": "amteshwar"})
@@ -286,14 +318,7 @@ class WorkOrderLessonsTest(unittest.TestCase):
 
     def test_an_unreadable_lessons_file_does_not_stop_the_line(self):
         Path(self.path).write_text('{"version": 1, "lessons": []}')
-        read_text = Path.read_text
-
-        def unreadable(path, *args, **kwargs):  # the file system: the file is there, reading it fails
-            if str(path) == self.path:
-                raise PermissionError(13, "Permission denied", self.path)
-            return read_text(path, *args, **kwargs)
-
-        with mock.patch.object(Path, "read_text", unreadable):
+        with unreadable(self.path):
             wi, order, _ = self.dispatch()
         self.assertEqual(order["lessons"], [])
         errors = [h["detail"]["error"] for h in self.foreman.store.history(f"{REPO}#7")

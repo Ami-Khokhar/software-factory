@@ -377,14 +377,14 @@ itself.
 in `tenant/hermes/sandbox/`: git, a pinned gh and python3, for a user with no sudo. One variable
 enters the container, `DAYDESK_GITHUB_TOKEN`, and the image's gh wrapper hands it to gh as
 `GH_TOKEN`. It is a fine-grained token that the owner makes for this job alone, for the factory's
-repos only, with Contents and Pull requests read and write and no Administration. It is not the
-factory's token. Day Desk uses
+repos only, with Contents read and write, Pull requests read only, and no Administration: neither
+of the shell's jobs writes a PR. It is not the factory's token. Day Desk uses
 the shell to make the first commit of an empty repo and to read a repo; the owner creates repos.
 It never merges, never pushes to a `factory/*` branch or, after the first commit, to a default
 branch, and never changes `.github/` or `AGENTS.md`. `code_execution`, `file`, `browser`,
 `computer_use` and `delegation` stay off: they run on the host or call tools back on it.
 
-**Consequence.** Hermes asks no approval for a command in a Docker sandbox that has no host bind
+**Consequence.** Hermes asks no approval for a command in a Docker sandbox that has no writable host
 mount, so the owner's yes in Telegram now covers factory tools only. The shell's limits are the
 skill, the token's permissions and branch protection. A token that can push can also push to a
 default branch, and a prompt-injected Day Desk could try. Branch protection on `main` is the
@@ -433,9 +433,10 @@ listed the secrets, so the factory's token was the likely cause.
 **Decision.** Before it creates a branch, the bootstrap adopts the open PR into the default branch
 from a `factory-bootstrap/` branch of the repo itself; more than one is refused, naming each. When
 the plan's files differ from the adopted branch, factory-mcp adds one commit with them on top of
-the PR's head, returns it as `updatedSha` and rewrites the PR body from the current plan and secret
-statuses. It first checks that the default branch has not moved since it read the plan, as it does
-before it creates a branch. That push is not forced: a branch that moved during the update fails
+the PR's head and returns it as `updatedSha`. It rewrites the PR body from the current plan and
+secret statuses whenever that body differs, also on a retry that only set a secret. It first
+checks that the default branch has not moved since it read the plan, as it does before it creates
+a branch. That push is not forced: a branch that moved during the update fails
 with an error that names the PR. For `gh secret list` only, which is given no
 value, the failed status holds gh's first stderr line, at most 200 characters, with the factory's
 token and anything shaped like a GitHub token (`ghp_`, `gho_`, `github_pat_` and the like) replaced

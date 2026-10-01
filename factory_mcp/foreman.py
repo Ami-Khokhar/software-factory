@@ -131,9 +131,11 @@ class Foreman:
         if existing:  # a retry: the owner reviews one setup PR, brought up to date with the plan
             head = self._update_setup_pr(repo, existing, files, by)
             secrets = self._gate_secrets(repo, by)
-            if head:  # the body names the files and secret statuses: keep it true to the new commit
+            if head:
                 response["updatedSha"] = head
-                self.github.edit_pull(repo, existing["number"], self._setup_pr_body(repo, plan, secrets))
+            body = self._setup_pr_body(repo, plan, secrets)
+            if body != existing.get("body"):  # it names the files and secret statuses: keep it true
+                self.github.edit_pull(repo, existing["number"], body)
             return dict(response, prNumber=existing["number"], secrets=secrets,
                         url=existing.get("html_url") or f"https://github.com/{repo}/pull/{existing['number']}")
         if plan["base_sha"]:  # an empty repo has no branches; its setup branch is named after the README
@@ -613,7 +615,7 @@ class Foreman:
         try:
             entry = lessons.approve(self.config.lessons_file, repo, fingerprint, text, by,
                                     lambda r: lessons.candidates(self.store, r))
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:  # OSError: the file cannot be read or written
             raise ToolError(str(exc)) from None
         self.store.log("lesson_approved", {"repo": entry["repo"], "fingerprint": fingerprint,
                                            "by": by})
@@ -628,7 +630,7 @@ class Foreman:
             raise ToolError("retiring a lesson needs the name of the person who retired it")
         try:
             lessons.retire(self.config.lessons_file, repo, fingerprint)
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:  # OSError: the file cannot be read or written
             raise ToolError(str(exc)) from None
         self.store.log("lesson_retired", {"repo": repo, "fingerprint": fingerprint, "by": by})
         return {"repo": repo, "fingerprint": fingerprint, "retired": True}
