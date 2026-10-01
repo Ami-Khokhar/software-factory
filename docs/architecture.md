@@ -20,7 +20,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
                     ▼                             ▼                              ▼
              agent-relay ──► worker/runner.py     GitHub: issues, labels,   pr-gatekeeper:
                              (Docker sandbox,     PRs, check runs           reviews, merges,
-                              Freebuff + GLM)                               comments a verdict
+                              pi + GLM)                                     comments a verdict
 ```
 
 - **factory-mcp** (`factory_mcp/`) is the Foreman: a Python MCP server, standard library only, on
@@ -30,10 +30,9 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
   factory-mcp submits one task per WorkOrder over HTTP and reads it on later ticks; it never waits.
   Each call carries the relay's token, which factory-mcp reads on every call from
   `AGENT_RELAY_TOKEN` or the file the relay writes on its first start.
-- **worker/runner.py** is what a relay agent runs: Freebuff works in a Docker sandbox with no
-  GitHub credential, and the runner turns its edits into a patch Result. `worker/freebuff.py`
-  drives Freebuff's terminal UI and waits for its local completion log; Freebuff has no headless
-  CLI mode in the pinned version.
+- **worker/runner.py** is what a relay agent runs: pi (`pi --print`, GLM 5.3 Flash) works in a
+  Docker sandbox with no GitHub credential, and the runner turns its edits into a patch Result
+  (ADR-0026).
 - **GitHub** holds the facts. factory-mcp reads issues, labels, PRs, check runs and the gate's
   comments, and rebuilds its WorkItems from them when its store is lost (ADR-0009).
 - **pr-gatekeeper** reviews every PR and merges it on MERGE. factory-mcp has no merge tool
@@ -80,8 +79,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/metrics.py` | The escalation text, the autonomy rate, whether each lesson works, and the weekly report's numbers |
 | `factory_mcp/config.py` | Settings from the environment and `repos.json` |
 | `worker/runner.py` | Runs one WorkOrder in the sandbox and prints its Result |
-| `worker/freebuff.py` | Runs one Freebuff/GLM prompt through a PTY and checks its completion log |
-| `worker/Dockerfile` | The sandbox image: git, Python, Node and Freebuff, and no GitHub credential |
+| `worker/Dockerfile` | The sandbox image: git, Python, Node and pi, and no GitHub credential |
 | `scripts/factory` | The owner's CLI: `new`, `add-repo`, `status`, `watch`, `report`, `retry`/`regate`/`close`, `start`/`stop`, `update`, `serve` |
 | `scripts/install-services.sh` | The launchd services for agent-relay and factory-mcp |
 | `scripts/rehearsal.py` | One issue end to end, with the real agent-relay and a stand-in GitHub. Its scripted worker hands back a patch, as `worker/runner.py` does, and factory-mcp pushes it |

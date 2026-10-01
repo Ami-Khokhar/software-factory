@@ -35,9 +35,8 @@ git merge-base --is-ancestor "$FACTORY_BASE" HEAD || exit 3
 git diff --binary "$FACTORY_BASE" HEAD
 """
 MAX_PATCH_BYTES = 2_000_000
-FREEBUFF_CREDENTIALS = os.path.expanduser("~/.config/manicode/credentials.json")
-FREEBUFF_SETTINGS = {"freebuffModel": "z-ai/glm-5.3-flash"}
-CONTAINER_CONFIG_DIR = "/home/node/.config/manicode"
+PI_AUTH = os.path.expanduser("~/.pi/agent/auth.json")
+CONTAINER_AGENT_DIR = "/home/node/.pi/agent"
 CONTAINER_HOME = "/tmp/factory-home"
 
 
@@ -146,7 +145,7 @@ class Sandbox:
         sys.exit(143)
 
     def run(self, argv, seconds, mount, with_agent_dir=False, env=None):
-        """Returns (exit code, stdout, stderr). Only `mount` (and Freebuff's config, when asked) is visible."""
+        """Returns (exit code, stdout, stderr). Only `mount` (and the agent dir, when asked) is visible."""
         name = f"factory-worker-{uuid.uuid4().hex[:12]}"
         self.names.append(name)
         cmd = ["docker", "run", "--rm", "--init", "--name", name, "--label", f"factory-worker={self.label}",
@@ -158,7 +157,7 @@ class Sandbox:
         if with_agent_dir:
             # The 0600 credential copy is in a 0700 scratch dir owned by the host user. Match
             # that owner so the harness can read it inside the container.
-            cmd += ["-v", f"{self.agent_dir}:{CONTAINER_CONFIG_DIR}"]
+            cmd += ["-v", f"{self.agent_dir}:{CONTAINER_AGENT_DIR}", "-e", f"PI_CODING_AGENT_DIR={CONTAINER_AGENT_DIR}"]
         for key, value in (env or {}).items():
             cmd += ["-e", f"{key}={value}"]
         # `timeout` inside the container ends it on its own if this process is killed first.
@@ -216,22 +215,16 @@ def main(argv=None):
         verify = verify_command(cwd, base)
         if not verify:
             raise WorkerError("the base commit has no .github/pr-gatekeeper.json verify command")
-        if not os.path.isfile(FREEBUFF_CREDENTIALS):
-            raise WorkerError(f"no model credential at {FREEBUFF_CREDENTIALS}")
+        if not os.path.isfile(PI_AUTH):
+            raise WorkerError(f"no model credential at {PI_AUTH}")
         os.mkdir(agent_dir, 0o700)
-        credentials = os.path.join(agent_dir, "credentials.json")
-        settings = os.path.join(agent_dir, "settings.json")
-        shutil.copyfile(FREEBUFF_CREDENTIALS, credentials)
-        os.chmod(credentials, 0o600)
-        with open(settings, "w") as stream:
-            json.dump(FREEBUFF_SETTINGS, stream)
-        os.chmod(settings, 0o600)
+        credential = os.path.join(agent_dir, "auth.json")
+        shutil.copyfile(PI_AUTH, credential)
+        os.chmod(credential, 0o600)
         seconds = max(120, order["budget"]["wallMs"] // 1000 - 60)
         ensure_docker()
         sandbox = Sandbox(args.image, agent_dir, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]))
-        harness_seconds = max(1, int(seconds * 0.7))
-        code, out, err = sandbox.run([*harness, text], harness_seconds, work, with_agent_dir=True,
-                                     env={"FREEBUFF_TIMEOUT_SECONDS": str(max(1, harness_seconds - 15))})
+        code, out, err = sandbox.run([*harness, text], seconds * 0.7, work, with_agent_dir=True)
         print((out + err)[-4000:], flush=True)  # for the relay log; the Result line comes last
         if code == 124:
             raise WorkerError("the harness timed out")
