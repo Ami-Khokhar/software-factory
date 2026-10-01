@@ -190,6 +190,22 @@ class RunnerTest(unittest.TestCase):
         fresh = self.apply_on(head, result["patch"]["diff"])
         self.assertEqual(((fresh / "notes.txt").exists(), (fresh / "app.txt").read_text()), (True, "fixed\n"))
 
+    def test_a_fetch_in_the_checkout_finishes_its_repack_before_it_returns(self):
+        """prepare clones the checkout right after it fetches there, so a repack still running in
+        the background could delete a pack the clone copies (#94)."""
+        # One pack, and a fetch that brings a second one, so the fetch starts an auto repack.
+        for key, value in (("gc.autoPackLimit", "1"), ("transfer.unpackLimit", "1")):
+            sh(self.checkout, "config", key, value)
+        sh(self.checkout, "repack", "-q", "-d")
+        seed = Path(self.tmp.name) / "seed"
+        (seed / "more.txt").write_text("more\n")
+        sh(seed, "add", "-A")
+        sh(seed, "-c", "user.name=s", "-c", "user.email=s@s", "commit", "-qm", "more")
+        sh(seed, "push", "-q", str(self.origin), "main")
+        runner.git(str(self.checkout), "fetch", "-q", "--prune", "origin")
+        packs = list((self.checkout / ".git" / "objects" / "pack").glob("*.pack"))
+        self.assertEqual(len(packs), 1, "the repack was still running when the fetch returned")
+
     def test_the_harness_gets_a_copy_and_never_the_checkout(self):
         before = (sh(self.checkout, "rev-parse", "HEAD"), (self.checkout / ".git" / "config").read_text())
         result, _ = self.run_order("plant")
