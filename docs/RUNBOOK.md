@@ -107,7 +107,9 @@ which harness runs, with which model, and what it logs in with:
 The harness, patch collection, and verification run as the same host UID with a writable
 container-only HOME (`/tmp/factory-home`). Build the image with
 `docker build -t factory-worker:latest worker/`; `factory update` rebuilds it when
-`worker/Dockerfile` changes. Register each worker in `~/.config/agent-relay/agents.json`
+`worker/Dockerfile` changes. An agent registered before #98 must add its `--credential` and
+`--env` flags: without them the runner mounts no login and the harness fails on its first call.
+Register each worker in `~/.config/agent-relay/agents.json`
 (replace the host paths), list it in `FACTORY_WORKERS` (preferred first, `:local` or `:hosted`),
 restart factory-mcp, and reload agent-relay's registry if it is already running. Two that passed a
 live pass on 2026-10-01, both GLM 5.3 Flash through OpenCode Go:
