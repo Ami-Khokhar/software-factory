@@ -52,14 +52,26 @@ def now():
 
 # A fetch starts `git maintenance run --auto`, which detaches by default and can delete a pack
 # while the clone that follows copies it (#94). In the foreground, it is done before the clone.
-FOREGROUND_MAINTENANCE = {"GIT_CONFIG_COUNT": "2",
-                          "GIT_CONFIG_KEY_0": "maintenance.autoDetach", "GIT_CONFIG_VALUE_0": "false",
-                          "GIT_CONFIG_KEY_1": "gc.autoDetach", "GIT_CONFIG_VALUE_1": "false"}
+FOREGROUND_MAINTENANCE = (("maintenance.autoDetach", "false"), ("gc.autoDetach", "false"))
+FETCH_SECONDS = 900  # a fetch now includes its auto repack, which takes longer on a large checkout
+
+
+def git_env():
+    """The environment with FOREGROUND_MAINTENANCE added after any GIT_CONFIG_* it already has."""
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+    base = int(env.get("GIT_CONFIG_COUNT") or 0)
+    for n, (key, value) in enumerate(FOREGROUND_MAINTENANCE, base):
+        env[f"GIT_CONFIG_KEY_{n}"], env[f"GIT_CONFIG_VALUE_{n}"] = key, value
+    env["GIT_CONFIG_COUNT"] = str(base + len(FOREGROUND_MAINTENANCE))
+    return env
 
 
 def git(cwd, *args, timeout=300):
-    done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout,
-                          env=dict(os.environ, GIT_TERMINAL_PROMPT="0", **FOREGROUND_MAINTENANCE))
+    try:
+        done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout,
+                              env=git_env())
+    except subprocess.TimeoutExpired:
+        raise WorkerError(f"git {args[0]} timed out after {timeout}s") from None
     if done.returncode != 0:
         raise WorkerError(f"git {args[0]} failed: {(done.stderr or done.stdout).strip()[-300:]}")
     return done.stdout.strip()
@@ -87,10 +99,10 @@ def origin_repo(cwd):
 def prepare(cwd, order, branch, work):
     """Fetch in the persistent checkout, then make `work` a fresh copy on `branch` at the commit this
     WorkOrder builds on. Returns that commit. The copy has no remote, so a push has nowhere to go."""
-    git(cwd, "fetch", "-q", "--prune", "origin")
+    git(cwd, "fetch", "-q", "--prune", "origin", timeout=FETCH_SECONDS)
     if order["kind"] == "fix":
         base = order.get("headSha")
-        git(cwd, "fetch", "-q", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}")
+        git(cwd, "fetch", "-q", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}", timeout=FETCH_SECONDS)
     else:
         base = order.get("baseSha") or git(cwd, "rev-parse", "origin/HEAD")
     if not base:
