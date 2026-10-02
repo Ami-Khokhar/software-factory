@@ -93,7 +93,8 @@ A factory-watch alert names a WorkItem that waits on the owner. When the owner r
 1. Call factory_status with the WorkItem id and read its escalation: `reason`, `needFromYou` and
    `tried`.
 2. If the owner has not chosen, explain the choices. `retry` gives the worker another pass with
-   the owner's note as a finding. `regate` sends a fix the owner pushed back to the gate. `close`
+   the owner's note as a finding. `regate` sends the PR back to the gate, with a fix the owner
+   pushed or as it is when the gate failed itself; the factory starts the gate run. `close`
    gives up on the WorkItem.
 3. Call factory_resolve_human with the id, the choice, the owner's own words as the note, and the
    owner's name as `by`.

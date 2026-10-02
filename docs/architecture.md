@@ -142,7 +142,7 @@ The states are the enum in `schemas/workitem.schema.json`.
 | any live state | the PR closed without a merge | `human_waiting` |
 | any live state | the issue closed without a merged PR | `cancelled` |
 | `ready`, `changes_requested` | `FACTORY_MAX_PASSES` WorkOrders were dispatched already | `exhausted` |
-| `human_waiting`, `blocked` | `factory_resolve_human`: retry, regate or close | `ready` or `changes_requested`, `reviewing`, or `cancelled` |
+| `human_waiting`, `blocked` | `factory_resolve_human`: retry, regate or close | `ready` or `changes_requested`, `reviewing`, or `cancelled`; a regate with no gate run going and no new verdict edits the PR body's `<!-- factory regate n -->` line, which starts a gate run (ADR-0034) |
 
 `closed`, `cancelled` and `exhausted` are terminal. `human_waiting` is not: it waits for the
 owner's decision (ADR-0006).
