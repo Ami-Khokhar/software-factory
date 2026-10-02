@@ -133,11 +133,12 @@ def reconcile(wi, facts):
         wi.update(prNumber=pr["number"], headSha=pr["headSha"])
         if pr["merged"]:
             wi["state"] = "closed" if issue["state"] == "closed" else "merged"
+            wi["blockedOn"] = None  # merged: nobody waits on a person any more
             if not gated(facts):  # a person merged it: a fact, but not the gate's decision (ADR-0004)
                 wi["terminalReason"] = f"{UNGATED} {pr['headSha']}"
             return wi
     if issue["state"] == "closed":
-        return dict(wi, state="cancelled", terminalReason="issue closed without a merged PR")
+        return dict(wi, state="cancelled", terminalReason="issue closed without a merged PR", blockedOn=None)
     if wi["state"] == "merged":
         return wi
     if pr is None:
