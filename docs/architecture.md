@@ -105,6 +105,9 @@ A tick comes from the background loop or from `factory_tick`.
      WorkOrder's idempotency key is the relay's request id, so a retry never starts a second task.
    - `implementing`: read the task. When it is done, check the Result and what GitHub holds, push
      a patch, and open the PR or adopt the one already open on the branch.
+   - `pr_open`, `reviewing` or `changes_requested` with a PR that GitHub says conflicts with its
+     base: dispatch an implement WorkOrder on the current default branch, with the conflict and
+     any gate findings as data; its push replaces the branch, and the gate runs again (ADR-0032).
    - `pr_open` or `reviewing` with no verdict for `FACTORY_GATE_WAIT_SECONDS`: `human_waiting`.
    - `merged`: close the issue, because GitHub skips `Closes #n` when the gate's workflow token
      merges. Then `closed`.
@@ -131,6 +134,7 @@ The states are the enum in `schemas/workitem.schema.json`.
 | `reviewing` | the gate's check run finished with no verdict | `human_waiting` |
 | `changes_requested` | the same blocking problem in 2 gate rounds (ADR-0005) | `human_waiting` |
 | `changes_requested` | the tick dispatches a fix WorkOrder | `dispatching`, then `implementing` |
+| `pr_open`, `reviewing`, `changes_requested` | the PR conflicts with its base; the tick dispatches an implement WorkOrder on the current base | `dispatching`, then `implementing` |
 | `merge_pending` | GitHub reports the PR merged | `merged` |
 | `merged` | factory-mcp closes the issue | `closed` |
 | any live state | the PR closed without a merge | `human_waiting` |
@@ -174,6 +178,7 @@ owner's decision (ADR-0006).
 | A stale verdict is ignored | `workitem.current_verdict` | `test_actions`: `test_stale_verdict_ignored`; `test_reconcile`: `test_old_round_is_stale` |
 | The same problem twice goes to a person | `workitem.reconcile` | `test_gate_loop`: `test_same_problem_twice_goes_to_a_human` |
 | A merge without the gate is recorded | `workitem.reconcile` | `test_gate_loop`: `test_merge_without_a_merge_verdict_is_flagged` |
+| A PR that conflicts with its base is made again on the current base | `Foreman.act` | `test_gate_loop`: `test_a_pr_that_conflicts_with_main_is_made_again_on_the_current_main` |
 | No verdict for `FACTORY_GATE_WAIT_SECONDS` goes to a person | `Foreman.act` | `test_hardening`: `test_silent_gate_goes_to_a_person` |
 | The budget ends a WorkItem | `Foreman.dispatch` | `test_actions`: `test_budget_exhausts` |
 | A plan opens no issue when one of its issues fails a check | `Foreman.start_plan` | `test_plan`: `test_one_issue_that_fails_a_check_opens_no_issue` |

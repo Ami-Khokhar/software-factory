@@ -648,3 +648,23 @@ the job.
 **Consequence.** A merge goes live within 10 minutes with no person, and a broken commit never
 does. The owner hears of a failed deploy and of a config change to merge. A bad commit that passes
 the tests still deploys; the gate and the tests stay the safeguards.
+
+---
+
+## ADR-0032 — A PR that conflicts with its base is made again on the current base
+
+**Context.** GitHub runs no `pull_request` workflow on a PR that conflicts with its base, so the
+gate never answers it. A factory PR that main overtook waited `FACTORY_GATE_WAIT_SECONDS` (2 hours)
+and then went to the owner with "no pr-gatekeeper verdict", which named the wrong cause. A fix
+WorkOrder builds on the PR's head, so it would keep the conflict.
+
+**Decision.** When GitHub reports `mergeable: false` for a factory PR in `pr_open`, `reviewing` or
+`changes_requested`, the tick dispatches an implement WorkOrder on the current default branch. Its
+first finding says the PR conflicts and the change must be made again; the gate's blocking
+findings follow when the PR had them. The push replaces the branch, as each implement push does,
+and the open PR follows it, so the gate runs on the new head. `mergeable: null`, which GitHub
+reports while it computes, waits for the next tick.
+
+**Consequence.** A conflict costs one worker pass, within `FACTORY_MAX_PASSES`, instead of 2 hours
+and the owner's time. The worker redoes the change rather than resolving markers, so the gate
+reviews a whole diff against the current base. Each tick reads each open PR once more.

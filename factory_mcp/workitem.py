@@ -5,6 +5,7 @@ Transitions that are the Foreman's own actions (dispatch, open PR) live in the t
 """
 import re
 
+from .github import GitHubError
 from .store import now
 from .verdict import blockers, verdicts
 
@@ -97,7 +98,13 @@ def observe(github, wi):
     if pulls:
         pr = max(pulls, key=lambda p: p["number"])
         facts["pr"] = {"number": pr["number"], "state": pr["state"], "merged": bool(pr.get("merged_at")),
-                       "headSha": pr["head"]["sha"]}
+                       "headSha": pr["head"]["sha"], "mergeable": None}
+        if pr["state"] == "open":
+            try:
+                facts["pr"]["mergeable"] = github.pull(wi["repo"], pr["number"]).get("mergeable")
+            except GitHubError as exc:  # a PR gone or unreadable: not known, as while GitHub computes it
+                if exc.status not in (403, 404):
+                    raise
         facts["verdicts"] = verdicts(github.comments(wi["repo"], pr["number"]), wi["repo"], pr["number"])
         runs = github.check_runs(wi["repo"], pr["head"]["sha"])
         if runs:
