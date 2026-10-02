@@ -1,6 +1,7 @@
 """Phase E: verdict comments drive CHANGES -> fix -> MERGE, with per-problem round counting."""
 import unittest
 
+from factory_mcp import tools
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.github import GitHubError
@@ -262,6 +263,17 @@ class GateLoopTest(unittest.TestCase):
         self.assertEqual(wi["state"], "human_waiting")
         self.assertIn("pr-gatekeeper decided HUMAN", wi["blockedOn"])
 
+
+    def test_merge_after_a_human_verdict_drops_blocked_on(self):
+        self.gate("HUMAN", 1, "c1")
+        wi = self.tick()
+        self.assertEqual(wi["state"], "human_waiting")
+        self.github.pulls[0].update(state="closed", merged_at="2026-09-24T03:00:00Z")
+        wi = self.tick()
+        self.assertEqual(wi["state"], "closed")
+        self.assertIsNone(wi["blockedOn"])
+        rows = tools.build(self.foreman.store, self.foreman)["factory_status"].fn({})["workItems"]
+        self.assertIsNone([r for r in rows if r["id"] == ID][0]["blockedOn"])
 
 if __name__ == "__main__":
     unittest.main()

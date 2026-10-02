@@ -57,7 +57,9 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
 - **Acceptance is checkable.** Each `acceptance` item has a `claim` and a
   `doneWhen`: a check read back from the produced artifact, never from effort.
 - **`blocked` carries evidence.** A WorkItem in `blocked` must have `blockedOn`
-  and at least two `attempts`, so the escalation shows what was tried.
+  and at least two `attempts`, so the escalation shows what was tried. A
+  WorkItem leaves `blockedOn` behind when the wait ends: a WorkItem that is
+  terminal or not waiting has `blockedOn` `null`.
 - **Budgets have two ceilings.** `WorkOrder.budget` requires `maxPasses` and
   `wallMs`. Reaching `maxPasses` moves the WorkItem to `exhausted`.
 - **`blockers[].fingerprint` is the identity of "the same problem."** Round
