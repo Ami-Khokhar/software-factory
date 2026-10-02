@@ -403,10 +403,20 @@ class Foreman:
             # a retry says why the last attempt failed, or what a person said
             return self.dispatch(wi, "implement", self._human_findings(wi) + self._attempt_findings(wi),
                                  facts["issue"]["workers"])
-        if wi["state"] == "changes_requested":  # findings travel as data (ADR-0007)
+        # GitHub runs no workflow on a PR that conflicts with its base, so the gate would never answer
+        conflict = (wi["state"] in ("pr_open", "reviewing", "changes_requested") and facts["pr"] is not None
+                    and facts["pr"]["mergeable"] is False)
+        if wi["state"] == "changes_requested" or conflict:  # findings travel as data (ADR-0007)
             findings = [{key: f[key] for key in ("fingerprint", "path", "line", "problem")}
-                        for f in (blocking(facts["verdicts"][-1]) if facts["verdicts"] else [])]
-            return self.dispatch(wi, "fix", findings + self._human_findings(wi) + self._attempt_findings(wi),
+                        for f in (blocking(facts["verdicts"][-1]) if wi["state"] == "changes_requested"
+                                  and facts["verdicts"] else [])]
+            if conflict:  # a fix builds on the PR's head and keeps the conflict: make it again (ADR-0032)
+                default = self._default_branch(wi["repo"])
+                findings.insert(0, {"fingerprint": "merge-conflict", "problem": (
+                    f"PR #{facts['pr']['number']} conflicts with {default}, which changed after this branch "
+                    f"was made. Make the change again on the current {default}.")})
+            return self.dispatch(wi, "implement" if conflict else "fix",
+                                 findings + self._human_findings(wi) + self._attempt_findings(wi),
                                  facts["issue"]["workers"])
         if wi["state"] == "dispatching":  # the intent was written, the relay call may not have landed
             return self.submit(wi, self._order(wi))

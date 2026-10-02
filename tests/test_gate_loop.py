@@ -133,6 +133,33 @@ class GateLoopTest(unittest.TestCase):
         self.github.push(REPO, "factory/7", "c9")  # a person fixed it by hand
         self.assertEqual(self.tick()["state"], "reviewing")
 
+    def conflict(self):
+        self.github.branches[(REPO, "main")] = "m2"  # main moved on, and the PR no longer merges
+        self.github.pulls[0]["mergeable"] = False
+
+    def test_a_pr_that_conflicts_with_main_is_made_again_on_the_current_main(self):
+        self.conflict()
+        wi = self.tick()
+        self.assertEqual(wi["state"], "implementing")
+        order = self.foreman.store.workorders(ID)[-1]
+        self.assertEqual((order["kind"], order["baseSha"]), ("implement", "m2"))
+        self.assertEqual([f["problem"] for f in order["findingsToAddress"]],
+                         ["PR #100 conflicts with main, which changed after this branch was made. "
+                          "Make the change again on the current main."])
+        wi = self.pass_("c2", dispatch=False)
+        self.assertEqual((wi["state"], wi["prNumber"], len(self.github.pulls)), ("reviewing", 100, 1))
+        self.assertEqual(self.git.pushes[-1], {"branch": "factory/7", "base": "m2", "force": True})
+        self.assertEqual((self.tick()["state"], len(self.foreman.store.workorders(ID))), ("reviewing", 2))
+
+    def test_a_conflicting_pr_with_gate_findings_is_made_again_with_them(self):
+        self.gate("CHANGES", 1, "c1", MISSING_TEST)
+        self.conflict()
+        self.tick()
+        order = self.foreman.store.workorders(ID)[-1]
+        self.assertEqual((order["kind"], order["round"]), ("implement", 1))
+        self.assertEqual([f["fingerprint"] for f in order["findingsToAddress"]],
+                         ["merge-conflict", fingerprint("src/app.py", "No test for the error")])
+
     def test_gate_human_verdict(self):
         self.gate("HUMAN", 1, "c1")
         wi = self.tick()

@@ -97,7 +97,9 @@ def observe(github, wi):
     if pulls:
         pr = max(pulls, key=lambda p: p["number"])
         facts["pr"] = {"number": pr["number"], "state": pr["state"], "merged": bool(pr.get("merged_at")),
-                       "headSha": pr["head"]["sha"]}
+                       "headSha": pr["head"]["sha"], "mergeable": None}
+        if pr["state"] == "open":
+            facts["pr"]["mergeable"] = github.pull(wi["repo"], pr["number"]).get("mergeable")
         facts["verdicts"] = verdicts(github.comments(wi["repo"], pr["number"]), wi["repo"], pr["number"])
         runs = github.check_runs(wi["repo"], pr["head"]["sha"])
         if runs:

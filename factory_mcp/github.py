@@ -59,6 +59,11 @@ class GitHub:
         owner = repo.split("/")[0]
         return self._get_all(f"/repos/{repo}/pulls", head=f"{owner}:{branch}", state="all")
 
+    def pull(self, repo, number):
+        """One PR with `mergeable`, which the list endpoints leave out: False when the PR conflicts
+        with its base, None while GitHub computes it."""
+        return self._request("GET", f"{self.api}/repos/{repo}/pulls/{number}")[0]
+
     def open_pulls(self, repo, base):
         """The open PRs into `base`."""
         return self._get_all(f"/repos/{repo}/pulls", state="open", base=base)

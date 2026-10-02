@@ -44,6 +44,7 @@ class FakeGitHub:
     def add_pr(self, repo, number, branch, sha, state="open", merged=False):
         self.pulls.append({"repo": repo, "number": number, "state": state,
                            "merged_at": "2026-09-24T01:00:00Z" if merged else None,
+                           "mergeable": True if state == "open" else None,
                            "head": {"ref": branch, "sha": sha, "repo": {"full_name": repo}},
                            "base": {"ref": "main", "sha": "base0"}})
 
@@ -71,6 +72,9 @@ class FakeGitHub:
 
     def pulls_for_branch(self, repo, branch):
         return [p for p in self.pulls if p["repo"] == repo and p["head"]["ref"] == branch]
+
+    def pull(self, repo, number):
+        return next(p for p in self.pulls if p["repo"] == repo and p["number"] == number)
 
     def open_pulls(self, repo, base):
         return [p for p in self.pulls if p["repo"] == repo and p["state"] == "open" and p["base"]["ref"] == base]
@@ -101,6 +105,7 @@ class FakeGitHub:
         self.branches[(repo, branch)] = sha
         for pr in self.pulls:  # an open PR follows its branch, as on GitHub
             if pr["repo"] == repo and pr["head"]["ref"] == branch and pr["state"] == "open":
+                pr.update(mergeable=None)  # GitHub computes it again for the new head
                 pr["head"]["sha"] = sha
         self.files[(repo, sha)] = [f if isinstance(f, dict) else  # a dict is a GitHub file entry as is
                                    {"filename": f[0], "status": "modified", "additions": f[1], "deletions": f[2]}
