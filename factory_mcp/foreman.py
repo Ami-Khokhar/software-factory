@@ -568,7 +568,13 @@ class Foreman:
         self.store.log("result", {"workOrder": order["id"], "commitSha": sha}, wi["id"])
         done = dict(wi, headSha=sha, attempts=[], activeWorkOrderId=None, providerTaskId=None)
         if wi.get("prNumber"):
-            return self._write(wi, dict(done, state="reviewing"), "pushed")
+            wi = self._write(wi, dict(done, state="reviewing"), "pushed")
+            try:  # the gate lints the body against the PR's paths, which this push may have changed
+                self.github.edit_pull(wi["repo"], wi["prNumber"],
+                                      documents.pr_body(wi, order, files, result["evidence"], task["agentId"]))
+            except GitHubError as exc:  # the push stands; the gate's lint names what the body lacks
+                self.store.log("pr_body_failed", {"error": str(exc)}, wi["id"])
+            return wi
         pr = self.open_pr(wi, order, files, result["evidence"], task["agentId"])
         return self._write(wi, dict(done, state="pr_open", prNumber=pr["number"]), "pr_opened",
                            pr=pr["number"])

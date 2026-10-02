@@ -78,6 +78,25 @@ class GateLoopTest(unittest.TestCase):
         self.assertEqual(self.github.issues[(REPO, 7)]["state"], "closed")
         self.assertEqual(self.foreman.store.history(ID)[-1]["action"], "issue_closed")
 
+    def test_a_fix_that_adds_a_file_lists_it_in_the_pr_body(self):
+        self.gate("CHANGES", 1, "c1", MISSING_TEST)
+        self.tick()
+        self.git.files = (("src/app.py", 10, 2), ("tests/test_error.py", 12, 0))
+        self.assertEqual(self.pass_("c2", dispatch=False)["state"], "reviewing")
+        body = self.github.pulls[0]["body"]
+        self.assertIn("- `tests/test_error.py`: modified (+12 -0)", body)
+        self.assertIn(f"WorkOrder `{self.foreman.store.workorders(ID)[-1]['id']}`", body)
+
+    def test_a_body_that_cannot_be_edited_leaves_the_push_standing(self):
+        self.gate("CHANGES", 1, "c1", MISSING_TEST)
+        self.tick()
+        def refused(repo, number, body):
+            raise GitHubError(403, "Resource not accessible")
+        self.github.edit_pull = refused
+        wi = self.pass_("c2", dispatch=False)
+        self.assertEqual((wi["state"], wi["headSha"]), ("reviewing", "c2"))
+        self.assertEqual(self.foreman.store.history(ID)[-1]["action"], "pr_body_failed")
+
     def test_the_reconcile_audit_keeps_the_accepted_verdicts_blocking_findings(self):
         """lessons.candidates reads these entries, so they hold the blocking findings only."""
         self.gate("CHANGES", 1, "c1", MISSING_TEST, NIT)
