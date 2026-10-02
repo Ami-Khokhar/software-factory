@@ -145,7 +145,6 @@ class GateLoopTest(unittest.TestCase):
         self.gate("HUMAN", 1, "c1")
         wi = self.tick()
         self.assertEqual(wi["state"], "human_waiting")
-        wi = self.foreman.tick(ID)["workItem"]
         self.github.pulls[0].update(state="closed", merged_at="2026-09-24T03:00:00Z")
         wi = self.tick()
         self.assertEqual(wi["state"], "closed")
