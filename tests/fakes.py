@@ -54,8 +54,9 @@ class FakeGitHub:
             {"body": marker_comment(outcome, round_, head_sha, findings),
              "created_at": "2026-09-24T02:00:00Z"})
 
-    def add_run(self, repo, sha, status="completed", conclusion="success"):
-        self.runs[(repo, sha)] = [{"name": "pr-gatekeeper", "status": status, "conclusion": conclusion}]
+    def add_run(self, repo, sha, status="completed", conclusion="success", started_at="2026-09-24T01:30:00Z"):
+        self.runs[(repo, sha)] = [{"name": "pr-gatekeeper", "status": status, "conclusion": conclusion,
+                                   "started_at": started_at}]
 
     def issue(self, repo, number):
         from factory_mcp.github import GitHubError

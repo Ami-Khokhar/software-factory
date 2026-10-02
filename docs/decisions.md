@@ -704,5 +704,9 @@ nothing while a gate run is going, when a verdict newer than the accepted one is
 when the PR is closed.
 
 **Consequence.** A regate after the gate failed itself gets a new review within the gate's run
-time. The PR body carries one hidden line per PR. A failed edit fails the regate with GitHub's
+time. The PR body carries one hidden line per PR; its count restarts when factory-mcp rewrites
+the body after a push, which is enough, because the count only has to change the body. The
+WorkItem keeps `regatedAt`, the time of the regate, and a gate run that started before it is not
+taken as the gate finishing without a verdict: until GitHub registers the new run, the old one is
+still the latest. A failed edit fails the regate with GitHub's
 error, and the WorkItem stays with the owner.

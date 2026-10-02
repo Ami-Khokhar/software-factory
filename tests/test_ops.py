@@ -91,6 +91,20 @@ class ResolveHumanTest(unittest.TestCase):
         body = self.github.pulls[0]["body"]
         self.assertEqual((body.count("factory regate"), body.endswith("<!-- factory regate 2 -->\n")), (1, True))
 
+    def test_a_regate_after_a_run_with_no_verdict_waits_for_the_run_it_started(self):
+        wi = self.tick()
+        self.relay.finish(wi["providerTaskId"], output=result_line(wi["activeWorkOrderId"]))
+        self.tick()
+        self.github.add_run(REPO, "c1", started_at="2026-09-24T01:30:00Z")  # finished, posted no verdict
+        self.assertEqual(self.tick()["state"], "human_waiting")
+        self.foreman.resolve_human(ID, "regate", "The gate posted nothing", "day-desk")
+        # GitHub has not registered the new run yet: the old finished one is no answer to the regate
+        self.assertEqual(self.tick()["state"], "reviewing")
+        self.github.add_run(REPO, "c1", status="in_progress", conclusion=None, started_at="2999-01-01T00:00:00Z")
+        self.assertEqual(self.tick()["state"], "reviewing")
+        self.github.add_verdict(REPO, 100, "MERGE", 1, "c1")
+        self.assertEqual(self.tick()["state"], "merge_pending")
+
     def test_regate_after_a_push_the_gate_already_answered_starts_no_run(self):
         self.gate_says_human()
         self.github.push(REPO, "factory/7", "c2")  # the owner's fix, which the gate reviewed by itself

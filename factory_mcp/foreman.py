@@ -640,7 +640,9 @@ class Foreman:
             if resolution == "retry":
                 new = dict(wi, state="changes_requested" if wi.get("prNumber") else "ready")
             elif resolution == "regate" and wi.get("prNumber"):
-                new, rerun = dict(wi, state="reviewing"), {"gateRerun": self._rerun_gate(wi)}
+                regated_at = now()  # before the edit, so the run the edit starts begins after it
+                rerun = {"gateRerun": self._rerun_gate(wi)}
+                new = dict(wi, state="reviewing", **({"regatedAt": regated_at} if rerun["gateRerun"] else {}))
             elif resolution == "close":
                 new = dict(wi, state="cancelled", terminalReason=f"closed by {by}: {note}")
             else:
