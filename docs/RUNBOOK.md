@@ -244,8 +244,8 @@ the deployed checkout once by hand, as below. A retry restarts factory-mcp only 
 worker image, which the restart follows. A change to `tenant/hermes/config.yaml` is only reported: the
 live config also holds your model and Telegram settings, so merge it by hand.
 Run `factory update` yourself to deploy at once. The
-tests need the packages in `requirements.txt`, installed once for the Python that runs `factory`:
-`python3 -m pip install -r requirements.txt`.
+tests need the packages in `requirements.txt`, installed once for the Python that runs `factory`
+and that the `factory-update` job names: `/usr/bin/python3 -m pip install -r requirements.txt`.
 
 ## When something looks wrong
 
@@ -305,7 +305,8 @@ cat > ~/.hermes/profiles/day-desk/scripts/factory-update.sh <<'SH'
 # fail stays on origin, and each run would report it again.
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 last="$HOME/.local/state/factory-mcp/last-update.txt"
-out="$(factory update 2>&1)"
+# Hermes's PATH may find another python3, without requirements.txt: name the one you installed it for
+out="$(/usr/bin/python3 "$HOME/.local/bin/factory" update 2>&1)"
 [ -z "$out" ] && exit 0  # nothing to deploy
 [ "$out" = "$(cat "$last" 2>/dev/null)" ] && exit 0
 printf '%s\n' "$out" > "$last"
