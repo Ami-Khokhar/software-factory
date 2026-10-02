@@ -123,6 +123,10 @@ class GitHubClientTest(unittest.TestCase):
         self.assertEqual(self.github.workflow_runs("o/r", "abc"), [{"name": "pr-gatekeeper", "id": 2}])
         self.assertEqual(Api.seen[0][0], "/repos/o/r/actions/runs?head_sha=abc&per_page=100")
 
+    def test_one_pull_request_is_read_by_its_number(self):
+        self.assertEqual(self.github.pull("o/r", 7), {"number": 1})
+        self.assertEqual(Api.seen[0][0], "/repos/o/r/pulls/7")
+
     def test_editing_a_pull_request_replaces_its_body(self):
         self.assertEqual(self.github.edit_pull("o/r", 7, "new body"), {"number": 7, "body": "new body"})
         self.assertEqual(Api.seen, [("/repos/o/r/pulls/7", {"body": "new body"})])

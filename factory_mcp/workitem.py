@@ -98,7 +98,13 @@ def observe(github, wi):
     if pulls:
         pr = max(pulls, key=lambda p: p["number"])
         facts["pr"] = {"number": pr["number"], "state": pr["state"], "merged": bool(pr.get("merged_at")),
-                       "headSha": pr["head"]["sha"]}
+                       "headSha": pr["head"]["sha"], "mergeable": None}
+        if pr["state"] == "open":
+            try:
+                facts["pr"]["mergeable"] = github.pull(wi["repo"], pr["number"]).get("mergeable")
+            except GitHubError as exc:  # a PR gone or unreadable: not known, as while GitHub computes it
+                if exc.status not in (403, 404):
+                    raise
         facts["verdicts"] = verdicts(github.comments(wi["repo"], pr["number"]), wi["repo"], pr["number"])
         facts["gate"] = gate_run(github, wi["repo"], pr["head"]["sha"])
     return facts
@@ -113,12 +119,13 @@ def gate_run(github, repo, sha):
     except GitHubError as exc:
         if exc.status != 403:
             raise
-        try:  # a newer push or edit cancels a run, which is not the gate's answer
-            runs = [run for run in github.workflow_runs(repo, sha) if run.get("conclusion") != "cancelled"]
+        try:
+            runs = github.workflow_runs(repo, sha)
         except GitHubError as again:
             if again.status != 403:
                 raise
             return None
+    runs = [run for run in runs if run.get("conclusion") != "cancelled"]  # a newer push or edit cancels a run
     return {"status": runs[0]["status"], "conclusion": runs[0].get("conclusion")} if runs else None
 
 

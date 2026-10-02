@@ -85,7 +85,8 @@ class GitHub:
             return None
 
     def pull_view(self, pr):
-        return dict(pr, head={"ref": pr["branch"], "sha": pr["sha"] if pr["state"] == "closed"
+        return dict(pr, mergeable=True if pr["state"] == "open" else None,
+                    head={"ref": pr["branch"], "sha": pr["sha"] if pr["state"] == "closed"
                               else self.head(pr["branch"])}, base={"ref": "main", "sha": self.head("main")})
 
     def route(self, method, path, query, body):
@@ -115,6 +116,8 @@ class GitHub:
         if rest == "/pulls" and method == "GET":
             branch = query["head"][0].split(":", 1)[1]
             return 200, [self.pull_view(p) for p in self.pulls if p["branch"] == branch]
+        if (match := re.fullmatch(r"/pulls/(\d+)", rest)) and method == "GET":
+            return 200, self.pull_view(self.pulls[int(match.group(1)) - 100])
         if rest == "/pulls" and method == "POST":
             pr = {"number": 100 + len(self.pulls), "state": "open", "merged_at": None,
                   "branch": body["head"], "sha": None, "title": body["title"], "body": body["body"]}
