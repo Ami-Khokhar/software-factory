@@ -197,6 +197,30 @@ class GateLoopTest(unittest.TestCase):
         self.assertEqual([f["fingerprint"] for f in order["findingsToAddress"]],
                          ["merge-conflict", fingerprint("src/app.py", "No test for the error")])
 
+    def test_a_failed_redo_of_a_conflicting_pr_keeps_the_gate_findings_on_the_retry(self):
+        self.gate("CHANGES", 1, "c1", MISSING_TEST)
+        self.conflict()
+        wi = self.tick()
+        self.relay.finish(wi["providerTaskId"], status="failed", error="crashed")
+        self.tick()  # the attempt fails; the next tick sees the same PR head, still conflicting
+        wi = self.tick()
+        self.assertEqual(wi["state"], "implementing")
+        self.assertEqual([f["fingerprint"] for f in self.foreman.store.workorders(ID)[-1]["findingsToAddress"]],
+                         ["merge-conflict", fingerprint("src/app.py", "No test for the error"), "previous-attempt"])
+
+    def test_a_verdict_on_an_older_head_does_not_ride_on_a_redo(self):
+        self.gate("CHANGES", 1, "c1", MISSING_TEST)
+        wi = self.tick()
+        self.relay.finish(wi["providerTaskId"], status="failed", error="crashed")
+        self.tick()
+        self.github.push(REPO, "factory/7", "c9")  # a person fixed it by hand; the gate has not seen c9
+        self.assertEqual(self.tick()["state"], "reviewing")
+        self.conflict()
+        self.tick()
+        found = [f["fingerprint"] for f in self.foreman.store.workorders(ID)[-1]["findingsToAddress"]]
+        self.assertEqual(found[0], "merge-conflict")
+        self.assertNotIn(fingerprint("src/app.py", "No test for the error"), found)
+
     def test_a_pr_that_cannot_be_read_on_its_own_is_not_taken_as_conflicting(self):
         def gone(repo, number):
             raise GitHubError(404, "Not Found")

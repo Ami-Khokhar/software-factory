@@ -131,6 +131,9 @@ class GitHub:
             return 200, {"files": [{"filename": f, "status": "modified", "additions": int(a),
                                     "deletions": int(d)}
                                    for a, d, f in (r.split("\t") for r in rows.splitlines())]}
+        if rest == "/actions/runs" and method == "GET":
+            runs = [dict(run, name="pr-gatekeeper") for run in self.runs.get(query["head_sha"][0], [])]
+            return 200, {"total_count": len(runs), "workflow_runs": runs}
         if match := re.fullmatch(r"/commits/([^/]+)/check-runs", rest):
             return 200, {"total_count": 1, "check_runs": self.runs.get(match.group(1), [])}
         return 404, {"message": f"no route {method} {rest}"}
