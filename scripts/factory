@@ -407,7 +407,7 @@ def cmd_update(_):
         return done.stdout
     if changed("worker/Dockerfile"):
         must("the worker image build", "docker", "build", "-q", "-t", "factory-worker:latest", str(HERE / "worker"))
-    if new != old or changed("worker/Dockerfile"):  # a retry restarted already, unless the worker build stopped it
+    if new != old or changed("worker/Dockerfile"):  # a retry restarted already, unless it rebuilds the worker
         restart_factory_mcp()
     if changed("tenant/hermes/sandbox"):
         must("Day Desk's sandbox image build", "docker", "build", "-q", "-t", "day-desk-sandbox:1",

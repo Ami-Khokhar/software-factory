@@ -240,8 +240,8 @@ changed, and runs `hermes profile update day-desk -y` when `tenant/hermes/` chan
 build or profile update stops the deploy with its message, and the next update runs it again from
 the deploy record, which names the last commit for which every step succeeded. The first update
 starts the record at the commit already deployed, so build the images and install the profile from
-the deployed checkout once by hand, as below. A retry restarts factory-mcp only if the worker build
-stopped the run before the restart. A change to `tenant/hermes/config.yaml` is only reported: the
+the deployed checkout once by hand, as below. A retry restarts factory-mcp only when it rebuilds the
+worker image, which the restart follows. A change to `tenant/hermes/config.yaml` is only reported: the
 live config also holds your model and Telegram settings, so merge it by hand.
 Run `factory update` yourself to deploy at once. The
 tests need the packages in `requirements.txt`, installed once for the Python that runs `factory`:
