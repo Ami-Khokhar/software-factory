@@ -18,6 +18,7 @@ ATTENTION = ("human_waiting", "blocked", "exhausted")
 WORKING = ("dispatching", "implementing")
 BOOTSTRAP_PREFIX = "factory-bootstrap/"
 MAX_PLAN_ISSUES = 10  # one approval covers this many issues at most (ADR-0024)
+REGATE_MARKER = re.compile(r"<!-- factory regate (\d+) -->")
 
 
 def agent_resolved(history):
@@ -635,18 +636,36 @@ class Foreman:
             if agent and agent_resolved(self.store.history(workitem_id)):
                 raise ToolError(f"Day Desk already resolved {workitem_id} once, so the owner decides now: "
                                 f"factory retry|regate|close {workitem_id} <note>")
+            rerun = {}
             if resolution == "retry":
                 new = dict(wi, state="changes_requested" if wi.get("prNumber") else "ready")
             elif resolution == "regate" and wi.get("prNumber"):
-                new = dict(wi, state="reviewing")
+                new, rerun = dict(wi, state="reviewing"), {"gateRerun": self._rerun_gate(wi)}
             elif resolution == "close":
                 new = dict(wi, state="cancelled", terminalReason=f"closed by {by}: {note}")
             else:
                 raise ToolError("resolution must be retry, regate (needs a PR) or close")
             return self._write(wi, dict(new, blockedOn=None, attempts=[]), "human_resolved",
-                               resolution=resolution, note=note, by=by, **({"agent": True} if agent else {}))
+                               resolution=resolution, note=note, by=by, **rerun, **({"agent": True} if agent else {}))
         finally:
             self.store.release(workitem_id, self.holder)
+
+    def _rerun_gate(self, wi):
+        """Start a gate run on the open PR's head, unless a run is going or a verdict newer than the
+        accepted one is there: a regate after the gate failed itself would otherwise wait for a run
+        that never comes. An edit of the PR body starts one, and the factory's token may make it
+        where it may not dispatch a workflow. Returns whether it edited the body."""
+        facts = workitem.observe(self.github, wi)
+        running = facts["gate"] and facts["gate"]["status"] != "completed"
+        if not facts["pr"] or facts["pr"]["state"] != "open" or running or workitem.current_verdict(wi, facts):
+            return False
+        number = facts["pr"]["number"]
+        body = self.github.pull(wi["repo"], number).get("body") or ""
+        seen = REGATE_MARKER.search(body)
+        marker = f"<!-- factory regate {int(seen.group(1)) + 1 if seen else 1} -->"
+        self.github.edit_pull(wi["repo"], number,
+                              REGATE_MARKER.sub(marker, body) if seen else f"{body.rstrip()}\n\n{marker}\n")
+        return True
 
     def propose_issue(self, repo, title, body):
         """Planner: open an issue labelled factory:proposed. A person adds factory:ready."""

@@ -80,6 +80,41 @@ class ResolveHumanTest(unittest.TestCase):
         self.assertEqual(self.tick()["state"], "reviewing")  # it waits for the gate: no worker pass
         self.assertEqual(len(self.foreman.store.workorders(ID)), 1)
 
+    def test_regate_after_the_gate_failed_itself_starts_a_new_gate_run(self):
+        self.gate_says_human()  # the gate answered c1 and needs nothing from the code
+        self.foreman.resolve_human(ID, "regate", "The reviewer verdict was invalid", "day-desk")
+        self.assertTrue(self.github.pulls[0]["body"].endswith("<!-- factory regate 1 -->\n"))
+        self.assertTrue(self.foreman.store.history(ID)[-1]["detail"]["gateRerun"])
+        self.github.add_verdict(REPO, 100, "HUMAN", 2, "c1")
+        self.assertEqual(self.tick()["state"], "human_waiting")
+        self.foreman.resolve_human(ID, "regate", "Invalid again", "amteshwar")
+        body = self.github.pulls[0]["body"]
+        self.assertEqual((body.count("factory regate"), body.endswith("<!-- factory regate 2 -->\n")), (1, True))
+
+    def test_regate_after_a_push_the_gate_already_answered_starts_no_run(self):
+        self.gate_says_human()
+        self.github.push(REPO, "factory/7", "c2")  # the owner's fix, which the gate reviewed by itself
+        self.github.add_verdict(REPO, 100, "MERGE", 2, "c2")
+        body = self.github.pulls[0]["body"]
+        self.foreman.resolve_human(ID, "regate", "Pushed the fix myself", "amteshwar")
+        self.assertEqual(self.github.pulls[0]["body"], body)
+        self.assertEqual(self.tick()["state"], "merge_pending")
+
+    def test_regate_while_the_gate_runs_starts_no_second_run(self):
+        self.gate_says_human()
+        self.github.push(REPO, "factory/7", "c2")
+        self.github.add_run(REPO, "c2", status="in_progress", conclusion=None)
+        body = self.github.pulls[0]["body"]
+        self.foreman.resolve_human(ID, "regate", "Pushed the fix myself", "amteshwar")
+        self.assertEqual(self.github.pulls[0]["body"], body)
+
+    def test_regate_on_a_closed_pr_starts_no_run(self):
+        self.gate_says_human()
+        self.github.pulls[0]["state"] = "closed"
+        body = self.github.pulls[0]["body"]
+        self.foreman.resolve_human(ID, "regate", "Reopen it later", "amteshwar")
+        self.assertEqual(self.github.pulls[0]["body"], body)
+
     def test_a_decision_waits_while_a_tick_holds_the_lease(self):
         self.block()
         self.foreman.store.acquire(ID, "another-tick")

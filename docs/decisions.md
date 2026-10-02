@@ -686,3 +686,23 @@ cancels it. Any other error on either read still fails the tick.
 **Consequence.** A private repo works with a token that cannot read check runs. Without the
 Actions read permission, a gate that never answers reaches the owner only after
 `FACTORY_GATE_WAIT_SECONDS`, with a reason that names the gate run, not the token.
+
+---
+
+## ADR-0034 — A regate starts the gate run it waits for
+
+**Context.** When the gate fails itself ("reviewer verdict is invalid", a run that finished with
+no verdict), `regate` moved the WorkItem back to `reviewing`, but nothing started a new gate run:
+the PR had no new push. The WorkItem waited `FACTORY_GATE_WAIT_SECONDS` and escalated again, and
+the answer Day Desk gives for exactly this case (ADR-0030) did nothing. `workflow_dispatch` needs
+more than the factory's token may do, and it has never started the gate job in software-factory.
+
+**Decision.** On `regate`, factory-mcp reads the PR. When no gate run is going and no verdict
+newer than the accepted one is there, it edits the PR body: it adds `<!-- factory regate 1 -->`,
+or counts the one already there up by one. The `edited` event starts a gate run. A regate edits
+nothing while a gate run is going, when a verdict newer than the accepted one is on the head, or
+when the PR is closed.
+
+**Consequence.** A regate after the gate failed itself gets a new review within the gate's run
+time. The PR body carries one hidden line per PR. A failed edit fails the regate with GitHub's
+error, and the WorkItem stays with the owner.
