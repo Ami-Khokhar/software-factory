@@ -286,7 +286,9 @@ printf 'FACTORY_AGENT_TOKEN=%s\n' "$(python3 -c 'import secrets; print(secrets.t
   >> ~/.config/factory-mcp/secrets && factory update
 # fill in FACTORY_MCP_TOKEN and FACTORY_AGENT_TOKEN (from ~/.config/factory-mcp/secrets),
 # TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USERS (your Telegram user id), TELEGRAM_HOME_CHANNEL (the same
-# id: without it the cron jobs' messages have nowhere to go) and DAYDESK_GITHUB_TOKEN (below)
+# id: without it the cron jobs' messages have nowhere to go) and DAYDESK_GITHUB_TOKEN (below).
+# A Day Desk installed before TELEGRAM_HOME_CHANNEL was asked for: add it to that .env, then run
+# hermes -p day-desk gateway restart
 docker build -t day-desk-sandbox:1 ~/.local/share/software-factory/tenant/hermes/sandbox
 hermes -p day-desk model             # choose your ChatGPT or Codex subscription
 hermes -p day-desk gateway setup     # Telegram
