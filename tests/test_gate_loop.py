@@ -262,6 +262,7 @@ class GateLoopTest(unittest.TestCase):
         wi = self.tick()
         self.assertEqual(wi["state"], "human_waiting")
         self.assertIn("no finding a worker could fix", wi["blockedOn"])
+        self.assertEqual((wi["blockers"], wi["gateRound"], wi["reviewedSha"]), ([], 1, "c1"))
         self.assertEqual(len(self.foreman.store.workorders(ID)), 1)
         self.foreman.resolve_human(ID, "retry", "List tests/test_error.py under What changed", "amteshwar")
         self.tick()

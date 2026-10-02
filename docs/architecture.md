@@ -136,7 +136,7 @@ The states are the enum in `schemas/workitem.schema.json`.
 | `reviewing` | a verdict on the current head: MERGE, CHANGES or HUMAN | `merge_pending`, `changes_requested` or `human_waiting` |
 | `reviewing` | the gate's check run (or workflow run) finished, not cancelled, with no verdict | `human_waiting` |
 | `changes_requested` | the same blocking problem in 2 gate rounds (ADR-0005) | `human_waiting` |
-| `reviewing` | a CHANGES verdict that names no finding, for example when only the gate's PR lint failed | `human_waiting`: a fix pass would have nothing to fix |
+| `reviewing`, `changes_requested` | a CHANGES verdict that names no finding, for example when only the gate's PR lint failed | `human_waiting`: a fix pass would have nothing to fix |
 | `changes_requested` | the tick dispatches a fix WorkOrder | `dispatching`, then `implementing` |
 | `pr_open`, `reviewing`, `changes_requested` | the PR conflicts with its base; the tick dispatches an implement WorkOrder on the current base | `dispatching`, then `implementing` |
 | `merge_pending` | GitHub reports the PR merged | `merged` |
