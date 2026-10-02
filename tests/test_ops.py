@@ -108,6 +108,13 @@ class ResolveHumanTest(unittest.TestCase):
         self.foreman.resolve_human(ID, "regate", "Pushed the fix myself", "amteshwar")
         self.assertEqual(self.github.pulls[0]["body"], body)
 
+    def test_regate_on_a_closed_pr_starts_no_run(self):
+        self.gate_says_human()
+        self.github.pulls[0]["state"] = "closed"
+        body = self.github.pulls[0]["body"]
+        self.foreman.resolve_human(ID, "regate", "Reopen it later", "amteshwar")
+        self.assertEqual(self.github.pulls[0]["body"], body)
+
     def test_a_decision_waits_while_a_tick_holds_the_lease(self):
         self.block()
         self.foreman.store.acquire(ID, "another-tick")

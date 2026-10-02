@@ -264,8 +264,8 @@ and that the `factory-update` job names: `/usr/bin/python3 -m pip install -r req
   make it match the relay's (`AGENT_RELAY_TOKEN` in the relay's environment, else that file).
 - **HUMAN from the gate.** Read the gate's comment on the PR. `retry` sends its findings to the
   worker; `regate` re-reviews a fix you pushed yourself, or the same head when the gate failed
-  itself ("reviewer verdict is invalid"): factory-mcp then edits a hidden
-  `<!-- factory regate n -->` line in the PR body, which starts a gate run.
+  itself ("reviewer verdict is invalid"): unless a gate run is going or a newer verdict is there,
+  factory-mcp edits a hidden `<!-- factory regate n -->` line in the PR body, which starts a run.
 
 ## Day Desk: the factory in Telegram (Hermes)
 

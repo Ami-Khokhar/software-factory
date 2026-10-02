@@ -699,8 +699,9 @@ more than the factory's token may do, and it has never started the gate job in s
 
 **Decision.** On `regate`, factory-mcp reads the PR. When no gate run is going and no verdict
 newer than the accepted one is there, it edits the PR body: it adds `<!-- factory regate 1 -->`,
-or counts the one already there up by one. The `edited` event starts a gate run. A regate after
-a push the gate is reviewing, or has answered, edits nothing.
+or counts the one already there up by one. The `edited` event starts a gate run. A regate edits
+nothing while a gate run is going, when a verdict newer than the accepted one is on the head, or
+when the PR is closed.
 
 **Consequence.** A regate after the gate failed itself gets a new review within the gate's run
 time. The PR body carries one hidden line per PR. A failed edit fails the regate with GitHub's

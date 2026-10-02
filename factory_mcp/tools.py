@@ -135,8 +135,8 @@ def build(store, foreman, agent=False):
              "write", lambda args: foreman.tick(args.get("id"))),
         Tool("factory_resolve_human",
              "Record a person's decision on a WorkItem in human_waiting or blocked: retry (the "
-             "factory tries again, with the note as a finding), regate (the person pushed a fix) or "
-             "close.",
+             "factory tries again, with the note as a finding), regate (back to the gate: a fix the "
+             "person pushed, or the same head when the gate failed itself) or close.",
              {"type": "object", "required": ["id", "resolution", "note", "by"],
               "additionalProperties": False,
               "properties": {"id": {"type": "string"},

@@ -24,7 +24,8 @@ def escalation(wi, history):
         for h in history if not h["action"].startswith("tool:")][-3:]
     return {"reason": wi.get("blockedOn") or wi["state"],
             "needFromYou": f"Decide {wi['id']}: call factory_resolve_human with retry (the factory "
-                           "tries again), regate (you pushed a fix; re-run the gate) or close.",
+                           "tries again), regate (re-run the gate: on a fix you pushed, or on the same head "
+                           "when the gate failed itself) or close.",
             "owner": wi.get("owner"), "tried": tried}
 
 

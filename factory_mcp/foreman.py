@@ -645,18 +645,19 @@ class Foreman:
             self.store.release(workitem_id, self.holder)
 
     def _rerun_gate(self, wi):
-        """Start a gate run on the PR's head unless one runs or has answered since the gate last spoke:
-        a regate after the gate failed itself would otherwise wait for a run that never comes. An
-        edit of the PR body starts one, and the factory's token may make it where it may not
-        dispatch a workflow. Returns whether it edited the body."""
+        """Start a gate run on the open PR's head, unless a run is going or a verdict newer than the
+        accepted one is there: a regate after the gate failed itself would otherwise wait for a run
+        that never comes. An edit of the PR body starts one, and the factory's token may make it
+        where it may not dispatch a workflow. Returns whether it edited the body."""
         facts = workitem.observe(self.github, wi)
         running = facts["gate"] and facts["gate"]["status"] != "completed"
-        if running or workitem.current_verdict(wi, facts):
+        if not facts["pr"] or facts["pr"]["state"] != "open" or running or workitem.current_verdict(wi, facts):
             return False
-        body = self.github.pull(wi["repo"], wi["prNumber"]).get("body") or ""
+        number = facts["pr"]["number"]
+        body = self.github.pull(wi["repo"], number).get("body") or ""
         seen = REGATE_MARKER.search(body)
         marker = f"<!-- factory regate {int(seen.group(1)) + 1 if seen else 1} -->"
-        self.github.edit_pull(wi["repo"], wi["prNumber"],
+        self.github.edit_pull(wi["repo"], number,
                               REGATE_MARKER.sub(marker, body) if seen else f"{body.rstrip()}\n\n{marker}\n")
         return True
 

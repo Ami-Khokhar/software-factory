@@ -8,7 +8,7 @@
   factory drive-queue                     the escalations Day Desk may still answer (its job's monitor)
   factory report                          the last 7 days in one message: autonomy, escalations, lessons
   factory retry  <owner/repo#n> <note>    try again; the note goes to the worker as a finding
-  factory regate <owner/repo#n> <note>    you pushed a fix yourself; the gate reviews it again
+  factory regate <owner/repo#n> <note>    the gate reviews again: your pushed fix, or the same head
   factory close  <owner/repo#n> <note>    give up on this WorkItem
   factory stop                            kill switch: cancel running workers, stop factory-mcp
   factory start                           start Docker, the relay and factory-mcp
