@@ -88,7 +88,8 @@ class SchemaTest(unittest.TestCase):
     def test_a_verdict_read_from_a_gate_comment_meets_its_schema(self):
         findings = [{"severity": "blocking", "path": "app.py", "line": 3, "problem": "x > y", "fix": "swap"},
                     {"severity": "note", "path": None, "line": "7", "problem": "No test"}]
-        comments = [{"body": marker_comment(outcome, n, f"s{n}", findings), "created_at": "2026-09-24T02:00:00Z"}
+        comments = [{"body": marker_comment(outcome, n, f"s{n}", findings), "created_at": "2026-09-24T02:00:00Z",
+                     "user": {"login": "github-actions[bot]"}}
                     for n, outcome in enumerate(("CHANGES", "HUMAN", "MERGE"), start=1)]
         validator = Draft202012Validator(schema("verdict"))
         found = verdicts(comments, "o/r", 5)
