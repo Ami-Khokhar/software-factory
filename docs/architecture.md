@@ -106,7 +106,8 @@ A tick comes from the background loop or from `factory_tick`.
    - `dispatching`: submit the task to the relay. The state is written before the call, and the
      WorkOrder's idempotency key is the relay's request id, so a retry never starts a second task.
    - `implementing`: read the task. When it is done, check the Result and what GitHub holds, push
-     a patch, and open the PR or adopt the one already open on the branch.
+     a patch, and open the PR or adopt the one already open on the branch. A push to an open PR
+     rewrites its body, because the gate lints the body against the paths the PR now changes.
    - `pr_open`, `reviewing` or `changes_requested` with a PR that GitHub says conflicts with its
      base: dispatch an implement WorkOrder on the current default branch, with the conflict and
      any gate findings as data; its push replaces the branch, and the gate runs again (ADR-0032).
