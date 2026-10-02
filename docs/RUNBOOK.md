@@ -305,7 +305,8 @@ cat > ~/.hermes/profiles/day-desk/scripts/factory-update.sh <<'SH'
 # fail stays on origin, and each run would report it again.
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 last="$HOME/.local/state/factory-mcp/last-update.txt"
-out="$(factory update 2>&1)"
+# Hermes's PATH may find another python3, without requirements.txt: name the one you installed it for
+out="$(/usr/bin/python3 "$HOME/.local/bin/factory" update 2>&1)"
 [ -z "$out" ] && exit 0  # nothing to deploy
 [ "$out" = "$(cat "$last" 2>/dev/null)" ] && exit 0
 printf '%s\n' "$out" > "$last"
