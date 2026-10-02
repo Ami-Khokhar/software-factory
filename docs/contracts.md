@@ -59,7 +59,9 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
 - **`blocked` carries evidence.** A WorkItem in `blocked` must have `blockedOn`
   and at least two `attempts`, so the escalation shows what was tried. A
   WorkItem leaves `blockedOn` behind when the wait ends: a WorkItem that is
-  terminal or not waiting has `blockedOn` `null`.
+  terminal or not waiting has `blockedOn` `null`. WorkItems stored before #110
+  could keep a stale `blockedOn`; the store's migration 2 drops it from any
+  WorkItem whose state is not `human_waiting` or `blocked`.
 - **Budgets have two ceilings.** `WorkOrder.budget` requires `maxPasses` and
   `wallMs`. Reaching `maxPasses` moves the WorkItem to `exhausted`.
 - **`blockers[].fingerprint` is the identity of "the same problem."** Round

@@ -41,6 +41,21 @@ CREATE TABLE IF NOT EXISTS workorders (
 REMOVED_FIELDS = ("parentGoalId", "baseSha", "provider", "sessionHandle", "sessionNative", "sessionUrl")
 
 
+def _migrate_1(wi):
+    return {key: value for key, value in wi.items() if key not in REMOVED_FIELDS}
+
+
+# Migration 2: a WorkItem that left a wait before #110 kept its stale blockedOn; only
+# human_waiting and blocked may carry it (line "`blocked` carries evidence" in contracts.md).
+def _migrate_2(wi):
+    if wi["state"] not in ("human_waiting", "blocked"):
+        wi = {key: value for key, value in wi.items() if key != "blockedOn"}
+    return wi
+
+
+MIGRATIONS = {1: _migrate_1, 2: _migrate_2}
+
+
 def now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -60,13 +75,14 @@ class Store:
 
     def _migrate(self):
         """Bring WorkItems written by an older factory-mcp up to the contract. Safe to re-run."""
-        if self._db.execute("PRAGMA user_version").fetchone()[0] >= 1:
-            return
-        for workitem_id, doc in self._db.execute("SELECT id, doc FROM workitems").fetchall():
-            wi = {key: value for key, value in json.loads(doc).items() if key not in REMOVED_FIELDS}
-            self._db.execute("UPDATE workitems SET doc = ? WHERE id = ?",
-                             (json.dumps(wi, sort_keys=True), workitem_id))
-        self._db.execute("PRAGMA user_version = 1")
+        version = self._db.execute("PRAGMA user_version").fetchone()[0]
+        while version < max(MIGRATIONS):
+            version += 1
+            for workitem_id, doc in self._db.execute("SELECT id, doc FROM workitems").fetchall():
+                wi = MIGRATIONS[version](json.loads(doc))
+                self._db.execute("UPDATE workitems SET doc = ? WHERE id = ?",
+                                 (json.dumps(wi, sort_keys=True), workitem_id))
+            self._db.execute(f"PRAGMA user_version = {version}")
 
     def close(self):
         self._db.close()
