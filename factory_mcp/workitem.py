@@ -197,8 +197,10 @@ def reconcile(wi, facts):
         wi["state"] = "pr_open"  # rebuilt from GitHub: the PR exists already
     if wi["state"] == "pr_open" and facts["gate"]:
         wi["state"] = "reviewing"
-    # a run that started before the last regate is the one the regate asked to repeat, not its answer
-    stale = wi.get("regatedAt") and ((facts["gate"] or {}).get("startedAt") or "") < wi["regatedAt"]
+    # a run that started before the last regate is the one the regate asked to repeat, not its answer;
+    # a run with no start time is taken as the answer, so the WorkItem cannot wait on it forever
+    started = (facts["gate"] or {}).get("startedAt")
+    stale = bool(wi.get("regatedAt") and started and started < wi["regatedAt"])
     if wi["state"] == "reviewing" and not verdict and facts["gate"] and not stale \
             and facts["gate"]["status"] == "completed" and wi.get("reviewedSha") != pr["headSha"]:
         wi.update(state="human_waiting", blockedOn="gate finished on the head without a verdict")

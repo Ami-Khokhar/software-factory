@@ -708,5 +708,6 @@ time. The PR body carries one hidden line per PR; its count restarts when factor
 the body after a push, which is enough, because the count only has to change the body. The
 WorkItem keeps `regatedAt`, the time of the regate, and a gate run that started before it is not
 taken as the gate finishing without a verdict: until GitHub registers the new run, the old one is
-still the latest. A failed edit fails the regate with GitHub's
+still the latest. A run with no start time is taken as an answer, so the WorkItem never waits on
+it forever. A failed edit fails the regate with GitHub's
 error, and the WorkItem stays with the owner.
