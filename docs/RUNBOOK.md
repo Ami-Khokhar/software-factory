@@ -244,8 +244,8 @@ the deployed checkout once by hand, as below. A retry restarts factory-mcp only 
 worker image, which the restart follows. A change to `tenant/hermes/config.yaml` is only reported: the
 live config also holds your model and Telegram settings, so merge it by hand.
 Run `factory update` yourself to deploy at once. The
-tests need the packages in `requirements.txt`, installed once for the Python that runs `factory`:
-`python3 -m pip install -r requirements.txt`.
+tests need the packages in `requirements.txt`, installed once for the Python that runs `factory`
+and that the `factory-update` job names: `/usr/bin/python3 -m pip install -r requirements.txt`.
 
 ## When something looks wrong
 
