@@ -3,6 +3,7 @@ import unittest
 
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
+from factory_mcp.github import GitHubError
 from factory_mcp.store import Store
 from factory_mcp.verdict import blockers, fingerprint
 from tests.fakes import FakeGit, FakeGitHub, FakeRelay, result_line
@@ -159,6 +160,22 @@ class GateLoopTest(unittest.TestCase):
         self.assertEqual((order["kind"], order["round"]), ("implement", 1))
         self.assertEqual([f["fingerprint"] for f in order["findingsToAddress"]],
                          ["merge-conflict", fingerprint("src/app.py", "No test for the error")])
+
+    def test_a_pr_that_cannot_be_read_on_its_own_is_not_taken_as_conflicting(self):
+        def gone(repo, number):
+            raise GitHubError(404, "Not Found")
+        self.github.pull = gone
+        self.github.add_verdict(REPO, 100, "CHANGES", 1, "c1", [MISSING_TEST])
+        self.assertEqual(self.foreman.store.workorders(ID)[-1]["kind"], "implement")
+        wi = self.tick()  # the verdict is still taken in
+        self.assertEqual((wi["state"], self.foreman.store.workorders(ID)[-1]["kind"]), ("implementing", "fix"))
+
+    def test_any_other_error_reading_the_pr_fails_the_tick(self):
+        def down(repo, number):
+            raise GitHubError(502, "Bad Gateway")
+        self.github.pull = down
+        self.assertEqual(self.tick()["state"], "pr_open")
+        self.assertEqual(self.foreman.store.history(ID)[-1]["action"], "tick_error")
 
     def test_gate_human_verdict(self):
         self.gate("HUMAN", 1, "c1")
