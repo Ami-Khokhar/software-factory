@@ -134,6 +134,42 @@ class GateLoopTest(unittest.TestCase):
         self.github.push(REPO, "factory/7", "c9")  # a person fixed it by hand
         self.assertEqual(self.tick()["state"], "reviewing")
 
+    def refuse(self, *names, status=403):
+        """GitHub answers each of these reads with `status`, as it does a fine-grained token on a
+        private repo."""
+        def refused(*args, **kwargs):
+            raise GitHubError(status, "Resource not accessible by personal access token")
+        for name in names:
+            setattr(self.github, name, refused)
+
+    def test_an_unreadable_check_run_falls_back_to_the_gates_workflow_run(self):
+        self.refuse("check_runs")
+        self.github.workflow_run_list[(REPO, "c1")] = [  # newest first: an edit cancelled the older run
+            {"name": "pr-gatekeeper", "status": "completed", "conclusion": "cancelled"},
+            {"name": "pr-gatekeeper", "status": "in_progress", "conclusion": None}]
+        self.assertEqual(self.tick()["state"], "reviewing")
+
+    def test_with_no_gate_run_readable_the_verdict_still_moves_the_workitem(self):
+        self.refuse("check_runs", "workflow_runs")
+        self.github.add_verdict(REPO, 100, "CHANGES", 1, "c1", [MISSING_TEST])
+        wi = self.tick()
+        self.assertEqual((wi["state"], self.foreman.store.workorders(ID)[-1]["kind"]), ("implementing", "fix"))
+
+    def test_any_other_error_reading_the_gate_run_fails_the_tick(self):
+        self.refuse("check_runs", status=500)
+        self.assertEqual(self.tick()["state"], "pr_open")
+        self.assertEqual(self.foreman.store.history(ID)[-1]["action"], "tick_error")
+
+    def test_any_other_error_reading_the_workflow_run_fails_the_tick(self):
+        self.refuse("check_runs")
+        self.refuse("workflow_runs", status=500)
+        self.assertEqual(self.tick()["state"], "pr_open")
+        self.assertEqual(self.foreman.store.history(ID)[-1]["action"], "tick_error")
+
+    def test_a_cancelled_check_run_is_not_the_gates_answer(self):
+        self.github.runs[(REPO, "c1")] = [{"name": "pr-gatekeeper", "status": "completed", "conclusion": "cancelled"}]
+        self.assertEqual(self.tick()["state"], "pr_open")  # not human_waiting: the next run answers
+
     def conflict(self):
         self.github.branches[(REPO, "main")] = "m2"  # main moved on, and the PR no longer merges
         self.github.pulls[0]["mergeable"] = False

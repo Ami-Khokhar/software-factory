@@ -106,10 +106,27 @@ def observe(github, wi):
                 if exc.status not in (403, 404):
                     raise
         facts["verdicts"] = verdicts(github.comments(wi["repo"], pr["number"]), wi["repo"], pr["number"])
-        runs = github.check_runs(wi["repo"], pr["head"]["sha"])
-        if runs:
-            facts["gate"] = {"status": runs[0]["status"], "conclusion": runs[0].get("conclusion")}
+        facts["gate"] = gate_run(github, wi["repo"], pr["head"]["sha"])
     return facts
+
+
+def gate_run(github, repo, sha):
+    """The gate's run on `sha` as {status, conclusion}, or None. A fine-grained token cannot read
+    check runs on a private repo (403), so the workflow run stands in for it; when the token cannot
+    read that either, the verdict comments and FACTORY_GATE_WAIT_SECONDS still move the WorkItem."""
+    try:
+        runs = github.check_runs(repo, sha)
+    except GitHubError as exc:
+        if exc.status != 403:
+            raise
+        try:
+            runs = github.workflow_runs(repo, sha)
+        except GitHubError as again:
+            if again.status != 403:
+                raise
+            return None
+    runs = [run for run in runs if run.get("conclusion") != "cancelled"]  # a newer push or edit cancels a run
+    return {"status": runs[0]["status"], "conclusion": runs[0].get("conclusion")} if runs else None
 
 
 def current_verdict(wi, facts):

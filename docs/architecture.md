@@ -97,7 +97,9 @@ A tick comes from the background loop or from `factory_tick`.
    know is taken in, so a lost store fills again from GitHub.
 2. **Each live WorkItem** whose repo is allowlisted (#38): take its lease or skip it; observe
    GitHub (the issue, the PR on `factory/<issue>`, the gate's verdicts and check run); reconcile the
-   state with those facts and write it; then act at most once:
+   state with those facts and write it; then act at most once. A fine-grained token cannot read
+   check runs on a private repo, so the gate's workflow run stands in; when the token cannot read
+   that either, the verdicts and `FACTORY_GATE_WAIT_SECONDS` still move the WorkItem:
    - `ready`: dispatch an implement WorkOrder, unless the issue has a `Depends on #n` line and
      #n has not merged: then it waits, with `waitingOn: n` (ADR-0024). `changes_requested`:
      dispatch a fix WorkOrder that carries the gate's blocking findings as data.
@@ -129,9 +131,9 @@ The states are the enum in `schemas/workitem.schema.json`.
 | `ready` | a `Depends on #n` issue closed without a merged PR, ended `cancelled` or `exhausted`, or does not exist | `human_waiting` |
 | `implementing` | the task completed, the Result is valid and the guards pass | `pr_open`, or `reviewing` when the PR already exists |
 | `implementing` | the task failed, or the Result or a guard failed | back to `ready` (`changes_requested` for a fix) with an `attempts` entry; `blocked` after 2 |
-| `pr_open` | the gate's check run exists on the head | `reviewing` |
+| `pr_open` | the gate's check run, or its workflow run when the token cannot read check runs, exists on the head | `reviewing` |
 | `reviewing` | a verdict on the current head: MERGE, CHANGES or HUMAN | `merge_pending`, `changes_requested` or `human_waiting` |
-| `reviewing` | the gate's check run finished with no verdict | `human_waiting` |
+| `reviewing` | the gate's check run (or workflow run) finished, not cancelled, with no verdict | `human_waiting` |
 | `changes_requested` | the same blocking problem in 2 gate rounds (ADR-0005) | `human_waiting` |
 | `changes_requested` | the tick dispatches a fix WorkOrder | `dispatching`, then `implementing` |
 | `pr_open`, `reviewing`, `changes_requested` | the PR conflicts with its base; the tick dispatches an implement WorkOrder on the current base | `dispatching`, then `implementing` |
