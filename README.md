@@ -34,7 +34,7 @@ FACTORY_MCP_TOKEN=<secret> FACTORY_REPOS=owner/repo FACTORY_GITHUB_TOKEN=<token>
 | `FACTORY_REPOS` | Comma-separated repos to enable at start. Other repos are enabled on first use (ADR-0027) |
 | `FACTORY_REPOS_FILE` | `repos.json`, the repos a factory tool enabled; they join the allowlist (ADR-0014). `factory serve` sets `~/.config/factory-mcp/repos.json` |
 | `FACTORY_LESSONS_FILE` | `lessons.json`, the lessons the owner approved from repeated gate findings (ADR-0020). `factory serve` sets `~/.config/factory-mcp/lessons.json` |
-| `FACTORY_GITHUB_TOKEN` | GitHub REST token (fine-grained: issues, pull requests, contents, secrets read and write) |
+| `FACTORY_GITHUB_TOKEN` | GitHub REST token (fine-grained: issues, pull requests, contents, secrets read and write; actions read, so the factory sees the gate's run in a private repo) |
 | `FACTORY_RELAY_URL` | agent-relay HTTP API, default `http://127.0.0.1:43124` |
 | `AGENT_RELAY_TOKEN` | agent-relay's API token, sent as `Authorization: Bearer` on every relay call. Unset: the file at `AGENT_RELAY_TOKEN_FILE` (default `~/.config/agent-relay/token`, which the relay writes on its first start), read on each call. With neither, no token is sent |
 | `FACTORY_DB` | SQLite path, default `~/.local/state/factory-mcp/factory.sqlite3` |

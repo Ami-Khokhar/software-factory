@@ -668,3 +668,21 @@ reports while it computes, waits for the next tick.
 **Consequence.** A conflict costs one worker pass, within `FACTORY_MAX_PASSES`, instead of 2 hours
 and the owner's time. The worker redoes the change rather than resolving markers, so the gate
 reviews a whole diff against the current base. Each tick reads each open PR once more.
+
+---
+
+## ADR-0033 — The gate's run is a secondary fact; its verdict decides
+
+**Context.** A fine-grained token gets 403 on check runs in a private repo, and the observe step
+raised on it, so every tick of a software-factory WorkItem failed before reconcile and the gate's
+verdict on its PR was never taken in (#112). The check run only moves `pr_open` to `reviewing` and
+catches a gate that finished without a verdict; the verdict comment decides the state.
+
+**Decision.** A 403 on the check-run read falls back to the pr-gatekeeper workflow run on the
+head. A 403 on that read too leaves the gate fact absent, and the WorkItem moves on its verdicts
+alone. A cancelled run, from either read, is not the gate's answer, because a newer push or edit
+cancels it. Any other error on either read still fails the tick.
+
+**Consequence.** A private repo works with a token that cannot read check runs. Without the
+Actions read permission, a gate that never answers reaches the owner only after
+`FACTORY_GATE_WAIT_SECONDS`, with a reason that names the gate run, not the token.

@@ -180,6 +180,10 @@ needs `gh` on factory-mcp's PATH and a `FACTORY_GITHUB_TOKEN` that may read and 
 Actions secrets (a fine-grained token needs the "Secrets" permission, a classic one the `repo`
 scope). When `gh secret list` fails, its status ends with gh's first error line, tokens removed; a
 403 or "Resource not accessible" there means `FACTORY_GITHUB_TOKEN` lacks that permission.
+A fine-grained token cannot read check runs, so in a private repo the factory reads the gate's
+workflow run instead, which needs the "Actions" read permission. Without it the WorkItem still
+moves on the gate's verdicts, but a gate that never answers reaches you only after
+`FACTORY_GATE_WAIT_SECONDS`.
 
 After the merge you need not enable the repo by hand: the first issue a trusted author
 (`FACTORY_TRUSTED_AUTHORS`, or `FACTORY_OWNER` when that is empty; with neither, the factory searches
