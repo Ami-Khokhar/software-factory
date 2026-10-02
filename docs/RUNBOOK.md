@@ -236,7 +236,8 @@ is merged), runs the tests there, and restarts factory-mcp only if they pass. A 
 the old version running, and the job sends you why. It also rebuilds the worker image when
 `worker/Dockerfile` changed, rebuilds Day Desk's sandbox image when `tenant/hermes/sandbox/`
 changed, and runs `hermes profile update day-desk -y` when `tenant/hermes/` changed. A failed
-build or profile update stops the deploy with its message. A change to `tenant/hermes/config.yaml`
+build or profile update stops the deploy with its message, and the next update runs it again:
+`~/.local/state/factory-mcp/deployed` names the last commit for which every step succeeded. A change to `tenant/hermes/config.yaml`
 is only reported: the live config also holds your model and Telegram settings, so merge it by hand.
 Run `factory update` yourself to deploy at once. The
 tests need the packages in `requirements.txt`, installed once for the Python that runs `factory`:
@@ -277,7 +278,7 @@ printf 'FACTORY_AGENT_TOKEN=%s\n' "$(python3 -c 'import secrets; print(secrets.t
   >> ~/.config/factory-mcp/secrets && factory update
 # fill in FACTORY_MCP_TOKEN and FACTORY_AGENT_TOKEN (from ~/.config/factory-mcp/secrets),
 # TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USERS (your Telegram user id) and DAYDESK_GITHUB_TOKEN (below)
-docker build -t day-desk-sandbox:1 ~/path/to/software-factory/tenant/hermes/sandbox
+docker build -t day-desk-sandbox:1 ~/.local/share/software-factory/tenant/hermes/sandbox
 hermes -p day-desk model             # choose your ChatGPT or Codex subscription
 hermes -p day-desk gateway setup     # Telegram
 hermes -p day-desk gateway install   # start it at login
@@ -301,6 +302,7 @@ cat > ~/.hermes/profiles/day-desk/scripts/factory-update.sh <<'SH'
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 last="$HOME/.local/state/factory-mcp/last-update.txt"
 out="$(factory update 2>&1)"
+[ -z "$out" ] && exit 0  # nothing to deploy
 [ "$out" = "$(cat "$last" 2>/dev/null)" ] && exit 0
 printf '%s\n' "$out" > "$last"
 printf '%s\n' "$out"
@@ -321,8 +323,11 @@ days before, how many went to a person or ran out of passes and the 3 most frequ
 the new lesson candidates and the lessons flagged as not working. Run `factory report` to see it
 at any other time, or ask Day Desk. It runs no model and changes nothing. Reply to the message, and Day Desk answers the escalation with
 you. `factory update` gives Day Desk the new skill and sandbox image when a deploy changes them.
-It installs the profile from the deployed checkout, which `hermes profile show day-desk` names as
-its source: a profile installed from another checkout would copy whatever that checkout holds.
+It updates the profile only when `hermes profile show day-desk` names the deployed checkout as
+its source, because a profile installed from another checkout would copy whatever that checkout
+holds; otherwise the deploy stops and says so. To move a profile installed from a working
+checkout, edit the source path in `~/.hermes/profiles/day-desk/distribution.yaml` to
+`~/.local/share/software-factory/tenant/hermes`.
 The deploy does not restart Day Desk's gateway, because the job runs inside it; a sandbox change
 reaches new shell sessions at once, and `hermes -p day-desk gateway restart` is for anything else.
 

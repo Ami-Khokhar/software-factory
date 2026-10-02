@@ -24,6 +24,7 @@ import calendar
 import http.client
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -358,7 +359,9 @@ def branch_merged(branch):
 
 def cmd_update(_):
     """Deploy this checkout's branch: follow a merged branch to the default branch, fast-forward,
-    and restart factory-mcp only if the tests pass there. A failing test keeps the old commit."""
+    and restart factory-mcp only if the tests pass there. A failing test keeps the old commit. The
+    images and Day Desk's profile follow what changed since the last commit they were all built
+    for, so a step that failed runs again on the next update."""
     def git(*args):
         return subprocess.run(["git", "-C", str(HERE), *args], capture_output=True, text=True)
     if git("status", "--porcelain", "--untracked-files=no").stdout.strip():
@@ -374,30 +377,49 @@ def cmd_update(_):
     if git("merge", "-q", "--ff-only", "@{upstream}").returncode != 0:
         die("update: the deployment checkout does not fast-forward")
     new = git("rev-parse", "HEAD").stdout.strip()
-    if new == old:
+    deployed_file = STATE / "deployed"
+    try:
+        since = deployed_file.read_text().strip() or old
+    except OSError:  # the first update: what ran before it is deployed, and the record starts there
+        since = old
+        STATE.mkdir(parents=True, exist_ok=True)
+        deployed_file.write_text(old + "\n")
+    if new == since:
         return
     tests = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"],
                            cwd=HERE, capture_output=True, text=True)
-    if tests.returncode != 0:
+    if new != old and tests.returncode != 0:
         git("checkout", "-q", "-f", branch)
         git("reset", "-q", "--hard", old)
         why = "\n".join((tests.stdout + tests.stderr).strip().splitlines()[-20:])
         die(f"update: tests fail at {new[:7]}; factory-mcp stays on {old[:7]}\n{why}")
-    def changed(path):
-        return git("diff", "--quiet", old, new, "--", path).returncode != 0
+    def changed(path):  # an unknown `since` fails the diff, and then every step runs
+        return git("diff", "--quiet", since, new, "--", path).returncode != 0
 
-    def must(what, done):
-        if done.returncode != 0:  # factory-mcp may already run the new code; say what lags behind it
+    def must(what, *cmd):  # factory-mcp may already run the new code; say what lags behind it
+        try:
+            done = run(*cmd)
+        except FileNotFoundError:
+            die(f"update: {what} failed at {new[:7]}: no {cmd[0]} on PATH; the next update tries again")
+        if done.returncode != 0:
             die(f"update: {what} failed at {new[:7]}: {' '.join((done.stderr or done.stdout).split())[-300:]}")
+        return done.stdout
     if changed("worker/Dockerfile"):
-        must("the worker image build", run("docker", "build", "-q", "-t", "factory-worker:latest", str(HERE / "worker")))
+        must("the worker image build", "docker", "build", "-q", "-t", "factory-worker:latest", str(HERE / "worker"))
     restart_factory_mcp()
     if changed("tenant/hermes/sandbox"):
-        must("Day Desk's sandbox image build", run("docker", "build", "-q", "-t", "day-desk-sandbox:1",
-                                                   str(HERE / "tenant" / "hermes" / "sandbox")))
-    if changed("tenant/hermes"):  # the profile's source is this checkout (RUNBOOK); its config.yaml is kept
-        must("hermes profile update", run("hermes", "profile", "update", "day-desk", "-y"))
-    print(f"update: deployed {new[:7]} (was {old[:7]})")
+        must("Day Desk's sandbox image build", "docker", "build", "-q", "-t", "day-desk-sandbox:1",
+             str(HERE / "tenant" / "hermes" / "sandbox"))
+    if changed("tenant/hermes"):  # the profile's config.yaml is kept
+        source = re.search(r"^Installed from:\s*(.+)$", must("hermes profile show", "hermes", "profile", "show",
+                                                             "day-desk"), re.M)
+        want = str(HERE / "tenant" / "hermes")
+        if not source or os.path.realpath(source.group(1).strip()) != os.path.realpath(want):
+            die(f"update: Day Desk's profile is installed from {source.group(1).strip() if source else 'nowhere'}, "
+                f"not {want}, so an update would copy the wrong files. Install it from {want} (RUNBOOK)")
+        must("hermes profile update", "hermes", "profile", "update", "day-desk", "-y")
+    deployed_file.write_text(new + "\n")
+    print(f"update: deployed {new[:7]} (was {since[:7]})")
     if changed("tenant/hermes/config.yaml"):
         print("update: tenant/hermes/config.yaml changed. The live ~/.hermes/profiles/day-desk/config.yaml "
               "keeps your model and Telegram settings, so merge the change into it by hand (RUNBOOK)")

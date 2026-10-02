@@ -638,7 +638,9 @@ that may hold unmerged work.
 command keeps its rule: it deploys only a commit whose tests pass. It now also rebuilds Day Desk's
 sandbox image when `tenant/hermes/sandbox/` changed and runs `hermes profile update day-desk -y`
 when `tenant/hermes/` changed, with the profile installed from the deployed checkout. A failed
-image build or profile update stops the deploy with its message, which the job sends to the owner.
+image build or profile update stops the deploy with its message, which the job sends to the owner,
+and runs again on the next update: a state file names the last commit for which every step
+succeeded. The profile is updated only when Hermes names the deployed checkout as its source.
 A change to `tenant/hermes/config.yaml` is reported, not applied, because the live file also holds
 the owner's model and Telegram settings. The deploy does not restart Day Desk's gateway, which runs
 the job.
