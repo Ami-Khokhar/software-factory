@@ -294,8 +294,18 @@ printf '#!/usr/bin/env bash\nexport PATH="/opt/homebrew/bin:/usr/local/bin:$PATH
   > ~/.hermes/profiles/day-desk/scripts/factory-drive-queue.sh
 hermes -p day-desk cron create "every 5m" --monitor-script factory-drive-queue.sh --skill software-factory \
   --deliver telegram --name factory-drive "Run the 'Drive the factory' section of the software-factory skill."
-printf '#!/usr/bin/env bash\nexport PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"\nexec factory update\n' \
-  > ~/.hermes/profiles/day-desk/scripts/factory-update.sh
+cat > ~/.hermes/profiles/day-desk/scripts/factory-update.sh <<'SH'
+#!/usr/bin/env bash
+# Sends what factory update printed only when it differs from the last run: a commit whose tests
+# fail stays on origin, and each run would report it again.
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+last="$HOME/.local/state/factory-mcp/last-update.txt"
+out="$(factory update 2>&1)"
+[ "$out" = "$(cat "$last" 2>/dev/null)" ] && exit 0
+printf '%s\n' "$out" > "$last"
+printf '%s\n' "$out"
+SH
+chmod +x ~/.hermes/profiles/day-desk/scripts/factory-update.sh
 hermes -p day-desk cron create "every 10m" --no-agent --script factory-update.sh --deliver telegram \
   --name factory-update
 ```
