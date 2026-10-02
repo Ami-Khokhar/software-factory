@@ -257,6 +257,18 @@ class GateLoopTest(unittest.TestCase):
         self.assertEqual(self.tick()["state"], "pr_open")
         self.assertEqual(self.foreman.store.history(ID)[-1]["action"], "tick_error")
 
+    def test_changes_with_no_finding_go_to_a_person_not_a_worker(self):
+        self.gate("CHANGES", 1, "c1")  # only the gate's PR lint failed: its JSON names no finding
+        wi = self.tick()
+        self.assertEqual(wi["state"], "human_waiting")
+        self.assertIn("no finding a worker could fix", wi["blockedOn"])
+        self.assertEqual((wi["blockers"], wi["gateRound"], wi["reviewedSha"]), ([], 1, "c1"))
+        self.assertEqual(len(self.foreman.store.workorders(ID)), 1)
+        self.foreman.resolve_human(ID, "retry", "List tests/test_error.py under What changed", "amteshwar")
+        self.tick()
+        order = self.foreman.store.workorders(ID)[-1]
+        self.assertEqual((order["kind"], [f["fingerprint"] for f in order["findingsToAddress"]]), ("fix", ["human"]))
+
     def test_gate_human_verdict(self):
         self.gate("HUMAN", 1, "c1")
         wi = self.tick()

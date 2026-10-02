@@ -64,8 +64,13 @@ PR = {"number": 5, "state": "open", "merged": False, "headSha": "s2"}
 DONE = {"status": "completed", "conclusion": "failure"}
 
 
+FINDING = {"severity": "blocking", "path": "a.py", "line": 1, "problem": "No test", "fingerprint": "f1"}
+
+
 def v(outcome, head="s2", round_=1):
-    return {"outcome": outcome, "headSha": head, "round": round_, "findings": []}
+    """A verdict; a CHANGES one names a finding, as a CHANGES a worker can act on does."""
+    return {"outcome": outcome, "headSha": head, "round": round_,
+            "findings": [FINDING] if outcome == "CHANGES" else []}
 
 
 class ReconcileTableTest(unittest.TestCase):
@@ -120,7 +125,8 @@ class ForemanTest(unittest.TestCase):
         foreman.intake(REPO, 7)
         self.github.add_pr(REPO, 11, "factory/7", "s1")
         self.github.add_run(REPO, "s1")
-        self.github.add_verdict(REPO, 11, "CHANGES", 1, "s1")
+        self.github.add_verdict(REPO, 11, "CHANGES", 1, "s1", [{"severity": "blocking", "path": "a.py",
+                                                                  "line": 1, "problem": "No test"}])
         self.assertEqual(foreman.tick(f"{REPO}#7")["to"], "implementing")  # fix dispatched
 
         lost = Foreman(Store(":memory:"), self.github, CONFIG, relay)  # the SQLite file is gone

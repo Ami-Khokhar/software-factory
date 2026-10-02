@@ -186,6 +186,10 @@ def reconcile(wi, facts):
             wi.update(state="human_waiting", blockedOn=(
                 f"the same problem was reported in {ROUNDS_PER_PROBLEM} gate rounds: "
                 + "; ".join(f["problem"] for f in verdict["findings"] if f["fingerprint"] in stuck)))
+        elif verdict["outcome"] == "CHANGES" and not verdict["findings"]:  # e.g. only its PR lint failed
+            wi.update(state="human_waiting", blockedOn=(
+                f"pr-gatekeeper asked for changes on PR #{pr['number']} with no finding a worker could "
+                "fix; read its latest comment, then retry with a note, regate or close"))
     elif wi["state"] == "changes_requested" and pr["headSha"] != wi.get("reviewedSha"):
         wi["state"] = "reviewing"  # someone pushed after the verdict; the gate re-runs on it
     elif wi["state"] in ("issued", "planned", "ready"):
