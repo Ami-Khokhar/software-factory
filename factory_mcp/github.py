@@ -72,7 +72,7 @@ class GitHub:
     def workflow_runs(self, repo, sha, name="pr-gatekeeper"):
         """The runs of workflow `name` on commit `sha`, newest first."""
         runs = self._get_all(f"/repos/{repo}/actions/runs", key="workflow_runs", head_sha=sha)
-        return [run for run in runs if run["name"] == name]
+        return [run for run in runs if run.get("name") == name]
 
     def repository(self, repo):
         return self._request("GET", f"{self.api}/repos/{repo}")[0]

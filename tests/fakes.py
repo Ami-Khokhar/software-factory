@@ -83,7 +83,7 @@ class FakeGitHub:
         return list(self.runs.get((repo, sha), []))
 
     def workflow_runs(self, repo, sha, name="pr-gatekeeper"):
-        return list(self.workflow_run_list.get((repo, sha), []))
+        return [run for run in self.workflow_run_list.get((repo, sha), []) if run.get("name") == name]
 
     def repository(self, repo):
         from factory_mcp.github import GitHubError
