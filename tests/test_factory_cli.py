@@ -87,10 +87,42 @@ class UpdateTest(unittest.TestCase):
     def test_a_dockerfile_update_rebuilds_the_worker_image(self):
         self.commit("worker/Dockerfile", "FROM scratch\n")
         git(self.dev, "push", "-q", "origin", "HEAD:main")
-        with mock.patch.object(cli, "run") as run:
+        with mock.patch.object(cli, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run:
             cli.cmd_update([])
         run.assert_called_once_with(
             "docker", "build", "-q", "-t", "factory-worker:latest", str(self.deploy / "worker"))
+
+    def deploy_with(self, name, text, results=None):
+        """Deploy one commit that changes `name`; return the commands run and what was printed."""
+        self.commit(name, text)
+        git(self.dev, "push", "-q", "origin", "HEAD:main")
+        printed = io.StringIO()
+        ok = subprocess.CompletedProcess([], 0, "", "")
+        with mock.patch.object(cli, "run", side_effect=lambda *cmd, **_: (results or {}).get(cmd[0], ok)) as run, \
+                contextlib.redirect_stdout(printed):
+            cli.cmd_update([])
+        return [call.args for call in run.call_args_list], printed.getvalue()
+
+    def test_a_change_to_day_desk_updates_its_profile_and_an_unrelated_one_does_not(self):
+        commands, _ = self.deploy_with("tenant/hermes/skills/software-factory/SKILL.md", "new skill\n")
+        self.assertEqual(commands, [("hermes", "profile", "update", "day-desk", "-y")])
+        commands, _ = self.deploy_with("notes.txt", "x\n")
+        self.assertEqual(commands, [])
+
+    def test_a_change_to_the_sandbox_rebuilds_day_desks_image(self):
+        commands, _ = self.deploy_with("tenant/hermes/sandbox/Dockerfile", "FROM scratch\n")
+        self.assertIn(("docker", "build", "-q", "-t", "day-desk-sandbox:1",
+                       str(self.deploy / "tenant" / "hermes" / "sandbox")), commands)
+
+    def test_a_config_change_is_reported_for_a_hand_merge(self):
+        _, printed = self.deploy_with("tenant/hermes/config.yaml", "mcp_servers: {}\n")
+        self.assertIn("tenant/hermes/config.yaml changed", printed)
+        self.assertIn("merge the change into it by hand", printed)
+
+    def test_a_failing_profile_update_fails_the_deploy_loudly(self):
+        failed = subprocess.CompletedProcess([], 1, "", "Error: no such profile 'day-desk'")
+        with self.assertRaisesRegex(SystemExit, "hermes profile update failed at [0-9a-f]{7}: Error: no such profile"):
+            self.deploy_with("tenant/hermes/SOUL.md", "soul\n", results={"hermes": failed})
 
     def test_a_failing_commit_is_not_deployed(self):
         old = self.head()
