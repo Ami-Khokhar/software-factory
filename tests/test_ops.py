@@ -2,6 +2,7 @@
 and the autonomy rate."""
 import json
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from factory_mcp import tools
@@ -90,6 +91,31 @@ class ResolveHumanTest(unittest.TestCase):
         self.foreman.resolve_human(ID, "regate", "Invalid again", "amteshwar")
         body = self.github.pulls[0]["body"]
         self.assertEqual((body.count("factory regate"), body.endswith("<!-- factory regate 2 -->\n")), (1, True))
+
+    def test_a_regate_after_a_run_with_no_verdict_waits_for_the_run_it_started(self):
+        wi = self.tick()
+        self.relay.finish(wi["providerTaskId"], output=result_line(wi["activeWorkOrderId"]))
+        self.tick()
+        self.github.add_run(REPO, "c1", started_at="2026-09-24T01:30:00Z")  # finished, posted no verdict
+        self.assertEqual(self.tick()["state"], "human_waiting")
+        with mock.patch("factory_mcp.foreman.now", lambda: "2026-09-24T02:00:00Z"):
+            self.foreman.resolve_human(ID, "regate", "The gate posted nothing", "day-desk")
+        # GitHub has not registered the new run yet: the old finished one is no answer to the regate
+        self.assertEqual(self.tick()["state"], "reviewing")
+        self.github.add_run(REPO, "c1", status="in_progress", conclusion=None, started_at="2026-09-24T02:00:05Z")
+        self.assertEqual(self.tick()["state"], "reviewing")
+        self.github.add_verdict(REPO, 100, "MERGE", 1, "c1")
+        self.assertEqual(self.tick()["state"], "merge_pending")
+
+    def test_after_a_regate_a_finished_run_with_no_start_time_still_goes_to_a_person(self):
+        wi = self.tick()
+        self.relay.finish(wi["providerTaskId"], output=result_line(wi["activeWorkOrderId"]))
+        self.tick()
+        self.github.add_run(REPO, "c1")
+        self.assertEqual(self.tick()["state"], "human_waiting")
+        self.foreman.resolve_human(ID, "regate", "The gate posted nothing", "day-desk")
+        self.github.add_run(REPO, "c1", started_at=None)  # nothing tells it from the run the regate repeats
+        self.assertEqual(self.tick()["state"], "human_waiting")
 
     def test_regate_after_a_push_the_gate_already_answered_starts_no_run(self):
         self.gate_says_human()

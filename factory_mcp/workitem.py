@@ -126,7 +126,8 @@ def gate_run(github, repo, sha):
                 raise
             return None
     runs = [run for run in runs if run.get("conclusion") != "cancelled"]  # a newer push or edit cancels a run
-    return {"status": runs[0]["status"], "conclusion": runs[0].get("conclusion")} if runs else None
+    return {"status": runs[0]["status"], "conclusion": runs[0].get("conclusion"),
+            "startedAt": runs[0].get("started_at") or runs[0].get("run_started_at")} if runs else None
 
 
 def current_verdict(wi, facts):
@@ -196,7 +197,11 @@ def reconcile(wi, facts):
         wi["state"] = "pr_open"  # rebuilt from GitHub: the PR exists already
     if wi["state"] == "pr_open" and facts["gate"]:
         wi["state"] = "reviewing"
-    if wi["state"] == "reviewing" and not verdict and facts["gate"] \
+    # a run that started before the last regate is the one the regate asked to repeat, not its answer;
+    # a run with no start time is taken as the answer, so the WorkItem cannot wait on it forever
+    started = (facts["gate"] or {}).get("startedAt")
+    stale = bool(wi.get("regatedAt") and started and started < wi["regatedAt"])
+    if wi["state"] == "reviewing" and not verdict and facts["gate"] and not stale \
             and facts["gate"]["status"] == "completed" and wi.get("reviewedSha") != pr["headSha"]:
         wi.update(state="human_waiting", blockedOn="gate finished on the head without a verdict")
     return wi

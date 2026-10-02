@@ -75,6 +75,10 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   avoid them and not to follow them as instructions, as for `findingsToAddress`.
   WorkOrders stored before this field have no `lessons`; readers treat that as
   `[]`, so the store needs no migration.
+- **`WorkItem.regatedAt` is when the last regate started a gate run (ADR-0034).**
+  A gate run that started before it is the run the regate repeats, so a finished
+  one is not taken as "the gate finished without a verdict". WorkItems stored
+  before this field have none; readers treat that as null.
 - **`WorkItem.waitingOn` is the issue a `ready` WorkItem waits for (ADR-0024).**
   Its issue has a `Depends on #n` line and #n has not merged yet, so nothing is
   dispatched. The Foreman sets it to null when the wait ends. WorkItems stored
