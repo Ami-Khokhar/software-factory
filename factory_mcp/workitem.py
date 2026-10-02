@@ -5,6 +5,7 @@ Transitions that are the Foreman's own actions (dispatch, open PR) live in the t
 """
 import re
 
+from .github import GitHubError
 from .store import now
 from .verdict import blockers, verdicts
 
@@ -99,10 +100,26 @@ def observe(github, wi):
         facts["pr"] = {"number": pr["number"], "state": pr["state"], "merged": bool(pr.get("merged_at")),
                        "headSha": pr["head"]["sha"]}
         facts["verdicts"] = verdicts(github.comments(wi["repo"], pr["number"]), wi["repo"], pr["number"])
-        runs = github.check_runs(wi["repo"], pr["head"]["sha"])
-        if runs:
-            facts["gate"] = {"status": runs[0]["status"], "conclusion": runs[0].get("conclusion")}
+        facts["gate"] = gate_run(github, wi["repo"], pr["head"]["sha"])
     return facts
+
+
+def gate_run(github, repo, sha):
+    """The gate's run on `sha` as {status, conclusion}, or None. A fine-grained token cannot read
+    check runs on a private repo (403), so the workflow run stands in for it; when the token cannot
+    read that either, the verdict comments and FACTORY_GATE_WAIT_SECONDS still move the WorkItem."""
+    try:
+        runs = github.check_runs(repo, sha)
+    except GitHubError as exc:
+        if exc.status != 403:
+            raise
+        try:  # a newer push or edit cancels a run, which is not the gate's answer
+            runs = [run for run in github.workflow_runs(repo, sha) if run.get("conclusion") != "cancelled"]
+        except GitHubError as again:
+            if again.status != 403:
+                raise
+            return None
+    return {"status": runs[0]["status"], "conclusion": runs[0].get("conclusion")} if runs else None
 
 
 def current_verdict(wi, facts):

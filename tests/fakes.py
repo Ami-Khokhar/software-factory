@@ -29,6 +29,7 @@ class FakeGitHub:
 
     def __init__(self):
         self.issues, self.pulls, self.issue_comments, self.runs = {}, [], {}, {}
+        self.workflow_run_list = {}  # (repo, sha) -> the gate's workflow runs, newest first
         self.posted = []  # (repo, number, body) of every comment the Foreman wrote
         self.branches, self.files = {}, {}  # (repo, branch) -> sha; (repo, sha) -> changed files
         self.repos = {}  # repo -> fields that differ from a pushable repo; None: GitHub has no such repo
@@ -80,6 +81,9 @@ class FakeGitHub:
 
     def check_runs(self, repo, sha, name="pr-gatekeeper"):
         return list(self.runs.get((repo, sha), []))
+
+    def workflow_runs(self, repo, sha, name="pr-gatekeeper"):
+        return list(self.workflow_run_list.get((repo, sha), []))
 
     def repository(self, repo):
         from factory_mcp.github import GitHubError

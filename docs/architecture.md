@@ -97,7 +97,9 @@ A tick comes from the background loop or from `factory_tick`.
    know is taken in, so a lost store fills again from GitHub.
 2. **Each live WorkItem** whose repo is allowlisted (#38): take its lease or skip it; observe
    GitHub (the issue, the PR on `factory/<issue>`, the gate's verdicts and check run); reconcile the
-   state with those facts and write it; then act at most once:
+   state with those facts and write it; then act at most once. A fine-grained token cannot read
+   check runs on a private repo, so the gate's workflow run stands in; when the token cannot read
+   that either, the verdicts and `FACTORY_GATE_WAIT_SECONDS` still move the WorkItem:
    - `ready`: dispatch an implement WorkOrder, unless the issue has a `Depends on #n` line and
      #n has not merged: then it waits, with `waitingOn: n` (ADR-0024). `changes_requested`:
      dispatch a fix WorkOrder that carries the gate's blocking findings as data.

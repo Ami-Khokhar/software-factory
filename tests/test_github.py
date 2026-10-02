@@ -30,6 +30,9 @@ class Api(BaseHTTPRequestHandler):
         elif self.path == "/repos/o/r/contents/.github/pr-gatekeeper.json":
             text = base64.encodebytes(b'{"verify": "make test"}').decode()  # GitHub wraps it in lines
             body, link = {"type": "file", "encoding": "base64", "content": text}, ""
+        elif self.path.startswith("/repos/o/r/actions/runs?"):
+            body, link = {"total_count": 2, "workflow_runs": [{"name": "pr-gatekeeper", "id": 2},
+                                                              {"name": "ci", "id": 1}]}, ""
         elif self.path.startswith("/repos/o/r/pulls?"):
             body, link = [{"number": 3}], ""
         elif self.path in ("/repos/o/r/issues/404", "/repos/o/r/contents/.github/missing.json"):
@@ -115,6 +118,10 @@ class GitHubClientTest(unittest.TestCase):
         self.assertTrue(self.github.has_refs("o/r"))
         self.assertFalse(self.github.has_refs("o/empty"))
         self.assertEqual(Api.seen[0][0], "/repos/o/r/git/matching-refs/")
+
+    def test_workflow_runs_are_the_named_workflows_runs_on_a_commit(self):
+        self.assertEqual(self.github.workflow_runs("o/r", "abc"), [{"name": "pr-gatekeeper", "id": 2}])
+        self.assertEqual(Api.seen[0][0], "/repos/o/r/actions/runs?head_sha=abc&per_page=100")
 
     def test_editing_a_pull_request_replaces_its_body(self):
         self.assertEqual(self.github.edit_pull("o/r", 7, "new body"), {"number": 7, "body": "new body"})
