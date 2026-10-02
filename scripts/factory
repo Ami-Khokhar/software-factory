@@ -388,9 +388,10 @@ def cmd_update(_):
         return
     tests = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"],
                            cwd=HERE, capture_output=True, text=True)
-    if new != old and tests.returncode != 0:
-        git("checkout", "-q", "-f", branch)
-        git("reset", "-q", "--hard", old)
+    if tests.returncode != 0:
+        if new != old:  # on a retry the checkout is already on `new`, and factory-mcp runs it
+            git("checkout", "-q", "-f", branch)
+            git("reset", "-q", "--hard", old)
         why = "\n".join((tests.stdout + tests.stderr).strip().splitlines()[-20:])
         die(f"update: tests fail at {new[:7]}; factory-mcp stays on {old[:7]}\n{why}")
     def changed(path):  # an unknown `since` fails the diff, and then every step runs
@@ -406,12 +407,13 @@ def cmd_update(_):
         return done.stdout
     if changed("worker/Dockerfile"):
         must("the worker image build", "docker", "build", "-q", "-t", "factory-worker:latest", str(HERE / "worker"))
-    restart_factory_mcp()
+    if new != old or changed("worker/Dockerfile"):  # a retry restarted already, unless the worker build stopped it
+        restart_factory_mcp()
     if changed("tenant/hermes/sandbox"):
         must("Day Desk's sandbox image build", "docker", "build", "-q", "-t", "day-desk-sandbox:1",
              str(HERE / "tenant" / "hermes" / "sandbox"))
     if changed("tenant/hermes"):  # the profile's config.yaml is kept
-        source = re.search(r"^Installed from:\s*(.+)$", must("hermes profile show", "hermes", "profile", "show",
+        source = re.search(r"^\s*Installed from:\s*(\S+)", must("hermes profile show", "hermes", "profile", "show",
                                                              "day-desk"), re.M)
         want = str(HERE / "tenant" / "hermes")
         if not source or os.path.realpath(source.group(1).strip()) != os.path.realpath(want):

@@ -143,6 +143,31 @@ class UpdateTest(unittest.TestCase):
         self.assertIn("update: deployed", printed)
         self.assertEqual(self.deploy_with(), ([], ""))  # and once it is done, nothing runs
 
+    def test_a_retry_restarts_factory_mcp_only_when_the_worker_build_stopped_the_run_before(self):
+        failed = subprocess.CompletedProcess([], 1, "", "Cannot connect to the Docker daemon")
+        with self.assertRaises(SystemExit):
+            self.deploy_with("tenant/hermes/sandbox/Dockerfile", "FROM scratch\n", results={"docker build -q": failed})
+        self.assertEqual(len(self.restarts), 1)
+        self.deploy_with()  # factory-mcp runs the new commit already
+        self.assertEqual(len(self.restarts), 1)
+        with self.assertRaises(SystemExit):
+            self.deploy_with("worker/Dockerfile", "FROM scratch\n", results={"docker build -q": failed})
+        self.assertEqual(len(self.restarts), 1)
+        self.deploy_with()
+        self.assertEqual(len(self.restarts), 2)
+
+    def test_tests_that_fail_on_a_retry_stop_it(self):
+        self.commit("tests/test_env.py", "import os, unittest\n\n\nclass T(unittest.TestCase):\n"
+                    "    def test_env(self):\n        self.assertNotIn('FACTORY_TEST_BREAK', os.environ)\n")
+        failed = subprocess.CompletedProcess([], 1, "", "Cannot connect to the Docker daemon")
+        with self.assertRaises(SystemExit):
+            self.deploy_with("tenant/hermes/sandbox/Dockerfile", "FROM scratch\n", results={"docker build -q": failed})
+        record = (cli.STATE / "deployed").read_text()
+        with mock.patch.dict(os.environ, {"FACTORY_TEST_BREAK": "1"}), \
+                self.assertRaisesRegex(SystemExit, "tests fail"):
+            self.deploy_with()
+        self.assertEqual(((cli.STATE / "deployed").read_text(), len(self.restarts)), (record, 1))
+
     def test_a_missing_command_fails_the_deploy_with_a_message(self):
         with self.assertRaisesRegex(SystemExit, "hermes profile show failed at [0-9a-f]{7}: no hermes on PATH"):
             self.deploy_with("tenant/hermes/SOUL.md", "soul\n",

@@ -226,6 +226,7 @@ nothing from you. `factory start` checks all three.
 | The relay's API token | `~/.config/agent-relay/token` (mode 600), written by the relay on its first start; factory-mcp and `factory stop` read it. `AGENT_RELAY_TOKEN` in the settings or secrets overrides it |
 | WorkItem store and audit log | `~/.local/state/factory-mcp/factory.sqlite3` |
 | Logs | `~/.local/state/factory-mcp/server.log`, `~/.local/state/agent-relay/relay.log` |
+| Deploy records | `~/.local/state/factory-mcp/deployed`: the last commit for which every deploy step succeeded; `last-update.txt`: the last message the `factory-update` job sent |
 | Worker checkouts | `$FACTORY_CHECKOUT_ROOT/<owner>/<repo>` |
 | Worker definitions | The agents in `FACTORY_WORKERS`, in `~/.config/agent-relay/agents.json` |
 | launchd services | `com.agent-relay`, `com.software-factory.factory-mcp` in `~/Library/LaunchAgents` |
@@ -236,9 +237,12 @@ is merged), runs the tests there, and restarts factory-mcp only if they pass. A 
 the old version running, and the job sends you why. It also rebuilds the worker image when
 `worker/Dockerfile` changed, rebuilds Day Desk's sandbox image when `tenant/hermes/sandbox/`
 changed, and runs `hermes profile update day-desk -y` when `tenant/hermes/` changed. A failed
-build or profile update stops the deploy with its message, and the next update runs it again:
-`~/.local/state/factory-mcp/deployed` names the last commit for which every step succeeded. A change to `tenant/hermes/config.yaml`
-is only reported: the live config also holds your model and Telegram settings, so merge it by hand.
+build or profile update stops the deploy with its message, and the next update runs it again from
+the deploy record, which names the last commit for which every step succeeded. The first update
+starts the record at the commit already deployed, so build the images and install the profile from
+the deployed checkout once by hand, as below. A retry restarts factory-mcp only if the worker build
+stopped the run before the restart. A change to `tenant/hermes/config.yaml` is only reported: the
+live config also holds your model and Telegram settings, so merge it by hand.
 Run `factory update` yourself to deploy at once. The
 tests need the packages in `requirements.txt`, installed once for the Python that runs `factory`:
 `python3 -m pip install -r requirements.txt`.
