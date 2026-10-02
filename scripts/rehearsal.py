@@ -146,7 +146,8 @@ class GitHub:
                              "findings": list(findings)}).replace(">", "\\u003e")
         self.comments.setdefault(pr, []).append(
             {"body": f"### pr-gatekeeper: {outcome}\n<!-- pr-gatekeeper {marker} -->",
-             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+             "user": {"login": "github-actions[bot]"}})
 
     def merge(self, pr):
         view = self.pulls[pr - 100]

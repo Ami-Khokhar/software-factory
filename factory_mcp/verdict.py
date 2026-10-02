@@ -4,6 +4,7 @@ import json
 import re
 
 MARKER = "<!-- pr-gatekeeper "
+GATE_LOGIN = "github-actions[bot]"  # the gate posts with its workflow's GITHUB_TOKEN
 
 
 def fingerprint(path, problem):
@@ -66,9 +67,12 @@ def blockers(history):
 
 
 def verdicts(comments, repo, pr_number):
-    """Every verdict on the PR, oldest first."""
+    """Every verdict on the PR, oldest first. Only the gate's own comments count: anyone who can
+    comment can also write a marker."""
     found = []
     for comment in comments:
+        if (comment.get("user") or {}).get("login") != GATE_LOGIN:
+            continue
         marker = parse_marker(comment.get("body"))
         verdict = marker and to_verdict(marker, repo, pr_number, comment.get("created_at"))
         if verdict:
