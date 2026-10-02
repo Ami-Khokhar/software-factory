@@ -226,13 +226,24 @@ nothing from you. `factory start` checks all three.
 | The relay's API token | `~/.config/agent-relay/token` (mode 600), written by the relay on its first start; factory-mcp and `factory stop` read it. `AGENT_RELAY_TOKEN` in the settings or secrets overrides it |
 | WorkItem store and audit log | `~/.local/state/factory-mcp/factory.sqlite3` |
 | Logs | `~/.local/state/factory-mcp/server.log`, `~/.local/state/agent-relay/relay.log` |
+| Deploy records | `~/.local/state/factory-mcp/deployed`: the last commit for which every deploy step succeeded; `last-update.txt`: the last message the `factory-update` job sent |
 | Worker checkouts | `$FACTORY_CHECKOUT_ROOT/<owner>/<repo>` |
 | Worker definitions | The agents in `FACTORY_WORKERS`, in `~/.config/agent-relay/agents.json` |
 | launchd services | `com.agent-relay`, `com.software-factory.factory-mcp` in `~/Library/LaunchAgents` |
 
-To deploy a new version, run `factory update`. It fast-forwards the deployed checkout (and moves
-it to `main` when its branch is merged), runs the tests there, and restarts factory-mcp only if
-they pass. A failing test keeps the old version running, and `factory update` prints why. The
+A merged change deploys itself: the `factory-update` job below runs `factory update` every 10
+minutes (ADR-0031). It fast-forwards the deployed checkout (and moves it to `main` when its branch
+is merged), runs the tests there, and restarts factory-mcp only if they pass. A failing test keeps
+the old version running, and the job sends you why. It also rebuilds the worker image when
+`worker/Dockerfile` changed, rebuilds Day Desk's sandbox image when `tenant/hermes/sandbox/`
+changed, and runs `hermes profile update day-desk -y` when `tenant/hermes/` changed. A failed
+build or profile update stops the deploy with its message, and the next update runs it again from
+the deploy record, which names the last commit for which every step succeeded. The first update
+starts the record at the commit already deployed, so build the images and install the profile from
+the deployed checkout once by hand, as below. A retry restarts factory-mcp only when it rebuilds the
+worker image, which the restart follows. A change to `tenant/hermes/config.yaml` is only reported: the
+live config also holds your model and Telegram settings, so merge it by hand.
+Run `factory update` yourself to deploy at once. The
 tests need the packages in `requirements.txt`, installed once for the Python that runs `factory`:
 `python3 -m pip install -r requirements.txt`.
 
@@ -264,14 +275,14 @@ distribution in `tenant/hermes/`, so they are reviewed like code.
 Set it up once:
 
 ```bash
-hermes profile install ~/path/to/software-factory/tenant/hermes
+hermes profile install ~/.local/share/software-factory/tenant/hermes  # the deployed checkout, so a deploy updates it
 cp ~/.hermes/profiles/day-desk/.env.EXAMPLE ~/.hermes/profiles/day-desk/.env
 # Day Desk's driving token: a new secret, different from FACTORY_MCP_TOKEN, in factory-mcp's secrets
 printf 'FACTORY_AGENT_TOKEN=%s\n' "$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')" \
   >> ~/.config/factory-mcp/secrets && factory update
 # fill in FACTORY_MCP_TOKEN and FACTORY_AGENT_TOKEN (from ~/.config/factory-mcp/secrets),
 # TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USERS (your Telegram user id) and DAYDESK_GITHUB_TOKEN (below)
-docker build -t day-desk-sandbox:1 ~/path/to/software-factory/tenant/hermes/sandbox
+docker build -t day-desk-sandbox:1 ~/.local/share/software-factory/tenant/hermes/sandbox
 hermes -p day-desk model             # choose your ChatGPT or Codex subscription
 hermes -p day-desk gateway setup     # Telegram
 hermes -p day-desk gateway install   # start it at login
@@ -288,6 +299,21 @@ printf '#!/usr/bin/env bash\nexport PATH="/opt/homebrew/bin:/usr/local/bin:$PATH
   > ~/.hermes/profiles/day-desk/scripts/factory-drive-queue.sh
 hermes -p day-desk cron create "every 5m" --monitor-script factory-drive-queue.sh --skill software-factory \
   --deliver telegram --name factory-drive "Run the 'Drive the factory' section of the software-factory skill."
+cat > ~/.hermes/profiles/day-desk/scripts/factory-update.sh <<'SH'
+#!/usr/bin/env bash
+# Sends what factory update printed only when it differs from the last run: a commit whose tests
+# fail stays on origin, and each run would report it again.
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+last="$HOME/.local/state/factory-mcp/last-update.txt"
+out="$(factory update 2>&1)"
+[ -z "$out" ] && exit 0  # nothing to deploy
+[ "$out" = "$(cat "$last" 2>/dev/null)" ] && exit 0
+printf '%s\n' "$out" > "$last"
+printf '%s\n' "$out"
+SH
+chmod +x ~/.hermes/profiles/day-desk/scripts/factory-update.sh
+hermes -p day-desk cron create "every 10m" --no-agent --script factory-update.sh --deliver telegram \
+  --name factory-update
 ```
 
 `factory-drive` runs the model only when the escalations Day Desk may answer change, and tells you
@@ -300,10 +326,14 @@ when factory-mcp does not answer. `factory-report` sends the week in one message
 days before, how many went to a person or ran out of passes and the 3 most frequent reasons why,
 the new lesson candidates and the lessons flagged as not working. Run `factory report` to see it
 at any other time, or ask Day Desk. It runs no model and changes nothing. Reply to the message, and Day Desk answers the escalation with
-you. After `factory update` deploys a new version, run `hermes profile update day-desk` so Day
-Desk gets the new skill. `factory update` does not rebuild Day Desk's sandbox image: when the
-deploy changes `tenant/hermes/sandbox/Dockerfile`, run the `docker build` command above again and
-`hermes -p day-desk gateway restart`.
+you. `factory update` gives Day Desk the new skill and sandbox image when a deploy changes them.
+It updates the profile only when `hermes profile show day-desk` names the deployed checkout as
+its source, because a profile installed from another checkout would copy whatever that checkout
+holds; otherwise the deploy stops and says so. To move a profile installed from a working
+checkout, edit the source path in `~/.hermes/profiles/day-desk/distribution.yaml` to
+`~/.local/share/software-factory/tenant/hermes`.
+The deploy does not restart Day Desk's gateway, because the job runs inside it; a sandbox change
+reaches new shell sessions at once, and `hermes -p day-desk gateway restart` is for anything else.
 
 Day Desk has no file tools, browser or subagents (`agent.disabled_toolsets` in
 `tenant/hermes/config.yaml`). It cannot tick or take in a WorkItem itself (factory-mcp does),

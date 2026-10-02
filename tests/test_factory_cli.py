@@ -59,7 +59,7 @@ class UpdateTest(unittest.TestCase):
         git(self.dev, "push", "-q", "origin", "HEAD:main")
         git(root, "clone", "-q", str(self.origin), str(self.deploy))
         self.restarts = []
-        for p in (mock.patch.object(cli, "HERE", self.deploy),
+        for p in (mock.patch.object(cli, "HERE", self.deploy), mock.patch.object(cli, "STATE", root / "state"),
                   mock.patch.object(cli, "restart_factory_mcp", lambda: self.restarts.append(1)),
                   mock.patch.object(cli, "branch_merged", lambda branch: False)):
             p.start()
@@ -87,10 +87,96 @@ class UpdateTest(unittest.TestCase):
     def test_a_dockerfile_update_rebuilds_the_worker_image(self):
         self.commit("worker/Dockerfile", "FROM scratch\n")
         git(self.dev, "push", "-q", "origin", "HEAD:main")
-        with mock.patch.object(cli, "run") as run:
+        with mock.patch.object(cli, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run:
             cli.cmd_update([])
         run.assert_called_once_with(
             "docker", "build", "-q", "-t", "factory-worker:latest", str(self.deploy / "worker"))
+
+    def deploy_with(self, name=None, text="", results=None):
+        """Deploy one commit that changes `name` (none: deploy again); return the commands run and what
+        was printed. `results` maps a command's first three words to its CompletedProcess or exception."""
+        if name:
+            self.commit(name, text)
+            git(self.dev, "push", "-q", "origin", "HEAD:main")
+        printed = io.StringIO()
+        shown = f"Profile: day-desk\nInstalled from: {self.deploy / 'tenant' / 'hermes'}\n"
+        defaults = {"hermes profile show": subprocess.CompletedProcess([], 0, shown, "")}
+
+        def run(*cmd, **_):
+            result = {**defaults, **(results or {})}.get(" ".join(cmd[:3]), subprocess.CompletedProcess([], 0, "", ""))
+            if isinstance(result, Exception):
+                raise result
+            return result
+        with mock.patch.object(cli, "run", side_effect=run) as ran, contextlib.redirect_stdout(printed):
+            cli.cmd_update([])
+        return [call.args for call in ran.call_args_list], printed.getvalue()
+
+    def test_a_change_to_day_desk_updates_its_profile_and_an_unrelated_one_does_not(self):
+        commands, _ = self.deploy_with("tenant/hermes/skills/software-factory/SKILL.md", "new skill\n")
+        self.assertEqual(commands, [("hermes", "profile", "show", "day-desk"),
+                                    ("hermes", "profile", "update", "day-desk", "-y")])
+        commands, _ = self.deploy_with("notes.txt", "x\n")
+        self.assertEqual(commands, [])
+
+    def test_a_change_to_the_sandbox_rebuilds_day_desks_image(self):
+        commands, _ = self.deploy_with("tenant/hermes/sandbox/Dockerfile", "FROM scratch\n")
+        self.assertIn(("docker", "build", "-q", "-t", "day-desk-sandbox:1",
+                       str(self.deploy / "tenant" / "hermes" / "sandbox")), commands)
+
+    def test_a_config_change_is_reported_for_a_hand_merge(self):
+        _, printed = self.deploy_with("tenant/hermes/config.yaml", "mcp_servers: {}\n")
+        self.assertIn("tenant/hermes/config.yaml changed", printed)
+        self.assertIn("merge the change into it by hand", printed)
+
+    def test_a_failing_profile_update_fails_the_deploy_loudly(self):
+        failed = subprocess.CompletedProcess([], 1, "", "Error: no such profile 'day-desk'")
+        with self.assertRaisesRegex(SystemExit, "hermes profile update failed at [0-9a-f]{7}: Error: no such profile"):
+            self.deploy_with("tenant/hermes/SOUL.md", "soul\n", results={"hermes profile update": failed})
+
+    def test_a_step_that_failed_runs_again_on_the_next_update(self):
+        failed = subprocess.CompletedProcess([], 1, "", "Cannot connect to the Docker daemon")
+        with self.assertRaisesRegex(SystemExit, "sandbox image build failed"):
+            self.deploy_with("tenant/hermes/sandbox/Dockerfile", "FROM scratch\n", results={"docker build -q": failed})
+        commands, printed = self.deploy_with()  # no new commit: the build that failed is still owed
+        self.assertIn(("docker", "build", "-q", "-t", "day-desk-sandbox:1",
+                       str(self.deploy / "tenant" / "hermes" / "sandbox")), commands)
+        self.assertIn("update: deployed", printed)
+        self.assertEqual(self.deploy_with(), ([], ""))  # and once it is done, nothing runs
+
+    def test_a_retry_restarts_factory_mcp_only_when_the_worker_build_stopped_the_run_before(self):
+        failed = subprocess.CompletedProcess([], 1, "", "Cannot connect to the Docker daemon")
+        with self.assertRaises(SystemExit):
+            self.deploy_with("tenant/hermes/sandbox/Dockerfile", "FROM scratch\n", results={"docker build -q": failed})
+        self.assertEqual(len(self.restarts), 1)
+        self.deploy_with()  # factory-mcp runs the new commit already
+        self.assertEqual(len(self.restarts), 1)
+        with self.assertRaises(SystemExit):
+            self.deploy_with("worker/Dockerfile", "FROM scratch\n", results={"docker build -q": failed})
+        self.assertEqual(len(self.restarts), 1)
+        self.deploy_with()
+        self.assertEqual(len(self.restarts), 2)
+
+    def test_tests_that_fail_on_a_retry_stop_it(self):
+        self.commit("tests/test_env.py", "import os, unittest\n\n\nclass T(unittest.TestCase):\n"
+                    "    def test_env(self):\n        self.assertNotIn('FACTORY_TEST_BREAK', os.environ)\n")
+        failed = subprocess.CompletedProcess([], 1, "", "Cannot connect to the Docker daemon")
+        with self.assertRaises(SystemExit):
+            self.deploy_with("tenant/hermes/sandbox/Dockerfile", "FROM scratch\n", results={"docker build -q": failed})
+        record = (cli.STATE / "deployed").read_text()
+        with mock.patch.dict(os.environ, {"FACTORY_TEST_BREAK": "1"}), \
+                self.assertRaisesRegex(SystemExit, "tests fail"):
+            self.deploy_with()
+        self.assertEqual(((cli.STATE / "deployed").read_text(), len(self.restarts)), (record, 1))
+
+    def test_a_missing_command_fails_the_deploy_with_a_message(self):
+        with self.assertRaisesRegex(SystemExit, "hermes profile show failed at [0-9a-f]{7}: no hermes on PATH"):
+            self.deploy_with("tenant/hermes/SOUL.md", "soul\n",
+                             results={"hermes profile show": FileNotFoundError("hermes")})
+
+    def test_a_profile_installed_from_another_checkout_is_not_updated(self):
+        elsewhere = subprocess.CompletedProcess([], 0, "Installed from: /Users/me/dev/software-factory/tenant/hermes\n", "")
+        with self.assertRaisesRegex(SystemExit, "installed from /Users/me/dev/software-factory/tenant/hermes, not "):
+            self.deploy_with("tenant/hermes/SOUL.md", "soul\n", results={"hermes profile show": elsewhere})
 
     def test_a_failing_commit_is_not_deployed(self):
         old = self.head()

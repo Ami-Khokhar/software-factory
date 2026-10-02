@@ -623,3 +623,28 @@ tick loop: the guards and the state machine do not depend on Hermes running.
 owner hears of the rest. A model still never merges, and nothing Day Desk calls can pass the
 sandbox, the protected paths, the size limits, the trusted authors or the budget of passes. A
 wrong retry costs at most one pass from that budget.
+
+---
+
+## ADR-0031 — A merged change deploys itself
+
+**Context.** A change merged into software-factory reached the running factory only when someone
+ran `factory update`, so every improvement waited for a person, and the factory could not improve
+itself unattended. A deploy also left Day Desk behind: its skill, soul and sandbox image changed
+only when the owner ran the steps by hand, and its profile was installed from a working checkout
+that may hold unmerged work.
+
+**Decision.** A Hermes no-agent job, `factory-update`, runs `factory update` every 10 minutes. The
+command keeps its rule: it deploys only a commit whose tests pass. It now also rebuilds Day Desk's
+sandbox image when `tenant/hermes/sandbox/` changed and runs `hermes profile update day-desk -y`
+when `tenant/hermes/` changed, with the profile installed from the deployed checkout. A failed
+image build or profile update stops the deploy with its message, which the job sends to the owner,
+and runs again on the next update: a state file names the last commit for which every step
+succeeded. The profile is updated only when Hermes names the deployed checkout as its source.
+A change to `tenant/hermes/config.yaml` is reported, not applied, because the live file also holds
+the owner's model and Telegram settings. The deploy does not restart Day Desk's gateway, which runs
+the job.
+
+**Consequence.** A merge goes live within 10 minutes with no person, and a broken commit never
+does. The owner hears of a failed deploy and of a config change to merge. A bad commit that passes
+the tests still deploys; the gate and the tests stay the safeguards.
