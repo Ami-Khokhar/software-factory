@@ -154,6 +154,18 @@ class GateLoopTest(unittest.TestCase):
         self.github.push(REPO, "factory/7", "c9")  # a person fixed it by hand
         self.assertEqual(self.tick()["state"], "reviewing")
 
+    def test_fix_attempts_that_ran_out_of_time_are_not_told_to_split_the_issue(self):
+        """A fix answers the gate on an open PR, which closing the issue for a split would drop."""
+        self.gate("CHANGES", 1, "c1", MISSING_TEST)
+        wi = self.tick()
+        self.relay.finish(wi["providerTaskId"], status="timed_out", error="timed out")
+        self.assertEqual(self.tick()["state"], "changes_requested")
+        wi = self.tick()
+        self.relay.finish(wi["providerTaskId"], status="timed_out", error="timed out")
+        wi = self.tick()
+        self.assertEqual(wi["state"], "blocked")
+        self.assertIn("Fix the cause named in attempts", wi["blockedOn"])
+
     def refuse(self, *names, status=403):
         """GitHub answers each of these reads with `status`, as it does a fine-grained token on a
         private repo."""

@@ -280,6 +280,9 @@ and that the `factory-update` job names: `/usr/bin/python3 -m pip install -r req
 - **Blocked: `verify exited 1`.** The repo's tests failed in the sandbox. Run the verify command
   yourself. If the tests fail on `main` too, fix `main` first.
 - **Blocked: `docker is not available`.** Start OrbStack, then `factory retry <id> "docker was down"`.
+- **Blocked: each attempt ran out of time.** The issue is likely too big for one pass, and a timed-out
+  pass keeps none of its work, so a retry is likely to run out too. Ask Day Desk to split it into
+  smaller issues and start them, then `factory close <id> "split into #a and #b"`.
 - **Stuck in `dispatching` with `relay 401`.** The relay refused factory-mcp's token. factory-mcp
   sends `AGENT_RELAY_TOKEN` from its settings or secrets, else `~/.config/agent-relay/token`;
   make it match the relay's (`AGENT_RELAY_TOKEN` in the relay's environment, else that file).
