@@ -16,7 +16,7 @@ def workorder(wi, kind, attempt, config, base_sha=None, findings=(), lessons=())
     return {"schemaVersion": "factory.workorder/v1", "id": key, "workItemId": wi["id"],
             "round": wi.get("gateRound", 0), "kind": kind, "repo": wi["repo"], "baseSha": base_sha,
             "headSha": wi.get("headSha") if kind == "fix" else None, "goal": wi["goal"],
-            "acceptance": wi["acceptance"],
+            "description": wi.get("description") or "", "acceptance": wi["acceptance"],
             "constraints": {"maxChangedLines": 600, "maxChangedFiles": 20,
                             "protectedPaths": list(config.protected_paths)},
             "findingsToAddress": list(findings),

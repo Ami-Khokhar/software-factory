@@ -46,7 +46,9 @@ last steps, and what it needs from you.
   each make sense alone.
 - Make each check readable from the result: a test that must pass, a command that must print
   something, a file that must contain something. "Works well" is not a check.
-- Say what must not change. The worker reads the issue literally.
+- Say what must not change. The worker reads the issue literally: its title, its text and its
+  acceptance list, as they were when the factory took it in. An edit after that does not reach
+  the worker; close the issue and open a new one instead.
 - To choose the worker, add a `Worker: <relay agent id>` line (or `factory new ... -w <id>`).
   Several lines give an order, and a failed attempt moves only to the next one named. The agent
   must be in `FACTORY_WORKERS`; another name sends the issue to you. Without the line, the factory

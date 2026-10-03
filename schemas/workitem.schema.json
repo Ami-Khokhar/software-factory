@@ -23,6 +23,10 @@
     "repo": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
     "issueNumber": { "type": "integer", "minimum": 1 },
     "goal": { "type": "string", "minLength": 1 },
+    "description": {
+      "type": "string",
+      "description": "The issue's text outside its Acceptance section, frozen at intake like goal and acceptance (ADR-0038). WorkItems stored before this field have none."
+    },
     "acceptance": {
       "type": "array",
       "minItems": 1,
