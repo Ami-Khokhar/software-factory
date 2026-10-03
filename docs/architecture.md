@@ -154,7 +154,9 @@ The states are the enum in `schemas/workitem.schema.json`.
 ## The worker contract
 
 - The Foreman sends the task with the repo's worker checkout (`FACTORY_CHECKOUT_ROOT`) as its
-  working directory, and runs one pass per repo at a time.
+  working directory, and runs up to `FACTORY_PASSES_PER_REPO` (2) passes of one repo at once.
+  The runner gives them the checkout in turns, and the time a pass waits for it comes out of the
+  harness's share of the pass (ADR-0036).
 - `worker/runner.py` fetches in the checkout, makes a fresh copy with no remote, and puts it on
   `factory/<issue>` at the commit to build on: the default branch for an implement WorkOrder, the
   reviewed head for a fix.
@@ -190,6 +192,7 @@ The states are the enum in `schemas/workitem.schema.json`.
 | A plan opens no issue when one of its issues fails a check | `Foreman.start_plan` | `test_plan`: `test_one_issue_that_fails_a_check_opens_no_issue` |
 | An issue starts only after each `Depends on #n` issue merged | `Foreman._wait_for` | `test_plan`: `test_a_dependent_waits_while_its_dependency_is_open_and_starts_once_it_merged`, `test_a_dependency_that_ends_without_a_merge_sends_the_dependent_to_a_person` |
 | The harness never touches the host | `worker/runner.py` | `test_worker_runner`: `test_the_harness_gets_a_copy_and_never_the_checkout`, `test_hooks_and_filters_the_harness_plants_never_run_on_the_host` |
+| Passes of one repo take its checkout in turns, up to `FACTORY_PASSES_PER_REPO` at once | `worker/runner.py` `checkout_lock`, `Foreman.dispatch` | `test_worker_runner`: `test_a_runner_waits_for_the_checkout_while_another_pass_holds_it`; `test_safety`: `test_passes_of_one_repo_run_at_once_up_to_the_limit` |
 | `verify` is the base commit's, not the worker's | `worker/runner.py` | `test_worker_runner`: `test_verify_comes_from_the_base_commit` |
 | A truncated output yields no Result: the runner's comes last | `Foreman.poll` | `test_hardening`: `test_a_result_line_left_in_a_truncated_output_is_not_read` |
 | The protected-path check sees the whole patch, whatever its base is called | `patches.apply` | `test_workers`: `test_a_protected_path_is_refused_whatever_name_the_base_has` |

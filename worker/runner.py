@@ -18,6 +18,7 @@ the harness's work and computing the patch happen in the sandbox, and so does th
 `verify` command, so the evidence is not the model's claim. factory-mcp pushes the patch.
 """
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -28,6 +29,7 @@ import sys
 import tempfile
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 IMAGE = "factory-worker:latest"
@@ -93,6 +95,22 @@ def origin_repo(cwd):
     url = git(cwd, "config", "--get", "remote.origin.url")
     match = re.search(r"github\.com[/:]([^/]+/[^/]+?)(?:\.git)?/?$", url)
     return match.group(1) if match else url
+
+
+@contextmanager
+def checkout_lock(cwd):
+    """Passes of one repo run at once (ADR-0036) but share its persistent checkout, and two fetches
+    in it fail on git's ref locks: one runner at a time fetches, copies and reads it. Yields the
+    whole seconds it waited, which the pass's time must cover too."""
+    common = git(cwd, "rev-parse", "--git-common-dir")
+    with open(os.path.join(cwd, common, "factory-runner.lock"), "w") as handle:
+        started = time.monotonic()
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("waiting for another pass of this repo to release its checkout", flush=True)
+            fcntl.flock(handle, fcntl.LOCK_EX)  # released when the file closes
+        yield int(time.monotonic() - started)
 
 
 def prepare(cwd, order, branch, work):
@@ -268,13 +286,14 @@ def main(argv=None):
         if repo != order["repo"]:
             raise WorkerError(f"the checkout {cwd} is {repo}, not {order['repo']}")
         branch = "factory/" + order["workItemId"].rsplit("#", 1)[1]
-        base = prepare(cwd, order, branch, work)
-        verify = verify_command(cwd, base)
+        with checkout_lock(cwd) as waited:
+            base = prepare(cwd, order, branch, work)
+            verify = verify_command(cwd, base)
         if not verify:
             raise WorkerError("the base commit has no .github/pr-gatekeeper.json verify command")
         credentials = credential_copies(args.credential, scratch)
         harness_env = env_pairs(args.env)
-        seconds = max(120, order["budget"]["wallMs"] // 1000 - 60)
+        seconds = max(120, order["budget"]["wallMs"] // 1000 - 60 - waited)
         ensure_docker()
         sandbox = Sandbox(args.image, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]), credentials, harness_env)
         code, out, err = sandbox.run([*harness, text], seconds * 0.7, work, harness=True)

@@ -22,6 +22,7 @@ class Config:
     poll_seconds: int = 60
     gate_wait_seconds: int = 7200  # no verdict on the head for this long: a person looks
     max_passes: int = 4
+    passes_per_repo: int = 2  # worker passes of one repo that run at once (ADR-0036)
     wall_ms: int = 20 * 60 * 1000
     protected_paths: tuple = (".github/", "AGENTS.md")
     checkout_root: str = ""  # worker checkouts live at <root>/<owner>/<repo>; empty: the agent's cwd
@@ -68,6 +69,9 @@ class Config:
                                  "in FACTORY_REPOS or repos.json")
             spellings[name.lower()] = name
         defaults = cls(mcp_token=token, repos=repos)
+        passes_per_repo = int(env.get("FACTORY_PASSES_PER_REPO") or defaults.passes_per_repo)
+        if passes_per_repo < 1:
+            raise ValueError("FACTORY_PASSES_PER_REPO must be 1 or more; below 1, no repo would get a pass")
         return cls(
             mcp_token=token,
             repos=repos,
@@ -85,6 +89,7 @@ class Config:
             poll_seconds=int(env.get("FACTORY_POLL_SECONDS") or defaults.poll_seconds),
             gate_wait_seconds=int(env.get("FACTORY_GATE_WAIT_SECONDS") or defaults.gate_wait_seconds),
             max_passes=int(env.get("FACTORY_MAX_PASSES") or defaults.max_passes),
+            passes_per_repo=passes_per_repo,
             wall_ms=int(env.get("FACTORY_WALL_MS") or defaults.wall_ms),
             checkout_root=env.get("FACTORY_CHECKOUT_ROOT", ""),
             trusted_authors=frozenset(a.strip() for a in env.get("FACTORY_TRUSTED_AUTHORS", "").split(",")

@@ -42,6 +42,7 @@ FACTORY_MCP_TOKEN=<secret> FACTORY_REPOS=owner/repo FACTORY_GITHUB_TOKEN=<token>
 | `FACTORY_WORKERS` | Relay agents with locality, preferred first, e.g. `pi-glm-factory:local` |
 | `FACTORY_LOCAL_ONLY_REPOS` | Repos whose work may only go to `local` workers |
 | `FACTORY_MAX_PASSES`, `FACTORY_WALL_MS` | WorkOrder budget: worker passes per WorkItem (4), wall time per pass (20 min) |
+| `FACTORY_PASSES_PER_REPO` | Worker passes of one repo that run at once, default 2; they take the repo's checkout in turns (ADR-0036) |
 | `FACTORY_GIT_URL` | Where patch Results are pushed, default `https://github.com/{repo}.git` |
 | `FACTORY_OWNER` | GitHub login that owns escalations, default the repo owner. When `FACTORY_TRUSTED_AUTHORS` is empty, the factory searches this login's `factory:ready` issues to find new repos |
 | `FACTORY_POLL_SECONDS` | Background tick interval, default 60; `0` turns it off, and only `factory_tick` ticks |

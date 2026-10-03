@@ -129,6 +129,19 @@ class RunnerTest(unittest.TestCase):
         subprocess.run(["git", "apply", "--index", "-"], cwd=fresh, input=diff, text=True, check=True)
         return fresh
 
+    def test_a_runner_waits_for_the_checkout_while_another_pass_holds_it(self):
+        holder = subprocess.Popen(  # another pass of this repo, fetching for 2.5 seconds
+            [sys.executable, "-c", "import fcntl, sys, time\n"
+             "f = open(sys.argv[1], 'w'); fcntl.flock(f, fcntl.LOCK_EX); print('held', flush=True); time.sleep(2.5)",
+             str(self.checkout / ".git" / "factory-runner.lock")], stdout=subprocess.PIPE, text=True)
+        self.addCleanup(holder.wait)
+        self.addCleanup(holder.stdout.close)
+        self.assertEqual(holder.stdout.readline().strip(), "held")
+        result, _ = self.run_order("fix")
+        self.assertEqual(result["status"], "completed", result.get("error"))
+        # The wait came out of the harness's share of the pass, which is 798 seconds when nothing waits.
+        self.assertLess(self.harness_runs[0]["seconds"], 798)
+
     def test_completed_patch_applies_on_the_base(self):
         result, order = self.run_order("fix")
         self.assertEqual((result["status"], result["workOrderId"]), ("completed", order["id"]), result.get("error"))

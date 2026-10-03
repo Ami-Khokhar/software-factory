@@ -78,7 +78,7 @@ last steps, and what it needs from you.
 
 Limits: a WorkItem gets at most 4 worker passes (then `exhausted`); your `retry` gives it 4 more,
 also from `exhausted` (ADR-0035). Two failed attempts in a row
-block it. Each pass has 20 minutes. One worker runs per repo at a time. A PR with no gate verdict
+block it. Each pass has 20 minutes. Two passes of one repo run at once (`FACTORY_PASSES_PER_REPO`). A PR with no gate verdict
 for 2 hours goes to you.
 
 What the design does not protect against:

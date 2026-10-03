@@ -728,3 +728,20 @@ decides to spend a new budget on a WorkItem that used one up.
 **Consequence.** Each retry by a person can cost up to `FACTORY_MAX_PASSES` more passes, and the
 factory still stops on its own after that many. A WorkItem nobody retried stops exactly as before.
 
+## ADR-0036 — Passes of one repo run at once and take its checkout in turns
+
+**Context.** The Foreman ran one worker pass per repo at a time, because every pass of a repo
+fetches in the same persistent checkout, and two fetches at once fail on git's ref locks. So
+independent issues of one repo waited for each other, and most of a pass's time is the harness
+and the verify, which never touch the checkout.
+
+**Decision.** Up to `FACTORY_PASSES_PER_REPO` passes of one repo run at once (default 2, never
+below 1). `worker/runner.py` holds an exclusive lock on `factory-runner.lock` in the checkout's git
+directory while it fetches, copies the checkout and reads the verify command; the harness and the
+verify run on the pass's own copy, outside the lock. The seconds a pass waits for the lock come out
+of the harness's share of its time, so the pass still ends within the relay's timeout. The
+Foreman's count is a soft limit: two ticks at once may each start a pass.
+
+**Consequence.** Anything that reads or writes a worker checkout takes the lock. Two open PRs of
+one repo can conflict; the second is made again on the current base (ADR-0032), which costs it a
+pass and a gate round.
