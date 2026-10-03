@@ -76,7 +76,8 @@ last steps, and what it needs from you.
 | factory-mcp | Push `factory/<issue>` and open the PR. It refuses a patch that touches a protected path (`.github/`, `AGENTS.md`) before the push, then checks the pushed branch and the size limits | Merge. There is no merge tool |
 | pr-gatekeeper | Review and merge, or ask for changes, or send the PR to a person (HUMAN) | Be bypassed by the factory: a HUMAN verdict waits for you |
 
-Limits: a WorkItem gets at most 4 worker passes (then `exhausted`). Two failed attempts in a row
+Limits: a WorkItem gets at most 4 worker passes (then `exhausted`); your `retry` gives it 4 more,
+also from `exhausted` (ADR-0035). Two failed attempts in a row
 block it. Each pass has 20 minutes. One worker runs per repo at a time. A PR with no gate verdict
 for 2 hours goes to you.
 

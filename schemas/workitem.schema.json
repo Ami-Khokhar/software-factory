@@ -58,6 +58,11 @@
       "minimum": 1,
       "description": "The issue a ready WorkItem waits for: its issue has a 'Depends on #n' line and #n has not merged yet (ADR-0024)."
     },
+    "passesBefore": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Worker passes used before the last person's retry (ADR-0035). The budget counts only the passes after it."
+    },
     "regatedAt": {
       "type": ["string", "null"],
       "format": "date-time",

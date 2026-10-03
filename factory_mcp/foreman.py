@@ -505,9 +505,10 @@ class Foreman:
                for other in self.store.all()):
             return wi
         orders = self.store.workorders(wi["id"])
-        if len(orders) >= self.config.max_passes:
+        used = len(orders) - (wi.get("passesBefore") or 0)  # a person's retry buys a fresh budget
+        if used >= self.config.max_passes:
             return self._write(wi, dict(wi, state="exhausted", terminalReason=(
-                f"{len(orders)} worker passes used; FACTORY_MAX_PASSES is {self.config.max_passes}")),
+                f"{used} worker passes used; FACTORY_MAX_PASSES is {self.config.max_passes}")),
                 "exhausted")
         allowed = [agent for agent, _ in self.config.workers]
         unknown = [agent for agent in named if agent not in allowed]
@@ -625,20 +626,25 @@ class Foreman:
         return self._write(wi, new, "attempt_failed", reason=reason, worker=wi.get("worker"))
 
     def resolve_human(self, workitem_id, resolution, note, by, agent=False):
-        """A person's answer to human_waiting or blocked (ADR-0006): retry, regate or close. Day Desk,
-        driving (`agent`), answers each WorkItem once; after that the owner decides (ADR-0030)."""
+        """A person's answer to human_waiting, blocked or exhausted (ADR-0006): retry, regate or close.
+        Day Desk, driving (`agent`), answers each WorkItem once; after that the owner decides (ADR-0030).
+        A retry starts a fresh budget of passes (ADR-0035), so only the owner may answer `exhausted`."""
         if not self.store.acquire(workitem_id, self.holder):
             raise ToolError(f"{workitem_id} is being ticked; try again")
         try:
             wi = self.store.get(workitem_id)
-            if wi is None or wi["state"] not in ("human_waiting", "blocked"):
+            if wi is None or wi["state"] not in ("human_waiting", "blocked", "exhausted"):
                 raise ToolError(f"{workitem_id} is not waiting on a person")
+            if agent and wi["state"] == "exhausted":
+                raise ToolError(f"{workitem_id} used its budget of passes, so the owner decides whether to spend "
+                                f"more: factory retry|close {workitem_id} <note>")
             if agent and agent_resolved(self.store.history(workitem_id)):
                 raise ToolError(f"Day Desk already resolved {workitem_id} once, so the owner decides now: "
                                 f"factory retry|regate|close {workitem_id} <note>")
             rerun = {}
             if resolution == "retry":
-                new = dict(wi, state="changes_requested" if wi.get("prNumber") else "ready")
+                new = dict(wi, state="changes_requested" if wi.get("prNumber") else "ready", terminalReason=None,
+                           passesBefore=len(self.store.workorders(workitem_id)))
             elif resolution == "regate" and wi.get("prNumber"):
                 regated_at = now()  # before the edit, so the run the edit starts begins after it
                 rerun = {"gateRerun": self._rerun_gate(wi)}

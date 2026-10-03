@@ -711,3 +711,19 @@ taken as the gate finishing without a verdict: until GitHub registers the new ru
 still the latest. A run with no start time is taken as an answer, so the WorkItem never waits on
 it forever. A failed edit fails the regate with GitHub's
 error, and the WorkItem stays with the owner.
+
+## ADR-0035 — A person's retry buys a fresh budget of passes
+
+**Context.** Ami-Khokhar/Morningbrief#3 spent all 4 worker passes on one infrastructure fault: the
+worker image had no `python` (#136). The owner answered `retry` after the fix, and the next tick
+moved the WorkItem to `exhausted`, because the budget counted every pass the WorkItem ever used.
+The person's decision bought nothing, and `exhausted` could not be answered at all.
+
+**Decision.** `FACTORY_MAX_PASSES` limits what the factory spends on its own between two decisions
+of a person. A retry records `passesBefore`, the passes used so far, and the budget counts only the
+passes after it. The owner may answer `exhausted` with `retry` or `close`. Day Desk may not: a
+model never decides to spend a new budget on a WorkItem that used one up.
+
+**Consequence.** Each retry by a person can cost up to `FACTORY_MAX_PASSES` more passes, and the
+factory still stops on its own after that many. A WorkItem nobody retried stops exactly as before.
+
