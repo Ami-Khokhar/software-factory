@@ -5,7 +5,7 @@
 FROM node:24-bookworm-slim
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git python3 python3-pip python3-venv ca-certificates ripgrep curl procps lsof \
+ && apt-get install -y --no-install-recommends git python3 python-is-python3 python3-pip python3-venv ca-certificates ripgrep curl procps lsof \
  && rm -rf /var/lib/apt/lists/*
 
 # The harnesses a relay agent may run here (#98). Each agent's args name its command, credentials
