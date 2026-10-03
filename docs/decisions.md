@@ -712,6 +712,8 @@ still the latest. A run with no start time is taken as an answer, so the WorkIte
 it forever. A failed edit fails the regate with GitHub's
 error, and the WorkItem stays with the owner.
 
+---
+
 ## ADR-0035 — A person's retry buys a fresh budget of passes
 
 **Context.** Ami-Khokhar/Morningbrief#3 spent all 4 worker passes on one infrastructure fault: the
@@ -727,6 +729,8 @@ decides to spend a new budget on a WorkItem that used one up.
 
 **Consequence.** Each retry by a person can cost up to `FACTORY_MAX_PASSES` more passes, and the
 factory still stops on its own after that many. A WorkItem nobody retried stops exactly as before.
+
+---
 
 ## ADR-0036 — Passes of one repo run at once and take its checkout in turns
 
@@ -746,6 +750,8 @@ Foreman's count is a soft limit: two ticks at once may each start a pass.
 one repo can conflict; the second is made again on the current base (ADR-0032), which costs it a
 pass and a gate round.
 
+---
+
 ## ADR-0037 — The benchmark runs fixed tasks through the factory and grades them with hidden tests
 
 **Context.** The autonomy rate counts what merged with no person, but not whether the merged code
@@ -762,3 +768,20 @@ runs never conflict.
 **Consequence.** A run is a repeatable measure of a worker or of a factory change: autonomy,
 correctness, size, time and passes. It spends real worker passes and gate reviews, so it runs when
 the owner starts it, not on a schedule.
+
+---
+
+## ADR-0038 — The worker reads the issue's description
+
+**Context.** A WorkOrder carried the issue's title as its goal and the acceptance list, but not the
+text the owner wrote around them. Morningbrief#5's requirements, such as marking a delivery done
+only after Telegram confirms it, never reached its worker, which then had to guess them.
+
+**Decision.** Intake freezes the issue's text outside its Acceptance section as
+`WorkItem.description`, as it freezes the goal and the acceptance list, and each WorkOrder carries
+it. It is issue text from a trusted author, so it reaches the worker as data under the worker's
+rules, like the goal (ADR-0007).
+
+**Consequence.** Workers see the whole issue, and the prompt grows by its text. An edit to the
+issue after intake does not reach the worker, so the trust check at intake still covers all the
+text a worker reads.

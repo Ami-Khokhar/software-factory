@@ -19,6 +19,8 @@ ROUNDS_PER_PROBLEM = 2
 # terminalReason of a PR merged without a MERGE verdict on its head (contracts, obligation 5).
 UNGATED = "merged without a pr-gatekeeper MERGE verdict on"
 DEPENDS_ON = re.compile(r"^\s*depends on #(\d+)\b", re.I | re.M)
+HEADING = re.compile(r"\s*#+\s")
+ACCEPTANCE = re.compile(r"\s*#+\s*acceptance\b", re.I)
 WORKER = re.compile(r"^\s*worker:\s*(\S+)\s*$", re.I | re.M)
 
 
@@ -41,8 +43,8 @@ def parse_acceptance(body):
     """
     criteria, missing, inside = [], [], False
     for line in (body or "").splitlines():
-        if re.match(r"\s*#+\s", line):
-            inside = bool(re.match(r"\s*#+\s*acceptance\b", line, re.I))
+        if HEADING.match(line):
+            inside = bool(ACCEPTANCE.match(line))
             continue
         bullet = re.match(r"\s*[-*]\s+(?:\[[ xX]\]\s+)?(.+)", line)
         if not inside or not bullet:
@@ -55,6 +57,18 @@ def parse_acceptance(body):
         else:
             missing.append(bullet.group(1).strip())
     return criteria, missing
+
+
+def description(body):
+    """The issue's text outside its Acceptance section: what the worker needs to know besides the
+    checks (ADR-0038)."""
+    kept, inside = [], False
+    for line in (body or "").splitlines():
+        if HEADING.match(line):
+            inside = bool(ACCEPTANCE.match(line))
+        if not inside:
+            kept.append(line)
+    return "\n".join(kept).strip()
 
 
 def depends_on(body):
@@ -83,7 +97,7 @@ def intake(repo, issue):
     stamp = now()
     return {"schemaVersion": "factory.workitem/v1", "id": workitem_id(repo, issue["number"]),
             "repo": repo, "issueNumber": issue["number"], "goal": issue["title"],
-            "acceptance": criteria, "branch": branch_for(issue["number"]), "prNumber": None,
+            "description": description(issue.get("body")), "acceptance": criteria, "branch": branch_for(issue["number"]), "prNumber": None,
             "headSha": None, "reviewedSha": None, "gateRound": 0, "attempts": [], "blockers": [],
             "state": state, "stateVersion": 0, "createdAt": stamp, "updatedAt": stamp}
 

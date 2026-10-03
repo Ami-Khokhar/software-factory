@@ -83,6 +83,10 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   person's retry (ADR-0035).** The budget of `FACTORY_MAX_PASSES` counts only the
   passes after it. WorkItems stored before this field have none; readers treat
   that as 0.
+- **`WorkItem.description` is the issue's text outside its Acceptance section
+  (ADR-0038).** Intake freezes it with `goal` and `acceptance`, and each
+  WorkOrder carries it to the worker as data. WorkItems stored before this field
+  have none; their WorkOrders carry `""`, so the store needs no migration.
 - **`WorkItem.waitingOn` is the issue a `ready` WorkItem waits for (ADR-0024).**
   Its issue has a `Depends on #n` line and #n has not merged yet, so nothing is
   dispatched. The Foreman sets it to null when the wait ends. WorkItems stored

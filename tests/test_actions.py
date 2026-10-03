@@ -41,6 +41,11 @@ class ActionsTest(unittest.TestCase):
         self.assertEqual(wi["state"], "implementing")
         return wi, self.relay.tasks[wi["providerTaskId"]]
 
+    def test_the_worker_reads_the_issue_description(self):
+        _, task = self.dispatched()
+        order = json.loads(task["input"].split("WorkOrder:\n", 1)[1])
+        self.assertEqual(order["description"], "Make the relay fail loud.")
+
     def test_ready_to_pr_open(self):
         wi, task = self.dispatched()
         order = self.foreman.store.workorders(ID)[0]
