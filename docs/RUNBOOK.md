@@ -43,7 +43,8 @@ last steps, and what it needs from you.
 ### Writing issues the factory can finish
 
 - One issue is one PR: at most 600 changed lines and 20 files. Split larger work into issues that
-  each make sense alone.
+  each make sense alone, and aim for about half that size: a worker finishes a small issue in one
+  pass, and an issue near the limit can run out of time.
 - Make each check readable from the result: a test that must pass, a command that must print
   something, a file that must contain something. "Works well" is not a check.
 - Say what must not change. The worker reads the issue literally: its title, its text and its
