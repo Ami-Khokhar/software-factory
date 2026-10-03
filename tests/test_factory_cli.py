@@ -508,8 +508,9 @@ class BenchTest(unittest.TestCase):
             return subprocess.CompletedProcess(argv, 0, json.dumps(pr).encode(), b"")
         self.assertEqual(argv[:2], ["docker", "run"])
         tree = argv[argv.index("-v") + 1].rsplit(":", 1)[0]
-        command = argv[argv.index("factory-worker:latest") + 3:]  # after `timeout <seconds>`
-        env = dict(os.environ, **dict([argv[argv.index("-e") + 1].split("=", 1)]))
+        self.docker = argv
+        command = argv[argv.index("python3"):]  # after `timeout`, which macOS lacks
+        env = dict(os.environ, **dict(argv[i + 1].split("=", 1) for i, flag in enumerate(argv) if flag == "-e"))
         return self.real_run(command, cwd=tree, env=env, capture_output=True, text=True)
 
     def bench(self, *args):
@@ -549,6 +550,19 @@ class BenchTest(unittest.TestCase):
         self.assertEqual(lines[3].split(), ["beta", "closed", "yes", "1", "12", "30", "fail"])
         self.assertEqual(lines[4], "merged with no person: 1/2; hidden tests pass: 1/2; worker passes: 2; "
                                    "median minutes to merge: 30")
+        # The worker's code runs as a worker's verify does: no network, no capabilities, the host's uid.
+        for flag in (["--network", "none"], ["--cap-drop", "ALL"], ["--security-opt", "no-new-privileges"],
+                     ["--user", f"{os.getuid()}:{os.getgid()}"]):
+            self.assertIn(flag, [self.docker[i:i + 2] for i in range(len(self.docker) - 1)])
+
+    def test_a_second_run_in_the_same_second_is_refused(self):
+        (self.root / "state" / "bench").mkdir(parents=True)
+        (self.root / "state" / "bench" / "r0101120000.json").write_text("{}")
+        stamp = time.strptime("2026-01-01 12:00:00", "%Y-%m-%d %H:%M:%S")
+        with mock.patch.object(cli.time, "gmtime", lambda *_: stamp), self.assertRaises(SystemExit) as stopped:
+            self.bench("o/r")
+        self.assertIn("a run named r0101120000 exists", str(stopped.exception))
+        self.assertEqual(self.created, [])
 
 
 if __name__ == "__main__":

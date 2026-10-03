@@ -24,6 +24,11 @@ class AcceptanceTest(unittest.TestCase):
                                     {"claim": "B", "doneWhen": "file b exists"}])
         self.assertEqual(missing, ["C has no check"])
 
+    def test_the_description_is_the_issue_text_outside_its_acceptance_section(self):
+        wi = intake(REPO, {"number": 1, "title": "t", "state": "open", "labels": [], "body":
+                           "Why and how.\n\nDepends on #2\n## Acceptance\n- A — done when: x\n## Notes\nMore."})
+        self.assertEqual(wi["description"], "Why and how.\n\nDepends on #2\n## Notes\nMore.")
+
     def test_intake_refuses_uncheckable_issue(self):
         with self.assertRaisesRegex(ValueError, "C has no check"):
             intake(REPO, {"number": 1, "title": "t", "state": "open", "labels": [],

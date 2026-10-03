@@ -219,6 +219,9 @@ def cmd_new(args):
 
 BENCH = HERE / "bench"  # the benchmark's tasks, one folder each: issue.md, test_hidden.py, reference.py
 BENCH_SECONDS = 300  # how long a task's hidden tests may run
+# The limits worker/runner.py's Sandbox puts on a worker's verify, for the worker's merged code here.
+BENCH_SANDBOX = ("--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "1024",
+                 "--memory", "6g", "--cpus", "4")
 
 
 def cmd_bench(args):
@@ -229,10 +232,12 @@ def cmd_bench(args):
     if not args or args[0].count("/") != 1 or len(args) % 2 == 0 or set(args[1::2]) - {"-w"}:
         die("usage: factory bench <owner/repo> [-w <worker>] ... | factory bench report [<run>]")
     repo, workers, started = args[0], args[2::2], time.gmtime()
-    run = time.strftime("r%m%d%H%M", started)
+    run = time.strftime("r%m%d%H%M%S", started)
     record = {"run": run, "repo": repo, "workers": workers,
               "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", started), "issues": {}}
     path = STATE / "bench" / f"{run}.json"
+    if path.exists():  # two runs with one name would build the same files
+        die(f"a run named {run} exists; start again in a second")
     path.parent.mkdir(parents=True, exist_ok=True)
     chosen = "".join(f"Worker: {worker}\n" for worker in workers)
     for task in sorted(issue.parent.name for issue in BENCH.glob("*/issue.md")):
@@ -272,10 +277,12 @@ def hidden_tests_pass(run, task, sha):
         tree = next(Path(tmp).iterdir())
         (tree / "tests").mkdir(exist_ok=True)
         shutil.copy(BENCH / task / "test_hidden.py", tree / "tests" / "test_bench_hidden.py")
-        done = subprocess.run(["docker", "run", "--rm", "--network", "none", "-v", f"{tree}:/work", "-w", "/work",
-                               "-e", f"BENCH_MODULE=bench.{run['run']}.{task}", "factory-worker:latest",
-                               "timeout", str(BENCH_SECONDS), "python3", "-m", "unittest", "discover",
-                               "-s", "tests", "-p", "test_bench_hidden.py"], capture_output=True, text=True)
+        done = subprocess.run(["docker", "run", "--rm", "--init", "--network", "none", *BENCH_SANDBOX,
+                               "--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp/factory-home",
+                               "-v", f"{tree}:/work", "-w", "/work", "-e", f"BENCH_MODULE=bench.{run['run']}.{task}",
+                               "factory-worker:latest", "timeout", "--kill-after=10", str(BENCH_SECONDS),
+                               "python3", "-m", "unittest", "discover", "-s", "tests", "-p", "test_bench_hidden.py"],
+                              capture_output=True, text=True)
     return done.returncode == 0
 
 

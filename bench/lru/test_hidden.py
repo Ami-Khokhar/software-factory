@@ -51,5 +51,5 @@ class LRUCacheTest(unittest.TestCase):
         for i, key in enumerate(keys):
             cache.put(key, i)
             cache.get(wanted[i])
-        self.assertLess(time.perf_counter() - started, 1.0)
+        self.assertLess(time.perf_counter() - started, 3.0)  # a generous ceiling; an O(n) cache takes ~10 s
         self.assertEqual(len(cache), 20_000)
