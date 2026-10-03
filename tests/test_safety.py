@@ -1,4 +1,5 @@
-"""Unattended-run safety: who may start work, one worker per checkout, and escalations reach a person."""
+"""Unattended-run safety: who may start work, how many passes of one repo run at once, and
+escalations reach a person."""
 import json
 import unittest
 
@@ -48,21 +49,40 @@ class TrustedAuthorsTest(unittest.TestCase):
         self.assertFalse(config.trusts(repo, "bobby"))
 
 
-class OneWorkerPerCheckoutTest(unittest.TestCase):
-    def test_second_issue_in_a_repo_waits_for_the_first(self):
+class PassesPerRepoTest(unittest.TestCase):
+    def counts(self, f):
+        """{(repo, state): how many WorkItems}"""
+        found = {}
+        for wi in f.store.all():
+            found[(wi["repo"], wi["state"])] = found.get((wi["repo"], wi["state"]), 0) + 1
+        return found
+
+    def started(self, **config):
         github, relay = FakeGitHub(), FakeRelay()
-        for number in (7, 8):
+        for number in (7, 8, 10):
             github.add_issue(REPO, number)
         github.add_issue(OTHER, 9)
-        f = foreman(github, relay)
+        f = foreman(github, relay, **config)
         f.tick()
-        states = {wi["id"]: wi["state"] for wi in f.store.all()}
-        self.assertEqual(states, {"o/r#7": "implementing", "o/r#8": "ready", "o/s#9": "implementing"})
+        return f, relay
 
-        relay.finish(f.store.get("o/r#7")["providerTaskId"], status="failed", error="boom")
-        f.tick()  # 7 fails its attempt and goes back to ready; 8 may start only once 7 is not working
-        busy = [wi["id"] for wi in f.store.all() if wi["repo"] == REPO and wi["state"] == "implementing"]
-        self.assertEqual(len(busy), 1)
+    def test_passes_of_one_repo_run_at_once_up_to_the_limit(self):
+        f, relay = self.started()
+        self.assertEqual(self.counts(f), {(REPO, "implementing"): 2, (REPO, "ready"): 1,
+                                          (OTHER, "implementing"): 1})
+        first = next(wi for wi in f.store.all() if wi["repo"] == REPO and wi["state"] == "implementing")
+        relay.finish(first["providerTaskId"], status="failed", error="boom")
+        f.tick()  # that pass ended and goes back to ready, so the waiting WorkItem's turn comes
+        self.assertEqual(self.counts(f)[(REPO, "implementing")], 2)
+
+    def test_a_limit_below_one_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "FACTORY_PASSES_PER_REPO must be 1 or more"):
+            Config.from_env({"FACTORY_MCP_TOKEN": "t", "FACTORY_PASSES_PER_REPO": "0"})
+
+    def test_one_pass_per_repo_when_the_limit_is_one(self):
+        f, _ = self.started(passes_per_repo=1)
+        self.assertEqual(self.counts(f), {(REPO, "implementing"): 1, (REPO, "ready"): 2,
+                                          (OTHER, "implementing"): 1})
 
     def test_task_runs_in_the_repo_checkout(self):
         github, relay = FakeGitHub(), FakeRelay()

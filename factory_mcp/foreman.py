@@ -500,9 +500,12 @@ class Foreman:
         return self.github.repository(repo)["default_branch"]
 
     def dispatch(self, wi, kind, findings=(), named=()):
-        # Workers of one repo share its checkout, so one pass runs per repo; the rest wait their turn.
-        if any(other["repo"] == wi["repo"] and other["id"] != wi["id"] and other["state"] in WORKING
-               for other in self.store.all()):
+        # Up to passes_per_repo passes of one repo run at once, and the runner gives them the shared
+        # checkout in turns (ADR-0036). The rest wait. Two ticks at once may each start one, so the
+        # limit is soft; the runner's lock is what keeps the checkout safe.
+        running = sum(other["repo"] == wi["repo"] and other["id"] != wi["id"] and other["state"] in WORKING
+                      for other in self.store.all())
+        if running >= self.config.passes_per_repo:
             return wi
         orders = self.store.workorders(wi["id"])
         used = len(orders) - (wi.get("passesBefore") or 0)  # a person's retry buys a fresh budget
