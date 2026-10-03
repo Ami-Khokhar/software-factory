@@ -32,8 +32,8 @@ def escalation(wi, history):
 def autonomy(workitems, history_of):
     """Merged with no human state and no human commit ÷ all WorkItems that reached an end state.
 
-    A human commit is a PR head no worker Result produced. Merges by pr-gatekeeper are not touches;
-    a merge without its MERGE verdict is.
+    A human commit is a PR head that neither a worker Result nor the gate's merge of the base branch
+    (ADR-0039) produced. Merges by pr-gatekeeper are not touches; a merge without its MERGE verdict is.
     A WorkItem rebuilt from GitHub lost the history that decides this, so it counts as unknown.
     """
     ended, unknown, autonomous = [], 0, 0
@@ -45,12 +45,13 @@ def autonomy(workitems, history_of):
             unknown += 1
             continue
         ended.append(wi)
-        worker_shas = {h["detail"]["commitSha"] for h in history if h["action"] == "result"}
+        made = {h["detail"]["commitSha"] for h in history if h["action"] == "result"} | {
+            h["detail"]["headSha"] for h in history if h["action"] == "reconcile" and h["detail"].get("mergedBase")}
         heads = {h["detail"]["headSha"] for h in history
                  if h["action"] == "reconcile" and h["detail"].get("headSha")}
         touched = any(h["detail"].get("to") in HUMAN_STATES for h in history)
         ungated = (wi.get("terminalReason") or "").startswith(UNGATED)
-        if wi["state"] in ("merged", "closed") and not touched and not ungated and heads <= worker_shas:
+        if wi["state"] in ("merged", "closed") and not touched and not ungated and heads <= made:
             autonomous += 1
     return {"ended": len(ended), "autonomous": autonomous, "unknown": unknown,
             "rate": round(autonomous / len(ended), 3) if ended else None}

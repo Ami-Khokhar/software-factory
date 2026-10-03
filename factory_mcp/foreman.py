@@ -348,6 +348,8 @@ class Foreman:
             facts = workitem.observe(self.github, wi)
             new = workitem.reconcile(wi, facts)
             detail = {"headSha": new.get("headSha")}
+            if self._gate_merged_base(wi, new.get("headSha")):  # not a person's commit (ADR-0039)
+                detail["mergedBase"] = True
             verdict = workitem.current_verdict(wi, facts)  # accepted now: keep its blocking findings
             if verdict:  # by severity: blocking() falls back to every finding, and a nit is no lesson
                 detail["blocking"] = [{"fingerprint": f["fingerprint"], "problem": f["problem"]}
@@ -362,6 +364,18 @@ class Foreman:
         finally:
             self.store.release(workitem_id, self.holder)
         return before, wi
+
+    def _gate_merged_base(self, wi, head):
+        """Whether a new PR head, one the factory did not push, is the gate's merge of the base branch.
+        A commit GitHub no longer shows or will not show counts as a person's."""
+        if not wi.get("headSha") or head in (None, wi["headSha"]):
+            return False
+        try:
+            return workitem.gate_merged_base(self.github.commit(wi["repo"], head), wi["headSha"])
+        except GitHubError as exc:
+            if exc.status not in (403, 404):
+                raise
+            return False
 
     def _write(self, old, new, action, **detail):
         if new == old:

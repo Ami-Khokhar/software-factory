@@ -6,7 +6,7 @@ from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
 from factory_mcp.store import Store
 from factory_mcp.verdict import fingerprint, parse_marker, verdicts
-from factory_mcp.workitem import intake, parse_acceptance, reconcile
+from factory_mcp.workitem import gate_merged_base, intake, parse_acceptance, reconcile
 from tests.fakes import ISSUE_BODY, FakeGitHub, FakeRelay, marker_comment
 
 REPO = "o/r"
@@ -114,6 +114,23 @@ class ReconcileTableTest(unittest.TestCase):
     def test_old_round_is_stale(self):
         wi = {"state": "reviewing", "gateRound": 3, "reviewedSha": "s1"}
         self.assertEqual(reconcile(wi, facts(pr=PR, verdict=v("MERGE", round_=2)))["state"], "reviewing")
+
+
+class GateMergedBaseTest(unittest.TestCase):
+    def test_only_the_gates_own_merge_on_the_previous_head_counts(self):
+        """ADR-0039. Each other case differs from the gate's merge in one field."""
+        merge = {"author": GATE, "committer": {"login": "web-flow"}, "parents": [{"sha": "c1"}, {"sha": "m0"}],
+                 "commit": {"verification": {"verified": True}}}
+        self.assertTrue(gate_merged_base(merge, "c1"))
+        others = {"a person's Update branch on GitHub": {"author": {"login": "amteshwar"}},
+                  "a commit a person signed that names the gate's bot": {"committer": {"login": "amteshwar"}},
+                  "an unsigned commit that names GitHub": {"commit": {"verification": {"verified": False}}},
+                  "a merge on another head": {"parents": [{"sha": "c0"}, {"sha": "m0"}]},
+                  "a commit with one parent": {"parents": [{"sha": "c1"}]},
+                  "a commit with no GitHub account": {"author": None}}
+        for case, change in others.items():
+            with self.subTest(case):
+                self.assertFalse(gate_merged_base(dict(merge, **change), "c1"))
 
 
 class ForemanTest(unittest.TestCase):

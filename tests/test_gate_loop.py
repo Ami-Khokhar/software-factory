@@ -5,6 +5,7 @@ from factory_mcp import tools
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.github import GitHubError
+from factory_mcp.metrics import autonomy
 from factory_mcp.store import Store
 from factory_mcp.verdict import blockers, fingerprint
 from tests.fakes import FakeGit, FakeGitHub, FakeRelay, result_line
@@ -78,6 +79,34 @@ class GateLoopTest(unittest.TestCase):
         self.assertEqual((wi["state"], wi.get("terminalReason")), ("closed", None))
         self.assertEqual(self.github.issues[(REPO, 7)]["state"], "closed")
         self.assertEqual(self.foreman.store.history(ID)[-1]["action"], "issue_closed")
+
+    def merge(self, head):
+        """The gate decides MERGE on `head` and PR 100 merges. Returns whether the WorkItem counts as
+        merged with no person."""
+        self.gate("MERGE", 1, head)
+        self.tick()
+        self.github.pulls[0].update(state="closed", merged_at="2026-09-24T03:00:00Z")
+        wi = self.tick()
+        self.assertEqual(wi["state"], "closed")
+        return autonomy([wi], self.foreman.store.history)["autonomous"] == 1
+
+    def test_the_gates_merge_of_the_base_branch_is_not_a_person(self):
+        """ADR-0039: the gate merges main into a PR that fell behind it, then reviews that head."""
+        self.github.gate_merges_base(REPO, "factory/7", "m1")
+        self.assertTrue(self.merge("m1"))
+
+    def test_a_commit_a_person_pushed_is_a_person(self):
+        self.github.push(REPO, "factory/7", "p1")
+        self.assertFalse(self.merge("p1"))
+
+    def test_a_head_github_will_not_show_counts_as_a_persons(self):
+        """A 403 or 404 counts the head as a person's; any other error fails the tick, which tries again."""
+        self.github.gate_merges_base(REPO, "factory/7", "m1")
+        self.refuse("commit", status=502)
+        self.assertEqual(self.tick()["state"], "pr_open")
+        self.assertEqual(self.foreman.store.history(ID)[-1]["action"], "tick_error")
+        self.refuse("commit", status=404)
+        self.assertFalse(self.merge("m1"))
 
     def test_a_fix_that_adds_a_file_lists_it_in_the_pr_body(self):
         self.gate("CHANGES", 1, "c1", MISSING_TEST)

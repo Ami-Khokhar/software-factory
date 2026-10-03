@@ -156,6 +156,17 @@ def current_verdict(wi, facts):
     return latest
 
 
+def gate_merged_base(commit, previous_head):
+    """Whether a GitHub commit is the gate's merge of the base branch into a PR whose head was
+    `previous_head` (ADR-0039): a merge on that head that a workflow's token made through GitHub's
+    API, so GitHub signed it. No person's push or click on GitHub makes that commit."""
+    parents = [p["sha"] for p in commit["parents"]]
+    return ((commit.get("author") or {}).get("login") == "github-actions[bot]"
+            and (commit.get("committer") or {}).get("login") == "web-flow"
+            and commit["commit"]["verification"]["verified"]
+            and len(parents) == 2 and parents[0] == previous_head)
+
+
 def gated(facts):
     """True if pr-gatekeeper decided MERGE on the head that GitHub merged."""
     head = facts["pr"]["headSha"]

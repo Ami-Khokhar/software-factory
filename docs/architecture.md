@@ -97,7 +97,8 @@ A tick comes from the background loop or from `factory_tick`.
    know is taken in, so a lost store fills again from GitHub.
 2. **Each live WorkItem** whose repo is allowlisted (#38): take its lease or skip it; observe
    GitHub (the issue, the PR on `factory/<issue>`, the gate's verdicts and check run); reconcile the
-   state with those facts and write it; then act at most once. A fine-grained token cannot read
+   state with those facts and write it, reading once a PR head the factory did not push to see if
+   it is the gate's merge of the base branch (ADR-0039); then act at most once. A fine-grained token cannot read
    check runs on a private repo, so the gate's workflow run stands in; when the token cannot read
    that either, the verdicts and `FACTORY_GATE_WAIT_SECONDS` still move the WorkItem:
    - `ready`: dispatch an implement WorkOrder, unless the issue has a `Depends on #n` line and
@@ -211,5 +212,5 @@ The states are the enum in `schemas/workitem.schema.json`.
 - **Exhausted**: stopped because the budget of passes ran out; only the owner's retry, which buys
   a fresh budget, starts it again.
 - **Autonomy rate**: of the WorkItems that ended, the share that merged with no human state, no
-  commit a worker did not make, and a MERGE verdict on the merged head
-  (`metrics.autonomy`). It is the project's measure of success.
+  commit other than a worker's or the gate's merge of the base branch (ADR-0039), and a MERGE
+  verdict on the merged head (`metrics.autonomy`). It is the project's measure of success.
