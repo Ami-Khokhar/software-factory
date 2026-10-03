@@ -93,6 +93,13 @@ class McpServerTest(unittest.TestCase):
         missing = self.rpc("tools/call", {"name": "factory_status", "arguments": {"id": "o/r#9"}})["result"]
         self.assertTrue(missing["isError"])
 
+    def test_a_summary_names_why_an_exhausted_workitem_stopped(self):
+        self.store.put(dict(workitem(), state="exhausted", terminalReason="4 worker passes used"))
+        result = self.rpc("tools/call", {"name": "factory_status", "arguments": {}})["result"]
+        self.assertFalse(result["isError"])
+        row = json.loads(result["content"][0]["text"])["workItems"][0]
+        self.assertEqual(row["blockedOn"], "4 worker passes used")
+
     def test_protocol_errors(self):
         self.assertEqual(self.rpc("nope")["error"]["code"], -32601)
         self.assertEqual(self.rpc("tools/call", {"name": "factory_merge"})["error"]["code"], -32602)

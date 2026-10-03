@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 
 from . import lessons, metrics, repos
-from .foreman import MAX_PLAN_ISSUES, agent_resolved
+from .foreman import MAX_PLAN_ISSUES, Foreman, agent_resolved
 from .mcp import Tool, ToolError
 
 # What Day Desk may call when it drives the factory with FACTORY_AGENT_TOKEN (ADR-0030). Setting up
@@ -19,7 +19,7 @@ def build(store, foreman, agent=False):
         if wi["state"] in WAITING:
             row["agentMayResolve"] = not agent_resolved(store.history(wi["id"]))
         elif wi["state"] == "exhausted":
-            row["blockedOn"] = foreman.Foreman._reason(wi)
+            row["blockedOn"] = Foreman._reason(wi)
         return row
 
     def status(args):
