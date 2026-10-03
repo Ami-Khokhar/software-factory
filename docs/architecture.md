@@ -115,9 +115,8 @@ A tick comes from the background loop or from `factory_tick`.
    - `merged`: close the issue, because GitHub skips `Closes #n` when the gate's workflow token
      merges. Then `closed`.
 3. **Entering `human_waiting`, `blocked` or `exhausted`** comments on the issue and mentions the
-   owner. `factory watch` also tells the owner in Telegram of `human_waiting` and `blocked`, the
-   states Day Desk can resolve; only the owner can answer `exhausted` (ADR-0035), so the issue
-   comment is all it gets.
+   owner. `factory watch` also tells the owner in Telegram of `human_waiting`, `blocked` and
+   `exhausted`: Day Desk can resolve the first two and the owner can answer all three (ADR-0035).
 
 ## State machine
 

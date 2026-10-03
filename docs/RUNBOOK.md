@@ -330,7 +330,8 @@ hermes -p day-desk cron create "every 10m" --no-agent --script factory-update.sh
 
 `factory-drive` runs the model only when the escalations Day Desk may answer change, and tells you
 what it chose for each. `factory-watch` tells you of an escalation Day Desk may not answer, or one
-it left for 30 minutes; without `FACTORY_AGENT_TOKEN` it tells you of every one at once.
+it left for 30 minutes, and of an exhausted WorkItem either way; without `FACTORY_AGENT_TOKEN` it
+tells you of every one at once.
 
 `factory-watch` sends one message for each WorkItem that newly waits on you, and an error message
 when factory-mcp does not answer. `factory-report` sends the week in one message every Monday at
