@@ -115,8 +115,9 @@ A tick comes from the background loop or from `factory_tick`.
    - `merged`: close the issue, because GitHub skips `Closes #n` when the gate's workflow token
      merges. Then `closed`.
 3. **Entering `human_waiting`, `blocked` or `exhausted`** comments on the issue and mentions the
-   owner. `factory watch` also tells the owner in Telegram of `human_waiting` and `blocked`,
-   the states the owner can resolve; `exhausted` is final, so the issue comment is all it gets.
+   owner. `factory watch` also tells the owner in Telegram of `human_waiting` and `blocked`, the
+   states Day Desk can resolve; only the owner can answer `exhausted` (ADR-0035), so the issue
+   comment is all it gets.
 
 ## State machine
 
@@ -143,11 +144,12 @@ The states are the enum in `schemas/workitem.schema.json`.
 | `merged` | factory-mcp closes the issue | `closed` |
 | any live state | the PR closed without a merge | `human_waiting` |
 | any live state | the issue closed without a merged PR | `cancelled` |
-| `ready`, `changes_requested` | `FACTORY_MAX_PASSES` WorkOrders were dispatched already | `exhausted` |
+| `ready`, `changes_requested` | `FACTORY_MAX_PASSES` WorkOrders were dispatched since the last person's retry | `exhausted` |
 | `human_waiting`, `blocked` | `factory_resolve_human`: retry, regate or close | `ready` or `changes_requested`, `reviewing`, or `cancelled`; a regate with no gate run going and no new verdict edits the PR body's `<!-- factory regate n -->` line, which starts a gate run (ADR-0034) |
+| `exhausted` | the owner's `factory_resolve_human`: retry or close; Day Desk is refused | `ready` or `changes_requested` with a fresh budget of passes, or `cancelled` (ADR-0035) |
 
-`closed`, `cancelled` and `exhausted` are terminal. `human_waiting` is not: it waits for the
-owner's decision (ADR-0006).
+`closed` and `cancelled` are terminal, and so is `exhausted` until the owner retries it.
+`human_waiting` is not: it waits for the owner's decision (ADR-0006).
 
 ## The worker contract
 
@@ -204,7 +206,8 @@ owner's decision (ADR-0006).
 - **Pass**: one worker task. `FACTORY_MAX_PASSES` caps them per WorkItem.
 - **Attempt**: a pass that failed. Two in a row block the WorkItem.
 - **Blocked**: stopped after two failed attempts, until the owner decides.
-- **Exhausted**: stopped because the budget of passes ran out.
+- **Exhausted**: stopped because the budget of passes ran out; only the owner's retry, which buys
+  a fresh budget, starts it again.
 - **Autonomy rate**: of the WorkItems that ended, the share that merged with no human state, no
   commit a worker did not make, and a MERGE verdict on the merged head
   (`metrics.autonomy`). It is the project's measure of success.

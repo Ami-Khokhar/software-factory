@@ -1,5 +1,6 @@
 """A person's acts: approving an issue, answering an escalation. Proposing issues, worker passes
 and the autonomy rate."""
+import dataclasses
 import json
 import unittest
 from unittest import mock
@@ -36,6 +37,28 @@ class ResolveHumanTest(unittest.TestCase):
             wi = self.tick()
         self.assertEqual(wi["state"], "blocked")
         return wi
+
+    def test_a_retry_after_every_pass_was_used_gets_a_fresh_budget(self):
+        # Morningbrief#3: every pass failed on one fault; the owner's retry must buy more passes.
+        self.foreman.config = dataclasses.replace(self.foreman.config, max_passes=2)
+        self.block()
+        self.foreman.resolve_human(ID, "retry", "the worker image is fixed", "amteshwar")
+        self.assertEqual(self.tick()["state"], "implementing")
+
+    def test_only_the_owner_answers_an_exhausted_workitem(self):
+        self.foreman.config = dataclasses.replace(self.foreman.config, max_passes=2)
+        self.block()
+        self.foreman.resolve_human(ID, "retry", "try again", "day-desk", agent=True)
+        self.foreman.config = dataclasses.replace(self.foreman.config, max_passes=1)
+        wi = self.tick()  # the one pass of the fresh budget fails
+        self.relay.finish(wi["providerTaskId"], status="failed", error="crashed")
+        self.tick()
+        self.assertEqual(self.tick()["state"], "exhausted")
+        with self.assertRaisesRegex(ToolError, "the owner decides whether to spend more"):
+            self.foreman.resolve_human(ID, "retry", "again", "day-desk", agent=True)
+        self.foreman.resolve_human(ID, "retry", "one more go", "amteshwar")
+        wi = self.tick()
+        self.assertEqual((wi["state"], wi.get("terminalReason")), ("implementing", None))
 
     def test_blocked_escalation_then_retry(self):
         wi = self.block()
