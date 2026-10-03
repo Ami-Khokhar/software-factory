@@ -107,7 +107,8 @@ which harness runs, with which model, and what it logs in with:
 The harness, patch collection, and verification run as the same host UID with a writable
 container-only HOME (`/tmp/factory-home`). Build the image with
 `docker build -t factory-worker:latest worker/`; `factory update` rebuilds it when
-`worker/Dockerfile` changes. An agent registered before #98 must add its `--credential` and
+`worker/Dockerfile` changes, and tags the new build `latest` only after `python`, `python3` and
+`git` run in it. An agent registered before #98 must add its `--credential` and
 `--env` flags: without them the runner mounts no login and the harness fails on its first call.
 Register each worker in `~/.config/agent-relay/agents.json`
 (replace the host paths), list it in `FACTORY_WORKERS` (preferred first, `:local` or `:hosted`),

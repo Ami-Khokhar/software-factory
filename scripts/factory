@@ -357,6 +357,10 @@ def branch_merged(branch):
     return done.returncode == 0 and done.stdout.strip() not in ("", "0")
 
 
+# Commands a repo's verify may call, as on GitHub's runners (#136: `python` was missing).
+WORKER_CHECK = "python --version && python3 --version && git --version"
+
+
 def cmd_update(_):
     """Deploy this checkout's branch: follow a merged branch to the default branch, fast-forward,
     and restart factory-mcp only if the tests pass there. A failing test keeps the old commit. The
@@ -405,8 +409,10 @@ def cmd_update(_):
         if done.returncode != 0:
             die(f"update: {what} failed at {new[:7]}: {' '.join((done.stderr or done.stdout).split())[-300:]}")
         return done.stdout
-    if changed("worker/Dockerfile"):
-        must("the worker image build", "docker", "build", "-q", "-t", "factory-worker:latest", str(HERE / "worker"))
+    if changed("worker/Dockerfile"):  # workers use :latest, so a build that lacks a command repos use never gets it
+        must("the worker image build", "docker", "build", "-q", "-t", "factory-worker:candidate", str(HERE / "worker"))
+        must("the worker image check", "docker", "run", "--rm", "factory-worker:candidate", "sh", "-c", WORKER_CHECK)
+        must("the worker image tag", "docker", "tag", "factory-worker:candidate", "factory-worker:latest")
     if new != old or changed("worker/Dockerfile"):  # a retry restarted already, unless it rebuilds the worker
         restart_factory_mcp()
     if changed("tenant/hermes/sandbox"):
