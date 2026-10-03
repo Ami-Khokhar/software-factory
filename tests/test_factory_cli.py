@@ -89,8 +89,24 @@ class UpdateTest(unittest.TestCase):
         git(self.dev, "push", "-q", "origin", "HEAD:main")
         with mock.patch.object(cli, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run:
             cli.cmd_update([])
-        run.assert_called_once_with(
-            "docker", "build", "-q", "-t", "factory-worker:latest", str(self.deploy / "worker"))
+        self.assertEqual([call.args for call in run.call_args_list], [
+            ("docker", "build", "-q", "-t", "factory-worker:candidate", str(self.deploy / "worker")),
+            ("docker", "run", "--rm", "factory-worker:candidate", "sh", "-c", cli.WORKER_CHECK),
+            ("docker", "tag", "factory-worker:candidate", "factory-worker:latest")])
+
+    def test_a_worker_image_without_python_never_becomes_latest(self):
+        self.commit("worker/Dockerfile", "FROM scratch\n")
+        git(self.dev, "push", "-q", "origin", "HEAD:main")
+        ran = []
+
+        def run(*cmd, **_):
+            ran.append(cmd)
+            missing = cmd[:3] == ("docker", "run", "--rm")
+            return subprocess.CompletedProcess([], 127 if missing else 0, "", "sh: 1: python: not found")
+        with mock.patch.object(cli, "run", side_effect=run), \
+                self.assertRaisesRegex(SystemExit, "worker image check failed at [0-9a-f]{7}: sh: 1: python: not found"):
+            cli.cmd_update([])
+        self.assertNotIn(("docker", "tag", "factory-worker:candidate", "factory-worker:latest"), ran)
 
     def deploy_with(self, name=None, text="", results=None):
         """Deploy one commit that changes `name` (none: deploy again); return the commands run and what
