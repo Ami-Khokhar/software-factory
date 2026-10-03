@@ -62,6 +62,8 @@ last steps, and what it needs from you.
 | `factory status [<repo#n>]` | What the factory is doing, and what it needs from you |
 | `factory retry\|regate\|close <repo#n> <note>` | Answers an escalation |
 | `factory add-repo <owner/repo>` | Makes a repo a factory target (it needs pr-gatekeeper) |
+| `factory bench <repo> [-w <worker>] ...` | Files the benchmark's tasks as `factory:ready` issues in a sandbox repo (see "Measuring workers") |
+| `factory bench report [<run>]` | Grades a run, the latest by default |
 | `factory stop` | Kill switch: cancels worker tasks, kills sandboxes, stops factory-mcp |
 | `factory start` | Starts Docker (OrbStack), the relay and factory-mcp |
 | `factory logs` | Follows the factory-mcp log |
@@ -147,6 +149,20 @@ Use `--credential ~/.codex/auth.json:/tmp/factory-home/.codex`, `--env CODEX_HOM
 and `codex exec --skip-git-repo-check`. A harness ends a pass with its exit code; a non-zero exit
 fails it, and the WorkItem follows the usual retry/block path. The runner still requires a patch
 and passes the repo's base-commit `verify` command before factory-mcp pushes anything.
+
+### Measuring workers: the benchmark
+
+`factory bench <owner/repo> [-w <worker>] ...` files one `factory:ready` issue per task in
+`bench/`, in a repo the factory may change, such as Ami-Khokhar/pr-gatekeeper-sandbox. Each task
+builds a new module under `bench/<run>/`, so no two tasks, in one run or in two, touch the same
+file. The factory takes them like any issue: a worker, the gate, the merge.
+
+When they end, `factory bench report [<run>]` prints one line per task: its end state, whether a
+person was needed (the autonomy rule of `factory report`), the worker passes, the PR's changed
+lines, the minutes from the run's start to the merge, and whether the task's hidden tests pass on
+the merged code. The hidden tests live only in this repo, so no worker sees them, and they run in
+the worker image with no network. Run it once for each worker you want to compare, with `-w`. A
+run spends real worker passes and gate reviews, so start one when you want a measure.
 
 ## Adding a repo
 
