@@ -64,6 +64,10 @@ class GitHub:
         with its base, None while GitHub computes it."""
         return self._request("GET", f"{self.api}/repos/{repo}/pulls/{number}")[0]
 
+    def commit(self, repo, sha):
+        """One commit with its parents, its GitHub author and committer, and its signature check."""
+        return self._request("GET", f"{self.api}/repos/{repo}/commits/{sha}")[0]
+
     def open_pulls(self, repo, base):
         """The open PRs into `base`."""
         return self._get_all(f"/repos/{repo}/pulls", state="open", base=base)

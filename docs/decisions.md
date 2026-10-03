@@ -785,3 +785,23 @@ rules, like the goal (ADR-0007).
 **Consequence.** Workers see the whole issue, and the prompt grows by its text. An edit to the
 issue after intake does not reach the worker, so the trust check at intake still covers all the
 text a worker reads.
+
+---
+
+## ADR-0039 — The gate's merge of the base branch is not a person's commit
+
+**Context.** The autonomy rate counted any PR head that no worker Result produced as a person's
+commit. Before it reviews a PR that fell behind its base, pr-gatekeeper merges the base branch into
+it through GitHub's API. With two passes of one repo at once (ADR-0036), that happens whenever one
+PR merges while another is open, so benchmark run r1003062707 reported a person on a task that no
+person touched.
+
+**Decision.** When a PR's head moves to a commit the factory did not push, the Foreman reads that
+commit once. A merge whose first parent is the head before it, authored by `github-actions[bot]`
+and signed by GitHub (committer `web-flow`, verified), is the gate's merge of the base branch: the
+reconcile records `mergedBase`, and `metrics.autonomy` counts it with the workers' commits. Any
+other commit, including a person's "Update branch" click on GitHub, still counts as a person's, and
+so does a commit GitHub will not show (403 or 404).
+
+**Consequence.** The autonomy rate stops counting the gate's own commits as people, at one GitHub
+read per new head. History recorded before this change still counts such merges as a person's.

@@ -36,6 +36,7 @@ class FakeGitHub:
         self.contents = {}  # (repo, path) -> file text on the default branch
         self.labels = {}  # repo -> names of the labels the Foreman created
         self.labelled = []  # (repo, number, labels) of every label the Foreman added to an issue
+        self.commits = {}  # (repo, sha) -> GitHub's commit; any other commit is a person's push
 
     def add_issue(self, repo, number, labels=("factory:ready",), body=ISSUE_BODY, state="open", author=None):
         self.issues[(repo, number)] = {"number": number, "title": f"Goal {number}", "body": body,
@@ -77,6 +78,19 @@ class FakeGitHub:
 
     def pull(self, repo, number):
         return next(p for p in self.pulls if p["repo"] == repo and p["number"] == number)
+
+    def commit(self, repo, sha):
+        return self.commits.get((repo, sha)) or {"sha": sha, "author": None, "committer": None, "parents": [],
+                                                 "commit": {"verification": {"verified": False}}}
+
+    def gate_merges_base(self, repo, branch, sha):
+        """pr-gatekeeper merges the base branch into a PR branch that fell behind it, through GitHub's
+        API with the workflow's token, as it does before it reviews."""
+        self.commits[(repo, sha)] = {"sha": sha, "author": {"login": "github-actions[bot]"},
+                                     "committer": {"login": "web-flow"},
+                                     "parents": [{"sha": self.branches[(repo, branch)]}, {"sha": "base1"}],
+                                     "commit": {"verification": {"verified": True}}}
+        self.push(repo, branch, sha)
 
     def open_pulls(self, repo, base):
         return [p for p in self.pulls if p["repo"] == repo and p["state"] == "open" and p["base"]["ref"] == base]
