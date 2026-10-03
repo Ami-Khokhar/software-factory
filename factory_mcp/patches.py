@@ -2,8 +2,11 @@
 pushed commit on the WorkItem branch."""
 import base64
 import os
+import re
 import subprocess
 import tempfile
+
+SHORTSTAT = re.compile(r"(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?")
 
 
 class PatchError(Exception):
@@ -185,10 +188,12 @@ def update_bootstrap(url, token, branch, head_sha, files, message):
         return _git(["rev-parse", "HEAD"], work, env)
 
 
-def apply(url, token, branch, base_sha, patch, message, force, protected=()):
+def apply(url, token, branch, base_sha, patch, message, force, protected=(), limits=None):
     """Clone, apply the patch on base_sha, commit, push to `branch`. Returns the new commit sha.
     A patch that touches a protected path is refused before the push: a pushed workflow file would
-    already run (`on: push`) with the repo's secrets, whatever checks come after."""
+    already run (`on: push`) with the repo's secrets, whatever checks come after. So is one that takes
+    the branch over `limits`, (default branch, lines, files): a push to an open PR stays on it, and
+    the next fix builds on it (ADR-0040)."""
     env = _env(token)
     with tempfile.TemporaryDirectory() as tmp:
         _git(["clone", "-q", "--no-checkout", url, "repo"], tmp, env)
@@ -211,5 +216,19 @@ def apply(url, token, branch, base_sha, patch, message, force, protected=()):
         refused = [name for name in touched.split("\0") if name and is_protected(name, protected)]
         if refused:
             raise PatchError(f"changes protected path {', '.join(refused)}")
+        if limits:
+            lines, files = _size(work, env, f"origin/{limits[0]}")
+            if lines > limits[1] or files > limits[2]:
+                raise PatchError(f"{lines} lines in {files} files exceeds the WorkOrder constraints")
         _git(["push", "-q", *(["--force"] if force else []), "origin", f"HEAD:refs/heads/{branch}"], work, env)
         return _git(["rev-parse", "HEAD"], work, env)
+
+
+def _size(work, env, default):
+    """(changed lines, changed files) from where HEAD left `default` to HEAD, as GitHub counts a PR."""
+    stat = SHORTSTAT.search(_git(["diff", "--shortstat", _git(["merge-base", default, "HEAD"], work, env),
+                                  "HEAD"], work, env))
+    if not stat:
+        return 0, 0
+    files, added, deleted = (int(n or 0) for n in stat.groups())
+    return added + deleted, files

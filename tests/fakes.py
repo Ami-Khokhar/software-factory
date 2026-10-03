@@ -198,7 +198,7 @@ class FakeGit:
         self.github, self.pushes = github, []
         self.sha, self.files, self.lands = "c1", (("src/app.py", 10, 2),), True
 
-    def apply(self, url, token, branch, base_sha, patch, message, force, protected=()):
+    def apply(self, url, token, branch, base_sha, patch, message, force, protected=(), limits=None):
         self.pushes.append({"branch": branch, "base": base_sha, "force": force})
         if self.lands:
             self.github.push(url.removeprefix("https://github.com/").removesuffix(".git"), branch, self.sha,

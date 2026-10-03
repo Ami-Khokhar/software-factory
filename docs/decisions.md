@@ -805,3 +805,22 @@ so does a commit GitHub will not show (403 or 404).
 
 **Consequence.** The autonomy rate stops counting the gate's own commits as people, at one GitHub
 read per new head. History recorded before this change still counts such merges as a person's.
+
+---
+
+## ADR-0040 — A change over the size limits is refused before the push
+
+**Context.** factory-mcp checked a PR's size only after it pushed a worker's patch. A push to an
+open PR stays on it when the check then fails the attempt, and a fix WorkOrder builds on the PR's
+head. Morningbrief#5's fix took PR #10 from 596 to 653 lines: the attempt failed, the 653 lines
+stayed on the PR with a body that did not list the new file, and the gate's lint sent the
+WorkItem to the owner with no finding a worker could fix.
+
+**Decision.** `patches.apply` refuses a patch that would take the branch over the WorkOrder's
+limits, counted from where the branch left the default branch as GitHub counts a PR, before it
+pushes, as it already refuses a protected path. `Foreman.check_pushed` still checks what GitHub
+holds after the push.
+
+**Consequence.** A failed attempt over the limits leaves the PR as it was, so the next attempt
+and the gate see the last good head. The count runs on the factory's own clone, so it does not
+trust the worker; GitHub's count after the push stays the authority.
