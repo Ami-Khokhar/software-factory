@@ -55,7 +55,8 @@ Turn the owner's goal into issues the factory can finish, as the Plan rules of t
 standard in the repo's AGENTS.md ask:
 
 - Each issue fits one PR: at most 600 changed lines and 20 files. Split a bigger goal into issues
-  that each make sense alone.
+  that each make sense alone, and aim for about half that size: a worker finishes a small issue in
+  one pass, and an issue near the limit can run out of time.
 - Each body ends with an `## Acceptance` heading and bullets of the form
   `- <claim> — done when: <check>`. A check is read from the result: a test that passes, a command
   that prints something, a file that contains something. Never "when it is done". Add one bullet
