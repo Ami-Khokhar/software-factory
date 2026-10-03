@@ -292,6 +292,19 @@ class WatchTest(unittest.TestCase):
                 {"id": "o/r#9", "state": "implementing", "blockedOn": None}]
         self.assertEqual(self.watch(*rows, command=cli.cmd_drive_queue), "o/r#7 is blocked: verify exited 1\n")
 
+    def test_an_exhausted_workitem_reaches_the_owner_whether_or_not_day_desk_drives_and_once(self):
+        exhausted = {"id": "o/r#9", "state": "exhausted", "blockedOn": "4 worker passes used"}
+        self.assertIn("o/r#9 is exhausted: 4 worker passes used", self.watch(exhausted, driving=True))
+        self.assertEqual(self.watch(exhausted, driving=True), "")  # said once
+        other = {"id": "o/r#10", "state": "exhausted", "blockedOn": "4 worker passes used"}
+        self.assertIn("o/r#10 is exhausted: 4 worker passes used", self.watch(other, driving=False))
+        self.assertEqual(self.watch(other, driving=False), "")  # said once
+
+    def test_the_drive_queue_never_lists_an_exhausted_workitem(self):
+        printed = self.watch({"id": "o/r#9", "state": "exhausted", "blockedOn": "4 worker passes used"},
+                             command=cli.cmd_drive_queue)
+        self.assertEqual(printed, "")
+
     def test_each_escalation_is_reported_once(self):
         blocked = ("o/r#7", "blocked", "verify exited 1")
         first = self.watch(blocked, ("o/r#8", "implementing", None))

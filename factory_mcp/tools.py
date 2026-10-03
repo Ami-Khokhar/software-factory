@@ -18,6 +18,8 @@ def build(store, foreman, agent=False):
         row = {key: wi.get(key) for key in ("id", "state", "prNumber", "blockedOn", "waitingOn", "updatedAt")}
         if wi["state"] in WAITING:
             row["agentMayResolve"] = not agent_resolved(store.history(wi["id"]))
+        elif wi["state"] == "exhausted":
+            row["blockedOn"] = foreman.Foreman._reason(wi)
         return row
 
     def status(args):

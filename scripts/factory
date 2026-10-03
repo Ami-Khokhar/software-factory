@@ -91,8 +91,11 @@ AGENT_GRACE_SECONDS = 1800  # how long Day Desk may take on an escalation before
 
 
 def waits_on_owner(wi, driving, now):
-    """Whether the owner must answer `wi` now. When Day Desk drives (ADR-0030), it answers first;
-    the owner hears of one it may not answer, or one it has left for AGENT_GRACE_SECONDS."""
+    """Whether the owner must hear of `wi`. Exhausted always waits on the owner (ADR-0035).
+    Otherwise: when Day Desk drives (ADR-0030), it answers first, and the owner hears of one it
+    may not answer, or one it has left for AGENT_GRACE_SECONDS."""
+    if wi["state"] == "exhausted":
+        return True
     if wi["state"] not in ("human_waiting", "blocked"):
         return False
     if not driving or not wi.get("agentMayResolve"):
