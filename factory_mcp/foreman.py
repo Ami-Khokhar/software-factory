@@ -628,7 +628,8 @@ class Foreman:
     def resolve_human(self, workitem_id, resolution, note, by, agent=False):
         """A person's answer to human_waiting, blocked or exhausted (ADR-0006): retry, regate or close.
         Day Desk, driving (`agent`), answers each WorkItem once; after that the owner decides (ADR-0030).
-        A retry starts a fresh budget of passes (ADR-0035), so only the owner may answer `exhausted`."""
+        A person's retry starts a fresh budget of passes and Day Desk's keeps the budget it has (ADR-0035),
+        so only the owner may answer `exhausted`."""
         if not self.store.acquire(workitem_id, self.holder):
             raise ToolError(f"{workitem_id} is being ticked; try again")
         try:
@@ -643,8 +644,9 @@ class Foreman:
                                 f"factory retry|regate|close {workitem_id} <note>")
             rerun = {}
             if resolution == "retry":
+                spent = wi.get("passesBefore") if agent else len(self.store.workorders(workitem_id))
                 new = dict(wi, state="changes_requested" if wi.get("prNumber") else "ready", terminalReason=None,
-                           passesBefore=len(self.store.workorders(workitem_id)))
+                           passesBefore=spent)
             elif resolution == "regate" and wi.get("prNumber"):
                 regated_at = now()  # before the edit, so the run the edit starts begins after it
                 rerun = {"gateRerun": self._rerun_gate(wi)}

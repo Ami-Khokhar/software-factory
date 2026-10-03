@@ -135,8 +135,8 @@ def build(store, foreman, agent=False):
              "write", lambda args: foreman.tick(args.get("id"))),
         Tool("factory_resolve_human",
              "Record a person's decision on a WorkItem in human_waiting, blocked or exhausted: retry (the "
-             "factory tries again with a fresh budget of passes, with the note as a finding; only the "
-             "owner may retry an exhausted one), regate (back to the gate: a fix the "
+             "factory tries again, with the note as a finding; the owner's retry buys a fresh budget of "
+             "passes, Day Desk's does not, and only the owner may retry an exhausted one), regate (back to the gate: a fix the "
              "person pushed, or the same head when the gate failed itself) or close.",
              {"type": "object", "required": ["id", "resolution", "note", "by"],
               "additionalProperties": False,

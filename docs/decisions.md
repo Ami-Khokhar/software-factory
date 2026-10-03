@@ -720,9 +720,10 @@ moved the WorkItem to `exhausted`, because the budget counted every pass the Wor
 The person's decision bought nothing, and `exhausted` could not be answered at all.
 
 **Decision.** `FACTORY_MAX_PASSES` limits what the factory spends on its own between two decisions
-of a person. A retry records `passesBefore`, the passes used so far, and the budget counts only the
-passes after it. The owner may answer `exhausted` with `retry` or `close`. Day Desk may not: a
-model never decides to spend a new budget on a WorkItem that used one up.
+of a person. A person's retry records `passesBefore`, the passes used so far, and the budget counts
+only the passes after it. Day Desk's retry keeps the budget the WorkItem has (#141), as ADR-0030
+says. The owner may answer `exhausted` with `retry` or `close`. Day Desk may not: a model never
+decides to spend a new budget on a WorkItem that used one up.
 
 **Consequence.** Each retry by a person can cost up to `FACTORY_MAX_PASSES` more passes, and the
 factory still stops on its own after that many. A WorkItem nobody retried stops exactly as before.
