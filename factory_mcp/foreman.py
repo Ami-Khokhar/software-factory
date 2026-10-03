@@ -19,6 +19,8 @@ WORKING = ("dispatching", "implementing")
 BOOTSTRAP_PREFIX = "factory-bootstrap/"
 MAX_PLAN_ISSUES = 10  # one approval covers this many issues at most (ADR-0024)
 REGATE_MARKER = re.compile(r"<!-- factory regate (\d+) -->")
+# A pass that ran out of time: worker/runner.py's harness timeout, or the relay's task timeout
+OUT_OF_TIME = re.compile(r"the harness timed out|task timed_out")
 
 
 def agent_resolved(history):
@@ -618,14 +620,18 @@ class Foreman:
                                        documents.pr_body(wi, order, files, evidence, worker))
 
     def fail(self, wi, order, reason):
-        """Record the attempt; two failed attempts block the WorkItem with the evidence."""
+        """Record the attempt; two failed attempts block the WorkItem with the evidence. Implement attempts
+        that all ran out of time say the issue is too big for one pass: a retry is likely to run out too."""
         attempts = list(wi.get("attempts") or []) + [reason]
         new = dict(wi, attempts=attempts, activeWorkOrderId=None, providerTaskId=None,
                    state="changes_requested" if order["kind"] == "fix" else "ready")
         if len(attempts) >= 2:
-            new.update(state="blocked", blockedOn=(
-                f"{len(attempts)} worker attempts at the {order['kind']} WorkOrder failed. Fix the "
-                "cause named in attempts, then call factory_resolve_human."))
+            fix = "Fix the cause named in attempts, then call factory_resolve_human."
+            if order["kind"] == "implement" and all(OUT_OF_TIME.search(a) for a in attempts):
+                fix = ("Each ran out of time, so the issue is likely too big for one pass: split it into "
+                       "smaller issues, then close this one with factory_resolve_human.")
+            new.update(state="blocked",
+                       blockedOn=f"{len(attempts)} worker attempts at the {order['kind']} WorkOrder failed. {fix}")
         return self._write(wi, new, "attempt_failed", reason=reason, worker=wi.get("worker"))
 
     def resolve_human(self, workitem_id, resolution, note, by, agent=False):
