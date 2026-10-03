@@ -629,14 +629,16 @@ class Foreman:
         """A person's answer to human_waiting, blocked or exhausted (ADR-0006): retry, regate or close.
         Day Desk, driving (`agent`), answers each WorkItem once; after that the owner decides (ADR-0030).
         A person's retry starts a fresh budget of passes and Day Desk's keeps the budget it has (ADR-0035),
-        so only the owner may answer `exhausted`."""
+        so Day Desk may not retry a WorkItem that used its budget, and only the owner answers `exhausted`."""
         if not self.store.acquire(workitem_id, self.holder):
             raise ToolError(f"{workitem_id} is being ticked; try again")
         try:
             wi = self.store.get(workitem_id)
             if wi is None or wi["state"] not in ("human_waiting", "blocked", "exhausted"):
                 raise ToolError(f"{workitem_id} is not waiting on a person")
-            if agent and wi["state"] == "exhausted":
+            passes = len(self.store.workorders(workitem_id))
+            spent = passes - (wi.get("passesBefore") or 0) >= self.config.max_passes
+            if agent and (wi["state"] == "exhausted" or resolution == "retry" and spent):
                 raise ToolError(f"{workitem_id} used its budget of passes, so the owner decides whether to spend "
                                 f"more: factory retry|close {workitem_id} <note>")
             if agent and agent_resolved(self.store.history(workitem_id)):
@@ -644,9 +646,8 @@ class Foreman:
                                 f"factory retry|regate|close {workitem_id} <note>")
             rerun = {}
             if resolution == "retry":
-                spent = wi.get("passesBefore") if agent else len(self.store.workorders(workitem_id))
                 new = dict(wi, state="changes_requested" if wi.get("prNumber") else "ready", terminalReason=None,
-                           passesBefore=spent)
+                           passesBefore=wi.get("passesBefore") if agent else passes)
             elif resolution == "regate" and wi.get("prNumber"):
                 regated_at = now()  # before the edit, so the run the edit starts begins after it
                 rerun = {"gateRerun": self._rerun_gate(wi)}

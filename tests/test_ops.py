@@ -45,13 +45,22 @@ class ResolveHumanTest(unittest.TestCase):
         self.foreman.resolve_human(ID, "retry", "the worker image is fixed", "amteshwar")
         self.assertEqual(self.tick()["state"], "implementing")
 
+    def test_day_desks_retry_keeps_the_budget(self):
+        self.foreman.config = dataclasses.replace(self.foreman.config, max_passes=3)
+        self.block()  # two of the three passes failed
+        self.foreman.resolve_human(ID, "retry", "try again", "day-desk", agent=True)
+        wi = self.tick()  # the last pass of the budget fails too
+        self.relay.finish(wi["providerTaskId"], status="failed", error="crashed")
+        self.tick()
+        self.assertEqual(self.tick()["state"], "exhausted")
+        with self.assertRaisesRegex(ToolError, "the owner decides whether to spend more"):
+            self.foreman.resolve_human(ID, "retry", "again", "day-desk", agent=True)
+
     def test_only_the_owners_retry_buys_more_passes(self):
         self.foreman.config = dataclasses.replace(self.foreman.config, max_passes=2)
         self.block()  # both passes of the budget failed
-        self.foreman.resolve_human(ID, "retry", "try again", "day-desk", agent=True)
-        self.assertEqual(self.tick()["state"], "exhausted")  # Day Desk's retry keeps the spent budget (#141)
         with self.assertRaisesRegex(ToolError, "the owner decides whether to spend more"):
-            self.foreman.resolve_human(ID, "retry", "again", "day-desk", agent=True)
+            self.foreman.resolve_human(ID, "retry", "try again", "day-desk", agent=True)
         self.foreman.resolve_human(ID, "retry", "one more go", "amteshwar")
         wi = self.tick()
         self.assertEqual((wi["state"], wi.get("terminalReason")), ("implementing", None))
