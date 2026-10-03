@@ -3,6 +3,8 @@
 
   factory new <owner/repo> <title> "<claim> | <check>" ["<claim> | <check>" ...] [-d <description>]
   factory add-repo <owner/repo>           check a repo and enable it (it needs pr-gatekeeper)
+  factory bench <owner/repo> [-w <worker>] ...  file the benchmark's tasks in a sandbox repo
+  factory bench report [<run>]            grade a run: person needed, passes, lines, time, hidden tests
   factory status [<owner/repo#n>]
   factory watch                           print each WorkItem that newly waits on you (Hermes cron)
   factory drive-queue                     the escalations Day Desk may still answer (its job's monitor)
@@ -22,13 +24,17 @@ FACTORY_GITHUB_TOKEN comes from `gh auth token` unless the secrets file sets it.
 """
 import calendar
 import http.client
+import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
+import zipfile
 from pathlib import Path
 
 CONFIG = Path.home() / ".config" / "factory-mcp"
@@ -209,6 +215,109 @@ def cmd_new(args):
     done = subprocess.run(["gh", "issue", "create", "-R", repo, "--title", title,
                            "--label", "factory:ready", "--body-file", "-"], input=body, text=True)
     sys.exit(done.returncode)
+
+
+BENCH = HERE / "bench"  # the benchmark's tasks, one folder each: issue.md, test_hidden.py, reference.py
+BENCH_SECONDS = 300  # how long a task's hidden tests may run
+
+
+def cmd_bench(args):
+    """Start a benchmark run (ADR-0037): one factory:ready issue per task in bench/, each building a
+    new module under bench/<run>/ in a repo the factory may change. `report` grades a run."""
+    if args[:1] == ["report"]:
+        return bench_report(args[1:])
+    if not args or args[0].count("/") != 1 or len(args) % 2 == 0 or set(args[1::2]) - {"-w"}:
+        die("usage: factory bench <owner/repo> [-w <worker>] ... | factory bench report [<run>]")
+    repo, workers, started = args[0], args[2::2], time.gmtime()
+    run = time.strftime("r%m%d%H%M", started)
+    record = {"run": run, "repo": repo, "workers": workers,
+              "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", started), "issues": {}}
+    path = STATE / "bench" / f"{run}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    chosen = "".join(f"Worker: {worker}\n" for worker in workers)
+    for task in sorted(issue.parent.name for issue in BENCH.glob("*/issue.md")):
+        text = (BENCH / task / "issue.md").read_text().replace("{dir}", f"bench/{run}").replace("{run}", run)
+        title, body = text.split("\n", 1)
+        body = body.strip()
+        if chosen:
+            body = body.replace("\n## Acceptance", f"\n{chosen}\n## Acceptance", 1)
+        done = subprocess.run(["gh", "issue", "create", "-R", repo, "--title", f"{title.lstrip('# ')} ({run})",
+                               "--label", "factory:ready", "--body-file", "-"],
+                              input=body + "\n", text=True, capture_output=True)
+        if done.returncode:
+            die(f"gh issue create failed for the {task} task: {done.stderr.strip()}")
+        record["issues"][task] = int(done.stdout.strip().rsplit("/", 1)[1])
+        path.write_text(json.dumps(record, indent=1))  # each issue is on record before the next is made
+    print(f"{run}: {len(record['issues'])} issues in {repo}. When they end: factory bench report {run}")
+
+
+def utc_seconds(stamp):
+    return calendar.timegm(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))
+
+
+def gh_api(path):
+    """One GitHub API GET through the owner's gh, as bytes: a zipball is not text."""
+    done = subprocess.run(["gh", "api", path], capture_output=True)
+    if done.returncode:
+        die(f"gh api {path} failed: {done.stderr.decode(errors='replace').strip()}")
+    return done.stdout
+
+
+def hidden_tests_pass(run, task, sha):
+    """Whether the task's hidden tests pass on the merged commit. They run like a worker's verify:
+    in the worker image, with no network and no credential."""
+    archive = gh_api(f"repos/{run['repo']}/zipball/{sha}")
+    with tempfile.TemporaryDirectory() as tmp:
+        zipfile.ZipFile(io.BytesIO(archive)).extractall(tmp)  # zipfile drops absolute and ".." parts of names
+        tree = next(Path(tmp).iterdir())
+        (tree / "tests").mkdir(exist_ok=True)
+        shutil.copy(BENCH / task / "test_hidden.py", tree / "tests" / "test_bench_hidden.py")
+        done = subprocess.run(["docker", "run", "--rm", "--network", "none", "-v", f"{tree}:/work", "-w", "/work",
+                               "-e", f"BENCH_MODULE=bench.{run['run']}.{task}", "factory-worker:latest",
+                               "timeout", str(BENCH_SECONDS), "python3", "-m", "unittest", "discover",
+                               "-s", "tests", "-p", "test_bench_hidden.py"], capture_output=True, text=True)
+    return done.returncode == 0
+
+
+def bench_report(args):
+    """Grade a run: per task, the end state, whether a person was needed, the worker passes, the
+    PR's changed lines, the minutes from the run's start to the merge, and the hidden tests."""
+    runs = sorted((STATE / "bench").glob("r*.json"))
+    path = STATE / "bench" / f"{args[0]}.json" if args else (runs[-1] if runs else None)
+    if path is None or not path.is_file():
+        die("no such benchmark run; start one with: factory bench <owner/repo>")
+    run = json.loads(path.read_text())
+    sys.path.insert(0, str(HERE))
+    from factory_mcp.metrics import REACHED_END, autonomy  # the factory's own rule for "no person"
+    known = {wi["id"] for wi in call("factory_status")["workItems"]}
+    rows = []
+    for task, number in sorted(run["issues"].items()):
+        workitem_id = f"{run['repo']}#{number}"
+        if workitem_id not in known:
+            rows.append([task, "not started", "", "", "", "", ""])
+            continue
+        status = call("factory_status", {"id": workitem_id})
+        wi, person, lines, minutes, hidden = status["workItem"], "", "", "", ""
+        if wi["state"] in REACHED_END:
+            person = "no" if autonomy([wi], lambda _: status["history"])["autonomous"] else "yes"
+        if wi.get("prNumber"):
+            pr = json.loads(gh_api(f"repos/{run['repo']}/pulls/{wi['prNumber']}"))
+            lines = pr["additions"] + pr["deletions"]
+            if pr.get("merged_at"):
+                minutes = round((utc_seconds(pr["merged_at"]) - utc_seconds(run["started"])) / 60)
+                hidden = "pass" if hidden_tests_pass(run, task, pr["merge_commit_sha"]) else "fail"
+        rows.append([task, wi["state"], person, status["passes"], lines, minutes, hidden])
+    header = ["task", "state", "person", "passes", "lines", "minutes", "hidden tests"]
+    widths = [max(len(str(row[i])) for row in [header, *rows]) for i in range(len(header))]
+    print(f"{run['run']} in {run['repo']}, started {run['started']}, "
+          f"workers: {', '.join(run['workers']) or 'the factory default'}")
+    for row in [header, *rows]:
+        print("  ".join(str(cell).ljust(width) for cell, width in zip(row, widths)).rstrip())
+    merged = sorted(row[5] for row in rows if row[5] != "")
+    print(f"merged with no person: {sum(row[2] == 'no' for row in rows)}/{len(rows)}; "
+          f"hidden tests pass: {sum(row[6] == 'pass' for row in rows)}/{len(rows)}; "
+          f"worker passes: {sum(row[3] or 0 for row in rows)}; "
+          f"median minutes to merge: {merged[len(merged) // 2] if merged else '-'}")
 
 
 def cmd_add_repo(args):
@@ -454,6 +563,8 @@ def main(argv):
         cmd_new(args)
     elif command == "add-repo":
         cmd_add_repo(args)
+    elif command == "bench":
+        cmd_bench(args)
     elif command == "status":
         cmd_status(args)
     elif command == "watch":

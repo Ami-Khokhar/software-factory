@@ -1,6 +1,7 @@
 """scripts/factory: `update` deploys a branch only when its tests pass, and follows it to main once
 merged; `add-repo` asks factory-mcp, as Day Desk does; `watch` reports each escalation once;
-`report` fits the week in one message; `stop` sends the relay its token."""
+`report` fits the week in one message; `stop` sends the relay its token; `bench` files the
+benchmark's tasks and grades the merged code with their hidden tests."""
 import contextlib
 import importlib.machinery
 import importlib.util
@@ -13,6 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
@@ -468,6 +470,85 @@ class StopTest(unittest.TestCase):
         printed = self.stop()
         self.assertEqual({auth for _, _, auth in Relay.seen}, {"Bearer secret-token"})
         self.assertNotIn("secret-token", printed)
+
+
+
+class BenchTest(unittest.TestCase):
+    HIDDEN = ("import importlib, os, unittest\n\n\nclass T(unittest.TestCase):\n    def test(self):\n"
+              "        self.assertEqual(importlib.import_module(os.environ['BENCH_MODULE']).answer(), 42)\n")
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root, self.created, self.real_run = Path(tmp.name), [], subprocess.run
+        for task in ("alpha", "beta"):
+            (self.root / "bench" / task).mkdir(parents=True)
+            (self.root / "bench" / task / "issue.md").write_text(
+                f"# Task {task}\n\nAdd `answer()` in `{{dir}}/{task}.py`, importable as `bench.{{run}}.{task}`.\n\n"
+                f"## Acceptance\n- answer gives 42 — done when: `tests/test_{{run}}_{task}.py` passes\n")
+            (self.root / "bench" / task / "test_hidden.py").write_text(self.HIDDEN)
+        for name, value in (("BENCH", self.root / "bench"), ("STATE", self.root / "state")):
+            patcher = mock.patch.object(cli, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def run_fake(self, argv, **kwargs):
+        """gh and docker at the process boundary: the hidden tests run on this machine instead."""
+        if argv[:3] == ["gh", "issue", "create"]:
+            self.created.append((argv[argv.index("--title") + 1], kwargs["input"]))
+            return subprocess.CompletedProcess(argv, 0, f"https://github.com/o/r/issues/{len(self.created)}\n", "")
+        if argv[:3] == ["gh", "api", "repos/o/r/zipball/m1"]:
+            archive = io.BytesIO()
+            with zipfile.ZipFile(archive, "w") as files:  # alpha is right, beta is wrong
+                files.writestr("o-r-m1/bench/r0101/alpha.py", "def answer():\n    return 42\n")
+                files.writestr("o-r-m1/bench/r0101/beta.py", "def answer():\n    return 41\n")
+            return subprocess.CompletedProcess(argv, 0, archive.getvalue(), b"")
+        if argv[:2] == ["gh", "api"]:  # either PR: 10 lines added, 2 deleted, merged 30 minutes in
+            pr = {"additions": 10, "deletions": 2, "merged_at": "2026-10-03T05:30:00Z", "merge_commit_sha": "m1"}
+            return subprocess.CompletedProcess(argv, 0, json.dumps(pr).encode(), b"")
+        self.assertEqual(argv[:2], ["docker", "run"])
+        tree = argv[argv.index("-v") + 1].rsplit(":", 1)[0]
+        command = argv[argv.index("factory-worker:latest") + 3:]  # after `timeout <seconds>`
+        env = dict(os.environ, **dict([argv[argv.index("-e") + 1].split("=", 1)]))
+        return self.real_run(command, cwd=tree, env=env, capture_output=True, text=True)
+
+    def bench(self, *args):
+        printed = io.StringIO()
+        workitems = {f"o/r#{n}": {"id": f"o/r#{n}", "state": "closed", "prNumber": 10 + n} for n in (1, 2)}
+        history = {"o/r#1": [{"action": "result", "detail": {"commitSha": "c1"}},
+                             {"action": "reconcile", "detail": {"headSha": "c1"}}],
+                   "o/r#2": [{"action": "attempt_failed", "detail": {"to": "blocked"}}]}
+
+        def call(tool, arguments=None):
+            if arguments:
+                wi = workitems[arguments["id"]]
+                return {"workItem": wi, "passes": 1, "history": history[wi["id"]]}
+            return {"workItems": list(workitems.values())}
+        with mock.patch.object(cli.subprocess, "run", self.run_fake), mock.patch.object(cli, "call", call), \
+                contextlib.redirect_stdout(printed):
+            cli.cmd_bench(list(args))
+        return printed.getvalue().splitlines()
+
+    def test_a_run_files_one_issue_per_task_with_its_paths_and_workers(self):
+        self.bench("o/r", "-w", "pi-glm-factory")
+        run = json.loads(next((self.root / "state" / "bench").glob("r*.json")).read_text())
+        self.assertEqual(run["issues"], {"alpha": 1, "beta": 2})
+        title, body = self.created[0]
+        self.assertEqual(title, f"Task alpha ({run['run']})")
+        self.assertEqual(body, f"Add `answer()` in `bench/{run['run']}/alpha.py`, importable as "
+                               f"`bench.{run['run']}.alpha`.\n\nWorker: pi-glm-factory\n\n## Acceptance\n"
+                               f"- answer gives 42 — done when: `tests/test_{run['run']}_alpha.py` passes\n")
+
+    def test_the_report_grades_the_merged_code_with_each_tasks_hidden_tests(self):
+        (self.root / "state" / "bench").mkdir(parents=True)
+        (self.root / "state" / "bench" / "r0101.json").write_text(json.dumps(
+            {"run": "r0101", "repo": "o/r", "workers": [], "started": "2026-10-03T05:00:00Z",
+             "issues": {"alpha": 1, "beta": 2}}))
+        lines = self.bench("report", "r0101")
+        self.assertEqual(lines[2].split(), ["alpha", "closed", "no", "1", "12", "30", "pass"])
+        self.assertEqual(lines[3].split(), ["beta", "closed", "yes", "1", "12", "30", "fail"])
+        self.assertEqual(lines[4], "merged with no person: 1/2; hidden tests pass: 1/2; worker passes: 2; "
+                                   "median minutes to merge: 30")
 
 
 if __name__ == "__main__":

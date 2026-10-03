@@ -745,3 +745,20 @@ Foreman's count is a soft limit: two ticks at once may each start a pass.
 **Consequence.** Anything that reads or writes a worker checkout takes the lock. Two open PRs of
 one repo can conflict; the second is made again on the current base (ADR-0032), which costs it a
 pass and a gate round.
+
+## ADR-0037 — The benchmark runs fixed tasks through the factory and grades them with hidden tests
+
+**Context.** The autonomy rate counts what merged with no person, but not whether the merged code
+is right. The factory's real work changes from week to week, so two workers, or the factory before
+and after a change, cannot be compared on it.
+
+**Decision.** `bench/` holds fixed tasks: an issue, hidden tests and a reference solution each.
+`factory bench` files them as issues in a sandbox repo, and the factory runs them as it runs any
+issue. `factory bench report` grades each merged result with its task's hidden tests, in the worker
+image with no network. The hidden tests stay in this repo, so no worker reads them, and a test
+shows that each passes on its reference. Each task builds a new module under `bench/<run>/`, so
+runs never conflict.
+
+**Consequence.** A run is a repeatable measure of a worker or of a factory change: autonomy,
+correctness, size, time and passes. It spends real worker passes and gate reviews, so it runs when
+the owner starts it, not on a schedule.
