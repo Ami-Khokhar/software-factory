@@ -873,3 +873,27 @@ code cannot check, so the guard is the skill and the audit row. It is the same t
 flag wrongly can spend one budget of passes, and the history shows it. When a failure comes from
 an environment limit, such as a verify the Linux worker cannot run, a retry fails the same way, so
 Day Desk says that first. This supersedes ADR-0035's "Day Desk may not" for retries the owner asked for.
+
+---
+
+## ADR-0044 — Day Desk knows what the factory can run, and does not retry what cannot pass
+
+**Context.** Ami-Khokhar/ideadump#2 used its whole budget of passes. Its verify is
+`xcodegen generate && xcodebuild test ... -destination 'platform=iOS Simulator,...'`, and a worker
+runs in the Linux container of `worker/Dockerfile` with none of those tools. Day Desk retried the
+WorkItem and reported "xcodegen was missing" without seeing that the verify can never pass there.
+The owner chose no macOS worker and no change to the verify: Day Desk needs enough context to
+find workarounds and explain the failure.
+
+**Decision.** The skill gets `environment.md`: what the worker image and the gate can run, the
+pass budget, Day Desk's own sandbox, how to tell an environment limit from a code fault, the
+workarounds to offer, and a check at enable time that reads the verify command in
+factory_repo_check's `gate_config` detail. Day Desk does not retry an environment limit: it says so
+and offers the workarounds, and the owner picks. No code changes: factory_repo_check already
+returns the verify command, and each failed attempt in `tried` already holds the verify output.
+
+**Consequence.** This is context, not a guard: a model can still misjudge, and `retry` stays
+available. The file has no test that its facts match `worker/Dockerfile`; whoever changes the
+Dockerfile, the budget or the gate updates it in the same pull request. An iOS repo gets work
+only after the owner picks a workaround, such as a Swift package that tests on Linux, which also
+needs a Swift toolchain in the worker image.
