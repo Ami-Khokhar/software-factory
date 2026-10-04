@@ -13,6 +13,11 @@ class GitHubError(Exception):
         self.status = status
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):  # the caller follows it, without the token
+        return None
+
+
 class GitHub:
     def __init__(self, token, api="https://api.github.com"):
         self.token = token
@@ -82,6 +87,31 @@ class GitHub:
         """The runs of workflow `name` on commit `sha`, newest first."""
         runs = self._get_all(f"/repos/{repo}/actions/runs", key="workflow_runs", head_sha=sha)
         return [run for run in runs if run.get("name") == name]
+
+    def run_log_tail(self, repo, run_id, chars=2000):
+        """The last `chars` of the log of the first failed job of a workflow run, or why there is none."""
+        try:
+            jobs = self._request("GET", f"{self.api}/repos/{repo}/actions/runs/{run_id}/jobs")[0]["jobs"]
+            failed = next((j for j in jobs if j.get("conclusion") not in ("success", "skipped")), None)
+            if failed is None:
+                return "(no failed job in the run)"
+            request = urllib.request.Request(f"{self.api}/repos/{repo}/actions/jobs/{failed['id']}/logs", headers={
+                "Accept": "application/vnd.github+json", "User-Agent": "factory-mcp",
+                "Authorization": f"Bearer {self.token}"})
+            try:  # GitHub answers with a redirect to a signed URL, which gets no token
+                with urllib.request.build_opener(_NoRedirect).open(request, timeout=20) as response:
+                    text = response.read().decode("utf-8", "replace")
+            except urllib.error.HTTPError as err:
+                if err.code not in (301, 302, 307) or not err.headers.get("Location"):
+                    raise
+                with urllib.request.urlopen(err.headers["Location"], timeout=60) as response:
+                    text = response.read().decode("utf-8", "replace")
+            return text[-chars:]
+        except (GitHubError, urllib.error.URLError, KeyError) as exc:
+            return f"(the run's log could not be read: {exc})"
+
+    def delete_branch(self, repo, branch):
+        self._request("DELETE", f"{self.api}/repos/{repo}/git/refs/heads/{urllib.parse.quote(branch)}")
 
     def repository(self, repo):
         return self._request("GET", f"{self.api}/repos/{repo}")[0]

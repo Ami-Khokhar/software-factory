@@ -105,6 +105,11 @@ A tick comes from the background loop or from `factory_tick`.
    - `ready`: dispatch an implement WorkOrder, unless the issue has a `Depends on #n` line and
      #n has not merged: then it waits, with `waitingOn: n` (ADR-0024). `changes_requested`:
      dispatch a fix WorkOrder that carries the gate's blocking findings as data.
+   - `implementing` with a remote-verify WorkOrder: the first tick after the Result pushes the patch to
+     the scratch branch and stores `remoteVerify`; later ticks look for the finished `factory-verify`
+     run (no more often than the tick) and, after `FACTORY_REMOTE_VERIFY_SECONDS`, fail the attempt.
+     The scratch branch is deleted when the run ends. A repo without
+     `.github/workflows/factory-verify.yml` goes to `human_waiting` at once, with no attempt used.
    - `dispatching`: submit the task to the relay. The state is written before the call, and the
      WorkOrder's idempotency key is the relay's request id, so a retry never starts a second task.
    - `implementing`: read the task. When it is done, check the Result and what GitHub holds, push
@@ -166,6 +171,11 @@ The states are the enum in `schemas/workitem.schema.json`.
   so a planted hook or filter cannot run on the host.
 - The runner turns the commits into a unified patch, runs the gate's `verify` command from the
   base commit in the same sandbox, and prints the Result as its last line.
+- For a repo in `FACTORY_REMOTE_VERIFY_REPOS` the WorkOrder has `remoteVerify: true` and the runner
+  skips that verify step: the Linux container cannot run it. factory-mcp pushes the patch to
+  `factory-verify/<issue>-<n>`, where the repo's `factory-verify` workflow runs the same verify
+  command on a GitHub macOS runner. A pass there continues as below; a failure is a failed attempt
+  whose finding is the run's log tail (ADR-0045).
 - factory-mcp checks the Result, refuses a patch that touches a protected path or takes the PR over
   its size limits before pushing it, pushes `factory/<issue>`, checks what GitHub holds, and opens
   the PR.
@@ -195,6 +205,7 @@ The states are the enum in `schemas/workitem.schema.json`.
 | An issue starts only after each `Depends on #n` issue merged | `Foreman._wait_for` | `test_plan`: `test_a_dependent_waits_while_its_dependency_is_open_and_starts_once_it_merged`, `test_a_dependency_that_ends_without_a_merge_sends_the_dependent_to_a_person` |
 | Dependencies change only before a worker starts, in one repo, without a cycle or an ended issue | `Foreman.set_dependencies` | `test_dependencies`: `test_a_workitem_no_worker_has_touched_may_change_and_any_other_may_not`, `test_a_dependency_must_be_an_open_issue_of_the_same_repo_that_has_not_ended`, `test_a_change_that_would_make_a_cycle_is_refused` |
 | The harness never touches the host | `worker/runner.py` | `test_worker_runner`: `test_the_harness_gets_a_copy_and_never_the_checkout`, `test_hooks_and_filters_the_harness_plants_never_run_on_the_host` |
+| A patch for a remote-verify repo reaches the WorkItem's branch only after its `factory-verify` run passed | `Foreman._remote_verify` | `test_remote_verify`: `test_a_pass_deletes_the_scratch_branch_then_pushes_the_branch_and_opens_the_pr`, `test_a_failure_is_an_attempt_with_the_log_tail_and_the_next_order_carries_it` |
 | Passes of one repo take its checkout in turns, up to `FACTORY_PASSES_PER_REPO` at once | `worker/runner.py` `checkout_lock`, `Foreman.dispatch` | `test_worker_runner`: `test_a_runner_waits_for_the_checkout_while_another_pass_holds_it`; `test_safety`: `test_passes_of_one_repo_run_at_once_up_to_the_limit` |
 | `verify` is the base commit's, not the worker's | `worker/runner.py` | `test_worker_runner`: `test_verify_comes_from_the_base_commit` |
 | A truncated output yields no Result: the runner's comes last | `Foreman.poll` | `test_hardening`: `test_a_result_line_left_in_a_truncated_output_is_not_read` |

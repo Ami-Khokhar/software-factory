@@ -21,7 +21,9 @@ Workers run in a Linux container with a short list of tools and no secrets. A re
 command needs more (Xcode, a simulator, macOS-only tools, a GPU, a secret) cannot pass there, and
 a retry cannot change that. Read `environment.md` in this skill's folder: it lists what the worker
 and the gate can run, how to tell an environment limit from a code fault, the workarounds to offer
-the owner, and the warning to give at enable time.
+the owner, and the warning to give at enable time. Some repos are remote-verify repos (ADR-0045):
+a GitHub macOS runner runs their verify, so an Xcode failure there is a real code failure and
+`environment.md` says to retry it, and how the owner enables a repo.
 
 ## What needs the owner
 

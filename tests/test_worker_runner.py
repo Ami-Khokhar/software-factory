@@ -25,6 +25,8 @@ def git(*args):
     subprocess.run(["git", *args], check=True, capture_output=True)
 if mode in ("fix", "nocommit", "plant"):
     open("app.txt", "w").write("fixed\n")
+if mode == "nocommit-broken":
+    open("app.txt", "w").write("still broken\n")
 if mode == "cheat":
     open(".github/pr-gatekeeper.json", "w").write('{"verify": "true"}')
     open("app.txt", "w").write("still broken\n")
@@ -108,9 +110,11 @@ class RunnerTest(unittest.TestCase):
             self.addCleanup(p.stop)
         self.addCleanup(self.tmp.cleanup)
 
-    def run_order(self, mode, kind="implement", repo="o/r", head=None):
+    def run_order(self, mode, kind="implement", repo="o/r", head=None, remote_verify=False):
         wi = workitem(id="o/r#7", repo=repo, issueNumber=7, goal="Fix the app", headSha=head)
-        order = documents.workorder(wi, kind, 0, Config(mcp_token="t", repos=frozenset()), self.base)
+        config = Config(mcp_token="t", repos=frozenset(),
+                        remote_verify_repos=frozenset({repo}) if remote_verify else frozenset())
+        order = documents.workorder(wi, kind, 0, config, self.base)
         text = documents.worker_input(order, "factory/7")
         out = io.StringIO()
         cwd = os.getcwd()
@@ -150,6 +154,14 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(result["evidence"][0]["exit"], 0)
         self.assertEqual(documents.check_result(result, order), [])
         self.assertEqual((self.apply_on(self.base, result["patch"]["diff"]) / "app.txt").read_text(), "fixed\n")
+
+    def test_a_remote_verify_order_skips_the_container_verify_and_hands_back_the_patch(self):
+        """check.py exits 1 on the app the harness leaves: the verify must not run here (ADR-0045)."""
+        result, order = self.run_order("nocommit-broken", remote_verify=True)
+        self.assertEqual((result["status"], result["evidence"]), ("completed", []), result.get("error"))
+        self.assertEqual(documents.check_result(result, order), [])
+        result, _ = self.run_order("nocommit-broken")
+        self.assertEqual((result["status"], result["evidence"][0]["exit"]), ("failed", 1))
 
     def test_the_harness_gets_a_private_copy_of_each_credential_its_env_and_its_budget(self):
         key = Path(self.tmp.name) / "codex.json"

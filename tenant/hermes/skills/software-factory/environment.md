@@ -40,13 +40,33 @@ file in the repo `software-factory`.
 
 - First in the worker sandbox above, on every pass. A pass that fails verify there returns no
   patch and no PR opens.
-- Then in the gate, on GitHub Actions: the repo's `pr-gatekeeper.yml` calls a reusable workflow
-  in `Ami-Khokhar/pr-gatekeeper-workflow`, and its `gates` job runs verify on the PR branch with
-  no secrets. The local `pr-gatekeeper` checkout declares `runs-on: ubuntu-latest` for its jobs,
-  so GitHub-hosted Linux is likely, but the pinned wrapper that a repo calls was not read:
-  treat the gate's runner as unknown. A repo can pass the gate only if its verify passes there
-  too.
-- So a verify that needs macOS fails in both places. `ubuntu-latest` is Linux.
+- Then in the gate, on GitHub Actions: the repo's `pr-gatekeeper.yml` calls the reusable workflow
+  in pr-gatekeeper, whose `gates` job runs verify on the PR branch with no secrets. That job has
+  `runs-on: ubuntu-latest` fixed, and a calling repo cannot change it. A repo can pass the gate only
+  if its verify passes on Linux there.
+- So a verify that needs macOS fails in the worker and in the gate, unless the repo is a
+  remote-verify repo (next section) and pr-gatekeeper has gained a runner input.
+
+## Remote-verify repos (ADR-0045)
+
+Some repos are listed in factory-mcp's `FACTORY_REMOTE_VERIFY_REPOS`. For them the worker skips
+verify. factory-mcp pushes the patch to a scratch branch `factory-verify/<issue>-<n>`, a workflow in
+the repo runs the verify on a GitHub macOS runner, and factory-mcp reads the result. Nothing runs
+on the owner's Mac. You can tell by `remoteVerify` on the WorkItem while it waits (state
+`implementing`) and by `remote verify ...` in `attempts`.
+
+- An Xcode failure in such a repo is a real code failure, not an environment limit. The attempt
+  holds the last part of the run's log: diagnose it as a code fault and retry, as the Drive section
+  says. Each failed run uses one pass of the budget.
+- A WorkItem in `human_waiting` whose reason says the repo has no `factory-verify.yml` is a setup
+  gap, not a code fault: tell the owner to do the "Remote verify" setup in `docs/RUNBOOK.md`, then
+  retry. No pass was used.
+- A run that never finishes fails the attempt after `FACTORY_REMOTE_VERIFY_SECONDS` (30 minutes):
+  say the workflow may be missing, queued or broken, and name the repo.
+- To enable a repo, tell the owner: add `.github/workflows/factory-verify.yml` (the runbook has the
+  file) through a PR they merge, add the repo to `FACTORY_REMOTE_VERIFY_REPOS`, and restart
+  factory-mcp. You cannot do any of these. At enable time, a verify that names xcodebuild, a
+  simulator or another macOS tool is fine only if the repo is in that list; otherwise warn as below.
 
 ## Day Desk's own sandbox
 
@@ -71,7 +91,8 @@ as `verify: <command>`, or `gh repo clone` and read `.github/pr-gatekeeper.json`
 
 Decide: is the failure a limit of the environment, or a fault in the code?
 
-An environment limit is any of these:
+An environment limit is any of these (for a remote-verify repo, a failure of the run itself is
+not one):
 
 - `command not found` or `No such file` for a tool (xcodegen, xcodebuild, swift, go, cargo,
   java, make, a compiler).
@@ -112,6 +133,10 @@ Say each as a choice with its cost.
   evidence is the owner's, and the gate's own verify run must still pass.
 - Close the issue (`close`). Cost: the factory does not do this work. Best when the whole
   change is platform-only.
+- Make the repo a remote-verify repo (ADR-0045): a GitHub macOS runner runs the verify, so the
+  platform-only verify can pass. Cost: a one-time setup by the owner, 30 minutes at most per
+  pass, and free only in a public repo. The gate also needs a macOS runner (the runbook says how).
+  This is the first choice for an iOS repo.
 - Make no change to the verify. The owner decided in ADR-0044 that the factory gets no macOS
   worker and its verify is not weakened: do not offer to drop or skip the verify command, and
   never suggest a worker that "fakes" a missing tool.

@@ -17,6 +17,8 @@ class Config:
     port: int = 43125  # on 127.0.0.1 only: factory-mcp speaks plain HTTP
     workers: tuple = (("codex", "hosted"),)  # (relay agentId, "local"|"hosted"), preferred first
     local_only_repos: frozenset = frozenset()
+    remote_verify_repos: frozenset = frozenset()  # repos whose verify runs on a GitHub macOS runner (ADR-0045)
+    remote_verify_seconds: int = 1800  # no finished run for this long: the attempt fails
     git_url: str = "https://github.com/{repo}.git"
     owner: str = ""  # the person who owns escalations; default is the repo owner
     poll_seconds: int = 60
@@ -37,6 +39,9 @@ class Config:
 
     def local_only(self, repo):
         return repo.lower() in {name.lower() for name in self.local_only_repos}
+
+    def remote_verify(self, repo):
+        return repo.lower() in {name.lower() for name in self.remote_verify_repos}
 
     def checkout(self, repo):
         """The worker checkout for `repo`, sent to the relay as the task cwd, or None."""
@@ -72,6 +77,9 @@ class Config:
         passes_per_repo = int(env.get("FACTORY_PASSES_PER_REPO") or defaults.passes_per_repo)
         if passes_per_repo < 1:
             raise ValueError("FACTORY_PASSES_PER_REPO must be 1 or more; below 1, no repo would get a pass")
+        remote_verify_seconds = int(env.get("FACTORY_REMOTE_VERIFY_SECONDS") or defaults.remote_verify_seconds)
+        if remote_verify_seconds < 1:
+            raise ValueError("FACTORY_REMOTE_VERIFY_SECONDS must be 1 or more")
         return cls(
             mcp_token=token,
             repos=repos,
@@ -84,6 +92,9 @@ class Config:
                           if w.strip()) if env.get("FACTORY_WORKERS") else defaults.workers,
             local_only_repos=frozenset(r.strip() for r in env.get("FACTORY_LOCAL_ONLY_REPOS", "")
                                        .split(",") if r.strip()),
+            remote_verify_repos=frozenset(r.strip() for r in env.get("FACTORY_REMOTE_VERIFY_REPOS", "")
+                                          .split(",") if r.strip()),
+            remote_verify_seconds=remote_verify_seconds,
             git_url=env.get("FACTORY_GIT_URL") or defaults.git_url,
             owner=env.get("FACTORY_OWNER", ""),
             poll_seconds=int(env.get("FACTORY_POLL_SECONDS") or defaults.poll_seconds),

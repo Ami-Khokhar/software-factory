@@ -289,7 +289,7 @@ def main(argv=None):
         with checkout_lock(cwd) as waited:
             base = prepare(cwd, order, branch, work)
             verify = verify_command(cwd, base)
-        if not verify:
+        if not verify and not order.get("remoteVerify"):
             raise WorkerError("the base commit has no .github/pr-gatekeeper.json verify command")
         credentials = credential_copies(args.credential, scratch)
         harness_env = env_pairs(args.env)
@@ -304,12 +304,13 @@ def main(argv=None):
             detail = " ".join((err or out).split())[-300:]
             raise WorkerError(f"the harness exited {code}" + (f": {detail}" if detail else ""))
         diff = collect(sandbox, work, base, order["goal"])
-        code, out, err = sandbox.run(["sh", "-c", verify], seconds * 0.25, work)
-        output = out + err
-        tail = output[-2000:].replace("```", "")
-        result["evidence"] = [{"kind": "test", "command": verify, "exit": code, "tail": tail}]
-        if code != 0:
-            raise WorkerError(f"verify exited {code}: {' '.join(output[-400:].split())}")
+        if not order.get("remoteVerify"):  # else a GitHub runner runs the verify (ADR-0045)
+            code, out, err = sandbox.run(["sh", "-c", verify], seconds * 0.25, work)
+            output = out + err
+            tail = output[-2000:].replace("```", "")
+            result["evidence"] = [{"kind": "test", "command": verify, "exit": code, "tail": tail}]
+            if code != 0:
+                raise WorkerError(f"verify exited {code}: {' '.join(output[-400:].split())}")
         result.update(status="completed", patch={"format": "unified", "diff": diff, "baseSha": base})
     except WorkerError as exc:
         result["error"] = str(exc)

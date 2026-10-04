@@ -33,6 +33,10 @@
     },
     "kind": { "enum": ["implement", "fix"] },
     "repo": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+    "remoteVerify": {
+      "type": "boolean",
+      "description": "True: the worker skips the repo's verify, which its container cannot run, and factory-mcp has a GitHub macOS runner run it on a scratch branch before it pushes the WorkItem's branch (ADR-0045). Absent means false."
+    },
     "baseSha": { "type": ["string", "null"] },
     "headSha": {
       "type": ["string", "null"],

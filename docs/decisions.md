@@ -934,3 +934,39 @@ available. The file has no test that its facts match `worker/Dockerfile`; whoeve
 Dockerfile, the budget or the gate updates it in the same pull request. An iOS repo gets work
 only after the owner picks a workaround, such as a Swift package that tests on Linux, which also
 needs a Swift toolchain in the worker image.
+
+---
+
+## ADR-0045 — A repo whose verify needs macOS is verified on a GitHub macOS runner
+
+**Context.** ADR-0044 told Day Desk what a worker cannot run, and left a repo such as
+Ami-Khokhar/ideadump (verify: `xcodegen generate && xcodebuild test ...`) with no way to pass. The
+owner decided on 4 October 2026 that the factory should run that verify, not the model and not the
+owner. Two ways were rejected. Running the verify on the owner's Mac as a separate macOS user: that
+user can list the owner's home, which is group-readable, and reach the services that listen on
+127.0.0.1, so model-written code would run next to the owner's data. A local VM with Xcode (tart):
+an Xcode image is 50 to 100 GB, and the Mac has 66 GB free.
+
+**Decision.** `FACTORY_REMOTE_VERIFY_REPOS` lists the repos. For them the WorkOrder has
+`remoteVerify: true`, the worker runner skips its in-container verify, and the Foreman does not
+require test evidence in the Result. After a valid Result, factory-mcp pushes the patch to the
+scratch branch `factory-verify/<issue>-<n>` with the same checks as any push (`patches.apply`:
+protected paths, size limits). The repo's own `.github/workflows/factory-verify.yml`, on push to
+that prefix, runs the base commit's `verify` on a macOS runner with read-only permissions and no
+secrets. A patch cannot change `.github/`, so the branch's workflow is the merged one. Each tick
+looks for the finished run and stores the wait as `WorkItem.remoteVerify`, so the tick never
+blocks. Pass: delete the scratch branch, then push `factory/<issue>` and open the PR as before,
+with the run as evidence. Failure: delete the branch and record a failed attempt whose finding is
+the log tail, so the next WorkOrder gets it; it counts in the pass budget. No finished run after
+`FACTORY_REMOTE_VERIFY_SECONDS` (default 1800): a failed attempt too. A repo without the workflow
+file goes to `human_waiting` before any push, with no attempt used. The workflow is not written by
+bootstrap: `.github/` is the owner's, so the runbook gives the file and the owner merges it.
+
+**Consequence.** The gate must pass on macOS too, and pr-gatekeeper fixes its `gates` job to
+`runs-on: ubuntu-latest` (gatekeeper.yml:45) with no input to change it: an iOS repo's gate
+cannot pass until pr-gatekeeper gets one. This ADR does not change pr-gatekeeper. A public repo's
+macOS minutes are free, a private repo's cost 10 times the Linux rate. The verify runs twice for
+a passing patch (scratch branch, then the PR's gate run). The scratch branch lives in the target
+repo for a few minutes, and a crash may leave one: it is harmless and the next push replaces it.
+The log tail is model-influenced text: it travels as data, like every finding (ADR-0007). Not
+tested against a real macOS run: the workflow in the runbook was not run.
