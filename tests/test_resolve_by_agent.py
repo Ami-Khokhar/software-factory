@@ -51,6 +51,13 @@ class ResolveByAgentTest(unittest.TestCase):
                  "ownerAsked": True}
         self.assertEqual(self.agent["factory_resolve_human"].fn(asked)["workItem"]["state"], "ready")
 
+    def test_an_owner_asked_retry_does_not_use_up_day_desks_one_answer(self):
+        self.agent["factory_resolve_human"].fn({"id": "o/r#1", "resolution": "retry", "by": "day-desk",
+                                                "note": "owner: try again", "ownerAsked": True})
+        self.block_again()
+        self.assertTrue(self.may_resolve())
+        self.assertEqual(self.resolve(self.agent)["workItem"]["state"], "ready")
+
 
 if __name__ == "__main__":
     unittest.main()
