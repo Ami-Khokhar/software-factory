@@ -32,8 +32,9 @@ file in the repo `software-factory`.
 - The runner runs the repo's `verify` command itself, in the sandbox, after the harness, from
   the base commit's `.github/pr-gatekeeper.json`. A non-zero exit fails the pass with
   `verify exited N: <last 400 characters of output>`. The worker's own claim does not count.
-- Day Desk's retry does not buy more passes. Only the owner's retry does (ADR-0035). A
-  WorkItem that used its budget is the owner's to decide.
+- Day Desk's own retry never buys more passes. The owner's does, including a retry the owner
+  asked for in chat, which Day Desk makes with `ownerAsked` (ADR-0035, ADR-0043). A WorkItem
+  that used its budget is the owner's to decide.
 
 ## Where verify runs
 
@@ -61,7 +62,10 @@ file in the repo `software-factory`.
 
 ## Diagnose before you answer or retry
 
-Read the failure first: the escalation's `reason` and `tried`, which hold the verify output tail.
+Read the failure first. For a WorkItem in `human_waiting` or `blocked`, read the escalation's
+`reason` and `tried`, which hold the verify output tail. For any other state, including
+`exhausted` (whose `blockedOn` says only how many passes it used), read `workItem.attempts` and
+the `reason` of the `attempt_failed` rows in `history`: the runner's `verify exited N: ...` tail.
 Then read the repo's verify command: factory_repo_check shows it in the `gate_config` detail
 as `verify: <command>`, or `gh repo clone` and read `.github/pr-gatekeeper.json`.
 
@@ -80,7 +84,9 @@ An environment limit is any of these:
 Verify is the same command in every pass, so it fails the same way. A retry cannot fix it. When the failure is
 an environment limit:
 
-1. Do not call factory_resolve_human with `retry`. A retry spends a pass and cannot work.
+1. Do not retry on your own: a retry spends a pass and cannot work. If the owner, after your
+   explanation, still asks for a retry in this chat, follow the skill's `ownerAsked` path: say
+   what it costs first and quote the owner's words as the note.
 2. Tell the owner in plain words: what the verify command needs, what the worker has, why no
    pass can succeed, and which line of `tried` shows it. Name the WorkItem id.
 3. Offer the workarounds below that fit, and let the owner pick. Do not start one yourself.
