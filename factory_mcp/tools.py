@@ -138,16 +138,20 @@ def build(store, foreman, agent=False):
         Tool("factory_resolve_human",
              "Record a person's decision on a WorkItem in human_waiting, blocked or exhausted: retry (the "
              "factory tries again, with the note as a finding; the owner's retry buys a fresh budget of "
-             "passes, Day Desk's does not, and only the owner may retry an exhausted one), regate (back to the gate: a fix the "
+             "passes, Day Desk's does not, unless ownerAsked says the owner asked for this retry in chat: then Day Desk may retry an exhausted or spent one and it buys a fresh budget), regate (back to the gate: a fix the "
              "person pushed, or the same head when the gate failed itself) or close.",
              {"type": "object", "required": ["id", "resolution", "note", "by"],
               "additionalProperties": False,
               "properties": {"id": {"type": "string"},
                              "resolution": {"enum": ["retry", "regate", "close"]},
                              "note": {"type": "string", "minLength": 1},
-                             "by": {"type": "string", "minLength": 1, "description": "who decided"}}},
+                             "by": {"type": "string", "minLength": 1, "description": "who decided"},
+                             "ownerAsked": {"type": "boolean", "description":
+                                            "Day Desk only, retry only: the owner asked for this retry in this "
+                                            "chat, and the note quotes the owner's words"}}},
              "write", lambda args: {"workItem": foreman.resolve_human(
-                 args["id"], args["resolution"], args["note"], args["by"], agent=agent)}),
+                 args["id"], args["resolution"], args["note"], args["by"], agent=agent,
+                 owner_asked=args.get("ownerAsked", False))}),
         Tool("factory_propose_issue",
              "Planner only: open an issue labelled factory:proposed. The body needs an "
              "'## Acceptance' list of '- <claim> — done when: <check>' bullets. A person adds "

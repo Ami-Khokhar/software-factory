@@ -65,6 +65,34 @@ class ResolveHumanTest(unittest.TestCase):
         wi = self.tick()
         self.assertEqual((wi["state"], wi.get("terminalReason")), ("implementing", None))
 
+    def test_an_owner_asked_retry_by_day_desk_buys_a_fresh_budget_and_is_marked(self):
+        self.foreman.config = dataclasses.replace(self.foreman.config, max_passes=2)
+        self.block()  # both passes of the budget failed
+        wi = self.foreman.resolve_human(ID, "retry", "owner: try it again", "day-desk", agent=True, owner_asked=True)
+        self.assertEqual(wi["passesBefore"], 2)
+        self.assertEqual(self.tick()["state"], "implementing")
+        detail = [h for h in self.foreman.store.history(ID) if h["action"] == "human_resolved"][-1]["detail"]
+        self.assertTrue(detail["agent"] and detail["ownerAsked"])
+
+    def test_an_owner_asked_retry_answers_an_exhausted_workitem_and_keeps_day_desks_one_answer(self):
+        self.foreman.config = dataclasses.replace(self.foreman.config, max_passes=3)
+        self.block()
+        self.foreman.resolve_human(ID, "retry", "try again", "day-desk", agent=True)  # Day Desk's own one
+        wi = self.tick()
+        self.relay.finish(wi["providerTaskId"], status="failed", error="crashed")
+        self.tick()
+        self.assertEqual(self.tick()["state"], "exhausted")
+        self.foreman.resolve_human(ID, "retry", "owner: once more", "day-desk", agent=True, owner_asked=True)
+        self.assertEqual(self.tick()["state"], "implementing")
+
+    def test_owner_asked_is_for_day_desks_retry_only(self):
+        self.block()
+        for kwargs in ({"agent": True}, {"agent": False}):
+            with self.assertRaisesRegex(ToolError, "ownerAsked is for Day Desk's retry"):
+                self.foreman.resolve_human(ID, "close", "n", "x", owner_asked=True, **kwargs)
+        with self.assertRaisesRegex(ToolError, "ownerAsked is for Day Desk's retry"):
+            self.foreman.resolve_human(ID, "retry", "n", "amteshwar", owner_asked=True)
+
     def test_blocked_escalation_then_retry(self):
         wi = self.block()
         self.assertEqual(wi["owner"], "amteshwar")

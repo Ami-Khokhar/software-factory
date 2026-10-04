@@ -43,6 +43,14 @@ class ResolveByAgentTest(unittest.TestCase):
         self.assertTrue(self.may_resolve())
         self.assertEqual(self.resolve(self.agent)["workItem"]["state"], "ready")
 
+    def test_the_tool_passes_owner_asked_only_through_the_agent_token(self):
+        self.store.put(dict(self.store.get("o/r#1"), state="exhausted"))
+        with self.assertRaisesRegex(ToolError, "used its budget of passes"):
+            self.resolve(self.agent)  # the plain agent retry stays refused
+        asked = {"id": "o/r#1", "resolution": "retry", "note": "owner: try again", "by": "day-desk",
+                 "ownerAsked": True}
+        self.assertEqual(self.agent["factory_resolve_human"].fn(asked)["workItem"]["state"], "ready")
+
 
 if __name__ == "__main__":
     unittest.main()

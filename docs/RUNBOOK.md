@@ -82,7 +82,7 @@ last steps, and what it needs from you.
 | pr-gatekeeper | Review and merge, or ask for changes, or send the PR to a person (HUMAN) | Be bypassed by the factory: a HUMAN verdict waits for you |
 
 Limits: a WorkItem gets at most 4 worker passes (then `exhausted`); your `retry` gives it 4 more,
-also from `exhausted` (ADR-0035). Two failed attempts in a row
+also from `exhausted` (ADR-0035). You may also ask Day Desk in Telegram to retry it (ADR-0043). Two failed attempts in a row
 block it. Each pass has 20 minutes. Two passes of one repo run at once (`FACTORY_PASSES_PER_REPO`). A PR with no gate verdict
 for 2 hours goes to you.
 
@@ -353,7 +353,8 @@ hermes -p day-desk cron create "every 10m" --no-agent --script factory-update.sh
 `factory-drive` runs the model only when the escalations Day Desk may answer change, and tells you
 what it chose for each. `factory-watch` tells you of an escalation Day Desk may not answer, or one
 it left for 30 minutes, and of an exhausted WorkItem either way; without `FACTORY_AGENT_TOKEN` it
-tells you of every one at once.
+tells you of every one at once. To retry an exhausted WorkItem, reply to the alert in Telegram:
+Day Desk retries it with a fresh budget, as `factory retry` does (ADR-0043).
 
 `factory-watch` sends one message for each WorkItem that newly waits on you, and an error message
 when factory-mcp does not answer. `factory-report` sends the week in one message every Monday at
