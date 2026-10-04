@@ -100,6 +100,13 @@ A factory-watch alert names a WorkItem that waits on the owner. When the owner r
 3. Call factory_resolve_human with the id, the choice, the owner's own words as the note, and the
    owner's name as `by`.
 
+When the WorkItem is `exhausted`, or a `retry` would go past its budget of passes, the tool
+refuses unless the owner, in this chat, asked to retry that WorkItem. Then set `ownerAsked` true
+on a `retry`, and quote the owner's words as the note. The retry buys a fresh budget of passes.
+Never set `ownerAsked` for a retry you chose yourself, and never in the factory-drive job. Before
+you retry, say it first when the cause is an environment limit, for example a verify the Linux
+worker cannot run: a retry will fail the same way.
+
 When the reason says each attempt ran out of time, the issue is too big for one pass, and a retry
 is likely to run out too. Offer a split instead: plan smaller issues for the same goal, as in
 "Plan work". On the owner's yes, start the plan, then close the WorkItem with the owner's words.
@@ -121,7 +128,8 @@ factory_status's workItems with `agentMayResolve` true:
      attempts that each ran out of time (the issue needs a split), a gate HUMAN with findings, a gate CHANGES with no finding a worker could fix, or anything you
      cannot tell. Leave it; the owner hears of it.
 3. Call factory_resolve_human with the id, the choice, your note, and `day-desk` as `by`. You may
-   answer each WorkItem once; when the tool says the owner decides now, leave it.
+   answer each WorkItem once; when the tool says the owner decides now, leave it. Never set
+   `ownerAsked` here: the owner spends a new budget, this job never does.
 4. Do not close a WorkItem; closing gives up the owner's work. Reply with one line per WorkItem you
    answered: its id, your choice and your note. If you answered none, reply exactly [SILENT].
 

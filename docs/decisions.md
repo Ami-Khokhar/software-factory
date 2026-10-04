@@ -824,3 +824,25 @@ holds after the push.
 **Consequence.** A failed attempt over the limits leaves the PR as it was, so the next attempt
 and the gate see the last good head. The count runs on the factory's own clone, so it does not
 trust the worker; GitHub's count after the push stays the authority.
+
+---
+
+## ADR-0043 — Day Desk may retry a spent WorkItem when the owner asks in chat
+
+**Context.** ADR-0035 said Day Desk may not retry a WorkItem that used its budget of passes, so
+`exhausted` waited for `factory retry` on the Mac. The owner hit this on Ami-Khokhar/ideadump#2:
+the owner was in Telegram, asked for the retry, and Day Desk had to refuse.
+
+**Decision.** `factory_resolve_human` takes an optional boolean `ownerAsked`. With the agent token
+and resolution `retry`, it lets Day Desk retry an `exhausted` WorkItem or a `retry` past the budget.
+The retry buys a fresh budget as a person's does, and it does not use up Day Desk's one answer
+(ADR-0030). The history row holds `agent` and `ownerAsked`. Without it, the refusal of ADR-0035
+stays, and any other resolution with `ownerAsked` is an error. The skill sets it only when the
+owner, in the current chat, asked to retry that WorkItem, with the owner's words as the note. The
+factory-drive job never sets it, so no unattended run spends a new budget. A flag is a claim that
+code cannot check, so the guard is the skill and the audit row. It is the same trust as the note.
+
+**Consequence.** The owner can restart an exhausted WorkItem from Telegram. A model that sets the
+flag wrongly can spend one budget of passes, and the history shows it. When a failure comes from
+an environment limit, such as a verify the Linux worker cannot run, a retry fails the same way, so
+Day Desk says that first. This supersedes ADR-0035's "Day Desk may not" for retries the owner asked for.

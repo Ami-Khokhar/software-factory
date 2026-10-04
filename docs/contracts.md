@@ -83,7 +83,9 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
 - **`WorkItem.passesBefore` is how many worker passes were used before the last
   person's retry (ADR-0035).** The budget of `FACTORY_MAX_PASSES` counts only the
   passes after it. WorkItems stored before this field have none; readers treat
-  that as 0.
+  that as 0. The tool `factory_resolve_human` takes an optional `ownerAsked`
+  boolean (Day Desk's retry only): it buys a fresh budget like a person's retry,
+  and the history row of the answer holds `agent` and `ownerAsked` (ADR-0043).
 - **`WorkItem.description` is the issue's text outside its Acceptance section
   (ADR-0038).** Intake freezes it with `goal` and `acceptance`, and each
   WorkOrder carries it to the worker as data. WorkItems stored before this field

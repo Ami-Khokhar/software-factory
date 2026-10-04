@@ -25,7 +25,8 @@ OUT_OF_TIME = re.compile(r"the harness timed out|task timed_out")
 
 def agent_resolved(history):
     """Whether Day Desk, driving, already resolved this WorkItem once (ADR-0030)."""
-    return any(h["action"] == "human_resolved" and h["detail"].get("agent") for h in history)
+    return any(h["action"] == "human_resolved" and h["detail"].get("agent") and not h["detail"].get("ownerAsked")
+               for h in history)
 
 
 class RepoNotReady(ToolError):
@@ -650,11 +651,15 @@ class Foreman:
                        blockedOn=f"{len(attempts)} worker attempts at the {order['kind']} WorkOrder failed. {fix}")
         return self._write(wi, new, "attempt_failed", reason=reason, worker=wi.get("worker"))
 
-    def resolve_human(self, workitem_id, resolution, note, by, agent=False):
+    def resolve_human(self, workitem_id, resolution, note, by, agent=False, owner_asked=False):
         """A person's answer to human_waiting, blocked or exhausted (ADR-0006): retry, regate or close.
         Day Desk, driving (`agent`), answers each WorkItem once; after that the owner decides (ADR-0030).
         A person's retry starts a fresh budget of passes and Day Desk's keeps the budget it has (ADR-0035),
-        so Day Desk may not retry a WorkItem that used its budget, and only the owner answers `exhausted`."""
+        so Day Desk may not retry a WorkItem that used its budget on its own. When the owner asked for the
+        retry in chat (`owner_asked`, ADR-0043), it is the owner's decision: it buys a fresh budget and
+        does not use up Day Desk's one answer."""
+        if owner_asked and not (agent and resolution == "retry"):
+            raise ToolError("ownerAsked is for Day Desk's retry that the owner asked for; use it with resolution retry")
         if not self.store.acquire(workitem_id, self.holder):
             raise ToolError(f"{workitem_id} is being ticked; try again")
         try:
@@ -663,16 +668,16 @@ class Foreman:
                 raise ToolError(f"{workitem_id} is not waiting on a person")
             passes = len(self.store.workorders(workitem_id))
             spent = passes - (wi.get("passesBefore") or 0) >= self.config.max_passes
-            if agent and (wi["state"] == "exhausted" or resolution == "retry" and spent):
+            if agent and not owner_asked and (wi["state"] == "exhausted" or resolution == "retry" and spent):
                 raise ToolError(f"{workitem_id} used its budget of passes, so the owner decides whether to spend "
                                 f"more: factory retry|close {workitem_id} <note>")
-            if agent and agent_resolved(self.store.history(workitem_id)):
+            if agent and not owner_asked and agent_resolved(self.store.history(workitem_id)):
                 raise ToolError(f"Day Desk already resolved {workitem_id} once, so the owner decides now: "
                                 f"factory retry|regate|close {workitem_id} <note>")
             rerun = {}
             if resolution == "retry":
                 new = dict(wi, state="changes_requested" if wi.get("prNumber") else "ready", terminalReason=None,
-                           passesBefore=wi.get("passesBefore") if agent else passes)
+                           passesBefore=wi.get("passesBefore") if agent and not owner_asked else passes)
             elif resolution == "regate" and wi.get("prNumber"):
                 regated_at = now()  # before the edit, so the run the edit starts begins after it
                 rerun = {"gateRerun": self._rerun_gate(wi)}
@@ -682,7 +687,8 @@ class Foreman:
             else:
                 raise ToolError("resolution must be retry, regate (needs a PR) or close")
             return self._write(wi, dict(new, blockedOn=None, attempts=[]), "human_resolved",
-                               resolution=resolution, note=note, by=by, **rerun, **({"agent": True} if agent else {}))
+                               resolution=resolution, note=note, by=by, **rerun, **({"agent": True} if agent else {}),
+                               **({"ownerAsked": True} if owner_asked else {}))
         finally:
             self.store.release(workitem_id, self.holder)
 

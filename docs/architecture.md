@@ -117,7 +117,7 @@ A tick comes from the background loop or from `factory_tick`.
      merges. Then `closed`.
 3. **Entering `human_waiting`, `blocked` or `exhausted`** comments on the issue and mentions the
    owner. `factory watch` also tells the owner in Telegram of `human_waiting`, `blocked` and
-   `exhausted`: Day Desk can resolve the first two and the owner can answer all three (ADR-0035).
+   `exhausted`: Day Desk can resolve the first two on its own and the owner can answer all three; Day Desk answers `exhausted` only when the owner asked for the retry in chat (ADR-0035, ADR-0043).
 
 ## State machine
 
@@ -146,7 +146,7 @@ The states are the enum in `schemas/workitem.schema.json`.
 | any live state | the issue closed without a merged PR | `cancelled` |
 | `ready`, `changes_requested` | `FACTORY_MAX_PASSES` WorkOrders were dispatched since the last person's retry | `exhausted` |
 | `human_waiting`, `blocked` | `factory_resolve_human`: retry, regate or close | `ready` or `changes_requested`, `reviewing`, or `cancelled`; a regate with no gate run going and no new verdict edits the PR body's `<!-- factory regate n -->` line, which starts a gate run (ADR-0034) |
-| `exhausted` | the owner's `factory_resolve_human`: retry or close; Day Desk is refused | `ready` or `changes_requested` with a fresh budget of passes, or `cancelled` (ADR-0035) |
+| `exhausted` | the owner's `factory_resolve_human`: retry or close; Day Desk is refused, unless `ownerAsked` marks a retry the owner asked for in chat (ADR-0043) | `ready` or `changes_requested` with a fresh budget of passes, or `cancelled` (ADR-0035) |
 
 `closed` and `cancelled` are terminal, and so is `exhausted` until the owner retries it.
 `human_waiting` is not: it waits for the owner's decision (ADR-0006).
@@ -211,7 +211,7 @@ The states are the enum in `schemas/workitem.schema.json`.
 - **Attempt**: a pass that failed. Two in a row block the WorkItem.
 - **Blocked**: stopped after two failed attempts, until the owner decides.
 - **Exhausted**: stopped because the budget of passes ran out; only the owner's retry, which buys
-  a fresh budget, starts it again.
+  a fresh budget, starts it again. The owner may ask Day Desk to make it in Telegram (ADR-0043).
 - **Autonomy rate**: of the WorkItems that ended, the share that merged with no human state, no
   commit other than a worker's or the gate's merge of the base branch (ADR-0039), and a MERGE
   verdict on the merged head (`metrics.autonomy`). It is the project's measure of success.
