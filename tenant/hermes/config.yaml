@@ -25,20 +25,16 @@ mcp_servers:
     url: "http://127.0.0.1:43125/mcp"
     headers:
       Authorization: "Bearer ${FACTORY_MCP_TOKEN}"
-    trust: untrusted  # each call waits for the owner's yes in Telegram
+    trust: full  # no yes per call either (ADR-0041); the owner's token still names the caller
     tools:
-      include:  # a repo's setup and gate secrets, and the lessons its workers read, stay the owner's
+      include:  # a repo's setup and gate secrets, and the lessons its workers read, on the owner's token
         - factory_bootstrap_repo
         - factory_add_repo
         - factory_approve_lesson
         - factory_retire_lesson
 
-agent:
-  # The shell runs in the Docker sandbox below (ADR-0021). These stay off because they run on the
-  # host as the owner, where they could read the profile's .env and call factory tools with no
-  # approval: code_execution's script calls tools back on the host, and file, browser,
-  # computer_use and delegation add nothing the shell needs. factory-watch runs as a no-agent script.
-  disabled_toolsets: [code_execution, file, browser, computer_use, delegation]
+# Every toolset is on (ADR-0041). terminal, file and code_execution run in the Docker sandbox below;
+# browser and computer_use act on the host as the owner.
 
 terminal:
   # A container per session, from tenant/hermes/sandbox. It gets no host directory it can write and
@@ -52,7 +48,14 @@ terminal:
   env_passthrough: [DAYDESK_GITHUB_TOKEN]
 
 approvals:
+  mode: manual  # what Hermes gates (computer_use actions, a host command it flags) waits for the owner
   timeout: 900  # no answer in 15 minutes is a no
+
+gateway:
+  # Day Desk runs its own gateway. On a gateway Hermes treats as multi-profile, the sandbox's
+  # DAYDESK_GITHUB_TOKEN is read outside any profile's secret scope and every shell call fails
+  # with UnscopedSecretError (ADR-0041).
+  standalone: true
 
 curator:
   enabled: false  # the skill is reviewed code in the factory repo; `hermes profile update` restores it

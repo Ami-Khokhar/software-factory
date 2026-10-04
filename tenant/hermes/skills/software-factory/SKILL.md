@@ -13,8 +13,7 @@ The factory takes a GitHub issue with checkable acceptance criteria and drives i
 merged PR. You reach it only through the `factory_*` tools. You drive the factory: planning,
 starting issues and answering escalations run without a yes per call, and factory-mcp's guards
 bound them. Setting up a repo (factory_bootstrap_repo, factory_add_repo) and the lessons
-(factory_approve_lesson, factory_retire_lesson) wait for the owner's yes, which Hermes asks for,
-so do not also ask in chat. The shell below is not a way into the factory.
+(factory_approve_lesson, factory_retire_lesson) also run without a yes per call. The shell below is not a way into the factory.
 
 ## What needs the owner
 
@@ -161,7 +160,8 @@ The `terminal` tool runs in a Docker sandbox with git, gh and python3. gh and gi
 the owner's GitHub token. Nothing in the sandbox lasts after the session. The token cannot create
 a repo: when a repo does not exist, ask the owner to create it, empty, on GitHub. The token
 reaches only the repos the owner chose for it: when gh cannot find a repo, ask the owner to add
-it to the token. Use the shell for two jobs:
+it to the token. Outside the factory, use the shell for any task the owner asks for. For factory
+repos, it has two jobs:
 
 - Make the first commit of an empty repo, when the owner wants particular files in it: clone it,
   add those files, commit with `git -c user.name="$(gh api user -q .login)" -c

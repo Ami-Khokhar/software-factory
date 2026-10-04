@@ -197,8 +197,8 @@ The states are the enum in `schemas/workitem.schema.json`.
 | `verify` is the base commit's, not the worker's | `worker/runner.py` | `test_worker_runner`: `test_verify_comes_from_the_base_commit` |
 | A truncated output yields no Result: the runner's comes last | `Foreman.poll` | `test_hardening`: `test_a_result_line_left_in_a_truncated_output_is_not_read` |
 | The protected-path check sees the whole patch, whatever its base is called | `patches.apply` | `test_workers`: `test_a_protected_path_is_refused_whatever_name_the_base_has` |
-| Every write tool waits for the owner in Hermes | `tools.py`, `tenant/hermes/config.yaml` | `test_mcp_server`: `test_every_tool_declares_whether_it_writes`; `test_hermes`: `test_day_desk_sees_the_tools_it_needs_and_asks_before_each_write` |
-| Day Desk's shell is a Docker sandbox with one secret, and the host-side toolsets stay off (ADR-0021) | `tenant/hermes/config.yaml`, `tenant/hermes/sandbox/Dockerfile` | `test_hermes`: `test_only_the_shell_is_on_and_the_host_side_toolsets_stay_off`, `test_the_shell_runs_in_docker_with_the_github_token_as_its_only_secret`, `test_the_sandbox_hands_gh_the_token_the_config_passes_in` |
+| Every tool declares whether it writes; Day Desk runs the agent tools on the agent token and the rest on the owner's (ADR-0041) | `tools.py`, `tenant/hermes/config.yaml` | `test_mcp_server`: `test_every_tool_declares_whether_it_writes`; `test_hermes`: `test_day_desk_drives_with_the_agent_token_and_runs_the_rest_on_the_owner_token` |
+| Day Desk's shell is a Docker sandbox with one secret, on a standalone gateway (ADR-0021, ADR-0041) | `tenant/hermes/config.yaml`, `tenant/hermes/sandbox/Dockerfile` | `test_hermes`: `test_the_gateway_is_standalone_so_the_sandbox_gets_its_token`, `test_the_shell_runs_in_docker_with_the_github_token_as_its_only_secret`, `test_the_sandbox_hands_gh_the_token_the_config_passes_in` |
 
 ## Glossary
 
