@@ -455,6 +455,8 @@ owner fixes it without guessing.
 
 ## ADR-0024 — One approval starts a plan, and `Depends on #n` orders it
 
+**Amended by ADR-0042**: factory_set_dependencies changes the order of a WorkItem no worker has touched.
+
 **Context.** Day Desk turned a goal into issues with one `factory_propose_issue` call per issue,
 then one `factory_approve_issue` call per issue, and Hermes asked the owner before each call: a
 goal of 6 issues cost 12 approvals. The owner reviewed the plan once, in chat; the other approvals
@@ -851,6 +853,41 @@ the lessons every worker reads, or act on the host through browser or computer_u
 sandbox, the gate, branch protection and factory-mcp's guards stay the boundaries.
 `gateway.standalone` is a compatibility setting Hermes says it will remove; when it goes, check
 the shell again before an update.
+
+---
+
+## ADR-0042 — A tool changes the dependencies of a WorkItem no worker has touched
+
+Amends ADR-0024 and ADR-0030.
+
+**Context.** `factory_start_plan` chains its issues: each one gets `Depends on #<previous>` and waits
+for it to merge. Most plans have independent issues, and no tool could change the chain afterwards,
+so Day Desk could not run them side by side. Editing the issue body by hand was the owner's only
+way, and a hand edit has no guard against a cycle or a dead dependency.
+
+**Decision.** `factory_set_dependencies` takes a WorkItem id, the issue numbers it waits for (`[]`
+for none) and who asked. Because the order lives in the issue body (ADR-0024), it replaces the
+body's `Depends on #n` lines (each whole, with any text after the number) and leaves the rest of the body as it was; the next tick reads them
+like any edit. Code refuses the change when the WorkItem is not `issued`, `planned` or `ready`, or
+has a WorkOrder on record (a retry back to `ready` has one), so a change never moves a WorkItem
+a worker has started. Each number must be an issue of the same repo (the tool takes numbers, so
+another repo cannot be named), not the WorkItem's own issue, not a pull request, and not an issue
+that ended: missing, closed without a merged PR, `cancelled` or `exhausted`. A change that
+would make a path of `Depends on` lines lead back to the WorkItem is refused as a cycle. The
+audit log records `dependencies_changed` with who asked, the numbers before and after, and
+`agent: true` when Day Desk called; a stale `waitingOn` is cleared at once.
+
+The tool joins `tools.AGENT_TOOLS`, and Day Desk's `factory_drive` include list. A wrong change
+can only start an issue earlier or later: the sandbox, the protected paths, the size limits, the
+trusted authors, the budget of passes and the gate bound every WorkItem however it is ordered
+(ADR-0030), and a conflict between two parallel PRs is made again on the new base (ADR-0032).
+The guards above stop the changes that would strand a WorkItem. Asking the owner for each
+change would put back the clicks ADR-0024 removed for a plan.
+
+**Consequence.** Day Desk can start a plan with `factory_start_plan` and then free the independent
+issues, at the cost of more parallel passes that may conflict. A change after a worker started is
+refused, so the only way to reorder it is the owner's `retry` and an edit on GitHub. No contract
+changes: `waitingOn` keeps its meaning and the dependencies stay in the issue body.
 
 ---
 

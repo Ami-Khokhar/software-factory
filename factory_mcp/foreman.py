@@ -457,7 +457,8 @@ class Foreman:
 
     def _wait_for(self, wi, numbers):
         """Hold a ready WorkItem until each issue its `Depends on #n` lines name has merged (ADR-0024).
-        One that ended without a merge goes to a person: only the owner changes the plan's order."""
+        One that ended without a merge goes to a person, who may change the order with
+        factory_set_dependencies (ADR-0042)."""
         for number in numbers:
             status, how = self._dependency(wi["repo"], number)
             if status == "open":
@@ -750,6 +751,73 @@ class Foreman:
                                 f"cause above, or close #{number}")
                 raise ToolError(message) from None
         return {"repo": repo, "issues": opened}
+
+    def set_dependencies(self, workitem_id, depends_on, by, agent=False):
+        """Replace the `Depends on #n` lines of a WorkItem no worker has touched (ADR-0042), so
+        independent issues of a plan can run side by side. The order lives in the issue body
+        (ADR-0024), so this edits the issue; the next tick reads it, as it reads any edit."""
+        if not isinstance(by, str) or not by.strip():
+            raise ToolError("changing dependencies needs the name of the person who asked")
+        if (not isinstance(depends_on, list) or len(depends_on) > MAX_PLAN_ISSUES
+                or any(isinstance(n, bool) or not isinstance(n, int) or n < 1 for n in depends_on)):
+            raise ToolError(f"dependsOn is a list of at most {MAX_PLAN_ISSUES} issue numbers in the WorkItem's "
+                            "own repo, like [12, 14]; [] lets it start at once")
+        if len(set(depends_on)) != len(depends_on):
+            raise ToolError("dependsOn names an issue twice")
+        if not self.store.acquire(workitem_id, self.holder):
+            raise ToolError(f"{workitem_id} is being ticked; try again")
+        try:
+            wi = self.store.get(workitem_id)
+            if wi is None:
+                raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
+            if wi["state"] not in ("issued", "planned", "ready"):
+                raise ToolError(f"{workitem_id} is {wi['state']}; dependencies change only on an issued, planned "
+                                "or ready WorkItem. Answer it with factory_resolve_human instead")
+            if self.store.workorders(workitem_id):
+                raise ToolError(f"{workitem_id} already had a worker pass, so its dependencies stay. Close it and "
+                                "open a new issue to run it in another order")
+            repo = wi["repo"]
+            for number in depends_on:
+                self._check_dependency(wi, number)
+            issue = self._issue(repo, wi["issueNumber"])
+            before = workitem.depends_on(issue.get("body"))
+            body = workitem.with_dependencies(issue.get("body"), depends_on)
+            if body != (issue.get("body") or ""):
+                self.github.edit_issue(repo, wi["issueNumber"], body)
+            self.store.log("dependencies_changed", {"by": by, "was": before, "now": depends_on,
+                                                    **({"agent": True} if agent else {})}, workitem_id)
+            if wi.get("waitingOn") is not None:  # the next tick sets it again if the wait goes on
+                wi = self.store.put(dict(wi, waitingOn=None))
+            return wi
+        finally:
+            self.store.release(workitem_id, self.holder)
+
+    def _check_dependency(self, wi, number):
+        """Refuse a dependency that is this issue, not an issue, ended, or leads back to this issue."""
+        repo, mine = wi["repo"], wi["issueNumber"]
+        if number == mine:
+            raise ToolError(f"#{number} is this issue: it cannot depend on itself")
+        if "pull_request" in self._issue(repo, number):
+            raise ToolError(f"#{number} is a pull request, not an issue")
+        status, how = self._dependency(repo, number)
+        if status == "ended":
+            raise ToolError(f"#{number} {how}, so nothing could wait for it")
+        pending, seen = [number], set()
+        while pending:  # a path of Depends-on lines from #number back to this issue is a cycle
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            try:
+                further = workitem.depends_on(self.github.issue(repo, current).get("body"))
+            except GitHubError as exc:
+                if exc.status != 404:
+                    raise
+                further = []
+            if mine in further:
+                raise ToolError(f"#{current} depends on #{mine}, so #{mine} cannot depend on #{number}: "
+                                "that would make a cycle")
+            pending.extend(further)
 
     def _plan_problem(self, item):
         """Why one issue of a plan may not be opened, or None."""

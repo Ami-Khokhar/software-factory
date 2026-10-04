@@ -94,7 +94,9 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   Its issue has a `Depends on #n` line and #n has not merged yet, so nothing is
   dispatched. The Foreman sets it to null when the wait ends. WorkItems stored
   before this field have no `waitingOn`; readers treat that as null, so the
-  store needs no migration.
+  store needs no migration. `factory_set_dependencies` rewrites the issue's
+  `Depends on #n` lines (ADR-0042) and clears `waitingOn`; the schema does not
+  change.
 - **An issue's `Worker: <id>` lines choose its worker (ADR-0029).** They are read
   from the issue on each tick, like `Depends on #n`, and are not stored in the
   WorkItem. `WorkItem.worker` still records the agent of the current pass.

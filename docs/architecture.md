@@ -44,7 +44,8 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
   For a new repo, one owner-approved tool prepares a setup PR with only missing controls, after it
   pushes one README-only commit to an empty repo's default branch; the owner merges the PR before
   normal worker passes start (ADR-0019). One owner approval of `factory_start_plan` opens all the
-  issues of a plan, and they run in order (ADR-0024).
+  issues of a plan, and they run in order (ADR-0024); `factory_set_dependencies` then frees the
+  independent ones before a worker starts them (ADR-0042).
 
 ## What crosses each boundary
 
@@ -192,6 +193,7 @@ The states are the enum in `schemas/workitem.schema.json`.
 | The budget ends a WorkItem | `Foreman.dispatch` | `test_actions`: `test_budget_exhausts` |
 | A plan opens no issue when one of its issues fails a check | `Foreman.start_plan` | `test_plan`: `test_one_issue_that_fails_a_check_opens_no_issue` |
 | An issue starts only after each `Depends on #n` issue merged | `Foreman._wait_for` | `test_plan`: `test_a_dependent_waits_while_its_dependency_is_open_and_starts_once_it_merged`, `test_a_dependency_that_ends_without_a_merge_sends_the_dependent_to_a_person` |
+| Dependencies change only before a worker starts, in one repo, without a cycle or an ended issue | `Foreman.set_dependencies` | `test_dependencies`: `test_a_workitem_no_worker_has_touched_may_change_and_any_other_may_not`, `test_a_dependency_must_be_an_open_issue_of_the_same_repo_that_has_not_ended`, `test_a_change_that_would_make_a_cycle_is_refused` |
 | The harness never touches the host | `worker/runner.py` | `test_worker_runner`: `test_the_harness_gets_a_copy_and_never_the_checkout`, `test_hooks_and_filters_the_harness_plants_never_run_on_the_host` |
 | Passes of one repo take its checkout in turns, up to `FACTORY_PASSES_PER_REPO` at once | `worker/runner.py` `checkout_lock`, `Foreman.dispatch` | `test_worker_runner`: `test_a_runner_waits_for_the_checkout_while_another_pass_holds_it`; `test_safety`: `test_passes_of_one_repo_run_at_once_up_to_the_limit` |
 | `verify` is the base commit's, not the worker's | `worker/runner.py` | `test_worker_runner`: `test_verify_comes_from_the_base_commit` |

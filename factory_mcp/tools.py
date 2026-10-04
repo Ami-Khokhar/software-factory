@@ -9,7 +9,7 @@ from .mcp import Tool, ToolError
 # a repo, its gate secrets, and the lessons workers read stay with the owner's token.
 AGENT_TOOLS = frozenset({"factory_status", "factory_repo_check", "factory_lessons", "factory_report",
                          "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
-                         "factory_resolve_human"})
+                         "factory_set_dependencies", "factory_resolve_human"})
 WAITING = ("human_waiting", "blocked")
 
 
@@ -177,6 +177,20 @@ def build(store, foreman, agent=False):
                                                                  "body": {"type": "string", "minLength": 1}}}},
                              "by": {"type": "string", "minLength": 1, "description": "who approved the plan"}}},
              "write", lambda args: foreman.start_plan(args["repo"], args["issues"], args["by"])),
+        Tool("factory_set_dependencies",
+             "Change which issues a WorkItem waits for, before any worker has touched it: replaces the "
+             "'Depends on #n' lines of its issue with the issue numbers given, and [] lets it start at "
+             "once. Use it so independent issues of a plan run side by side. Refused when the WorkItem "
+             "has had a worker pass, when a number is itself, a pull request, missing, closed without a "
+             "merged PR, cancelled or exhausted, or when the change would make a cycle.",
+             {"type": "object", "required": ["id", "dependsOn", "by"], "additionalProperties": False,
+              "properties": {"id": {"type": "string", "description": "owner/repo#issue"},
+                             "dependsOn": {"type": "array", "maxItems": MAX_PLAN_ISSUES,
+                                           "description": "issue numbers in the same repo; [] for none",
+                                           "items": {"type": "integer", "minimum": 1}},
+                             "by": {"type": "string", "minLength": 1, "description": "who asked"}}},
+             "write", lambda args: {"workItem": foreman.set_dependencies(
+                 args["id"], args["dependsOn"], args["by"], agent=agent)}),
         Tool("factory_lessons",
              "Show what the factory learned about one repo: the blocking gate findings that "
              "recurred on two or more WorkItems (candidates), and the lessons the owner approved "

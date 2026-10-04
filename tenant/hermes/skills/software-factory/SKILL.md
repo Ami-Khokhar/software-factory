@@ -88,6 +88,12 @@ owner's yes in chat first. The call starts the plan: the factory opens the issue
 factory_approve_issue calls. If the tool refuses, give its reason word for word; it opened no
 issue.
 
+When issues of the plan do not build on each other, free them in the same turn: call
+factory_set_dependencies with the WorkItem id, the issue numbers it must wait for as `dependsOn`
+(`[]` for none) and the owner's name as `by`. Use it only on a WorkItem that is `ready` and has
+no worker pass yet. The factory refuses the rest, a dependency that ended, and a cycle: give the
+reason word for word. Tell the owner which issues now run side by side.
+
 For one issue that the owner wants to read on GitHub before it starts, call factory_propose_issue
 instead. It opens the issue labelled `factory:proposed`; nothing starts until "Start an issue".
 
