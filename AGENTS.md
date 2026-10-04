@@ -38,10 +38,9 @@ python3 scripts/rehearsal.py <agent-relay checkout>      # one issue end to end,
 
 - factory-mcp and the worker runner use only the Python standard library. `requirements.txt` is
   for the tests.
-- Every tool declares whether it reads or writes. Hermes asks the owner before each write outside
-  `tools.AGENT_TOOLS`, the tools Day Desk drives with its own token. A
-  new tool goes into the lists in `tests/test_mcp_server.py` and `tests/test_hermes.py` on
-  purpose.
+- Every tool declares whether it reads or writes. Day Desk runs `tools.AGENT_TOOLS` on its own
+  token and the other tools on the owner's, with no yes per call (ADR-0041). A new tool goes into
+  the lists in `tests/test_mcp_server.py` and `tests/test_hermes.py` on purpose.
 - A contract change updates the schema, the code that writes and reads it, `docs/contracts.md`
   and, when stored WorkItems change, the migration in `factory_mcp/store.py`.
 - `tests/fakes.py` fakes GitHub and the relay with the real clients' methods, and the patch push

@@ -1,6 +1,6 @@
-"""The Day Desk profile (tenant/hermes, ADR-0013, ADR-0021, ADR-0030): it drives the factory with the
-agent token, every other factory write waits for the owner's yes, and its only shell runs in a
-Docker sandbox that gets the GitHub token and nothing else from the host."""
+"""The Day Desk profile (tenant/hermes, ADR-0021, ADR-0030, ADR-0041): it drives the factory with the
+agent token and runs the other factory tools on the owner's token, with no yes per call, and its
+shell runs in a Docker sandbox that gets the GitHub token and nothing else from the host."""
 import re
 import unittest
 from pathlib import Path
@@ -21,13 +21,13 @@ class ProfileTest(unittest.TestCase):
         for server in (DRIVE, OWNER):
             self.assertEqual(server["url"], f"http://127.0.0.1:{Config(mcp_token='t', repos=frozenset()).port}/mcp")
 
-    def test_day_desk_drives_with_the_agent_token_and_asks_the_owner_for_the_rest(self):
-        """ADR-0030: the driving tools run with no yes per call, on the agent token, which makes
-        factory-mcp list only them; the other writes wait for the owner on an untrusted server. A
-        new tool is added here on purpose."""
+    def test_day_desk_drives_with_the_agent_token_and_runs_the_rest_on_the_owner_token(self):
+        """ADR-0030: the driving tools run on the agent token, which makes factory-mcp list only
+        them. ADR-0041: the other tools run on the owner's token, also with no yes per call. A new
+        tool is added here on purpose."""
         self.assertEqual((DRIVE["trust"], DRIVE["headers"]["Authorization"]), ("full", "Bearer ${FACTORY_AGENT_TOKEN}"))
         self.assertEqual(set(DRIVE["tools"]["include"]), tools.AGENT_TOOLS)
-        self.assertEqual((OWNER["trust"], OWNER["headers"]["Authorization"]), ("untrusted", "Bearer ${FACTORY_MCP_TOKEN}"))
+        self.assertEqual((OWNER["trust"], OWNER["headers"]["Authorization"]), ("full", "Bearer ${FACTORY_MCP_TOKEN}"))
         real = set(tools.build(None, None))
         self.assertEqual(set(OWNER["tools"]["include"]), real - tools.AGENT_TOOLS - {"factory_tick", "factory_intake"})
 
@@ -43,12 +43,10 @@ class ProfileTest(unittest.TestCase):
         used |= set(TERMINAL["env_passthrough"])
         self.assertLessEqual(used, {env["name"] for env in manifest["env_requires"]})
 
-    def test_only_the_shell_is_on_and_the_host_side_toolsets_stay_off(self):
-        """The shell runs in the sandbox (ADR-0021). The rest run on the host with no approval
-        step, so they are off. The trial in docs/RUNBOOK.md checks the running gateway."""
-        disabled = set(CONFIG["agent"]["disabled_toolsets"])
-        self.assertNotIn("terminal", disabled)
-        self.assertLessEqual({"code_execution", "file", "browser", "computer_use", "delegation"}, disabled)
+    def test_the_gateway_is_standalone_so_the_sandbox_gets_its_token(self):
+        """ADR-0041: on a gateway Hermes treats as multi-profile, the sandbox's token is read
+        outside any secret scope and every shell call fails."""
+        self.assertIs(CONFIG["gateway"]["standalone"], True)
 
     def test_the_shell_runs_in_docker_with_the_github_token_as_its_only_secret(self):
         """Any other terminal key could mount a host path or forward another variable, so the

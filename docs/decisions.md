@@ -194,7 +194,7 @@ history, not correctness.
 
 ## ADR-0013 — Hermes is the front door
 
-**Superseded by ADR-0021** for the shell, and **by ADR-0030** for the owner's yes on each write. Day Desk still has no file tools or subagents.
+**Superseded by ADR-0021** for the shell, **by ADR-0030** for the owner's yes on each write, and **by ADR-0041** for the other toolsets.
 
 **Context.** OpenBot gave the factory two Bots, a CEL policy and a 15-minute routine that ran a
 model to tick WorkItems, which factory-mcp's own background tick already does. A person's yes was
@@ -600,7 +600,8 @@ the line, and Day Desk writes it when the owner names a worker.
 
 ## ADR-0030 — Day Desk drives the factory; factory-mcp keeps the guards
 
-Supersedes ADR-0013 for the owner's yes on each write, and amends ADR-0010.
+Supersedes ADR-0013 for the owner's yes on each write, and amends ADR-0010. **Superseded by
+ADR-0041** for the yes on the owner-token tools.
 
 **Context.** The owner wants Hermes to drive the factory and to be asked only for what the guards
 cannot decide. Every factory write waited for the owner's yes, and every escalation waited for the
@@ -824,6 +825,32 @@ holds after the push.
 **Consequence.** A failed attempt over the limits leaves the PR as it was, so the next attempt
 and the gate see the last good head. The count runs on the factory's own clone, so it does not
 trust the worker; GitHub's count after the push stays the authority.
+
+---
+
+## ADR-0041 — Day Desk is a full Hermes agent on a standalone gateway
+
+Supersedes ADR-0030 for the owner's yes on the owner-token tools, and ADR-0013 and ADR-0021 for
+the toolsets that stay off.
+
+**Context.** On 4 Oct 2026 the owner asked for Day Desk to be a normal Hermes agent with the
+factory as one more capability, with no yes per factory call. Day Desk's sandboxed shell also
+failed on every call since 3 Oct (118 calls in its log): Hermes treated the day-desk gateway as
+multi-profile, so it read `DAYDESK_GITHUB_TOKEN` for the container outside any profile's secret
+scope and raised `UnscopedSecretError`. With the multi-profile flag off, the same call ran.
+
+**Decision.** Both factory servers are `trust: full`; the owner-token server still carries only
+the owner-token tools. No toolset is off. terminal, file and code_execution run in the Docker
+sandbox of ADR-0021; browser and computer_use act on the host as the owner. `approvals.mode` is
+`manual`, so what Hermes gates waits for the owner, not a model. `gateway.standalone` is true.
+SOUL and the skill let the shell do any task the owner asks for, and keep its factory-repo limits.
+
+**Consequence.** Day Desk can set up a repo, add one and approve or retire a lesson with no yes;
+the owner's token names the caller in the audit log. A prompt-injected Day Desk could change
+the lessons every worker reads, or act on the host through browser or computer_use. The worker
+sandbox, the gate, branch protection and factory-mcp's guards stay the boundaries.
+`gateway.standalone` is a compatibility setting Hermes says it will remove; when it goes, check
+the shell again before an update.
 
 ---
 

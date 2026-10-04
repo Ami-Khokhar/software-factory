@@ -371,12 +371,12 @@ checkout, edit the source path in `~/.hermes/profiles/day-desk/distribution.yaml
 The deploy does not restart Day Desk's gateway, because the job runs inside it; a sandbox change
 reaches new shell sessions at once, and `hermes -p day-desk gateway restart` is for anything else.
 
-Day Desk has no file tools, browser or subagents (`agent.disabled_toolsets` in
-`tenant/hermes/config.yaml`). It cannot tick or take in a WorkItem itself (factory-mcp does),
+Day Desk has every Hermes toolset (ADR-0041). Its terminal, file and code tools run in the
+sandbox below; its browser and computer use act on your Mac as you. It cannot tick or take in a WorkItem itself (factory-mcp does),
 merge or label, and it never pushes except the first commit of an empty repo (ADR-0021; the
 skill has the full list). Its shell runs in a Docker container from `tenant/hermes/sandbox/`, with
-git, gh and python3. It uses the shell to make the first commit of an empty repo and to clone and
-read a repo. Hermes does not ask you before a shell command, so Day Desk shows you each command
+git, gh and python3. It uses the shell for any task you ask for, and in factory repos only to make
+the first commit of an empty repo and to clone and read a repo. Hermes does not ask you before a shell command, so Day Desk shows you each command
 that changes GitHub and waits for your yes in chat. The container has no host directory it can
 write, and one secret, `DAYDESK_GITHUB_TOKEN`. From the host, Hermes mounts only Day Desk's
 skills and its caches of files sent in chat (images, documents, audio, web pages), read-only
@@ -409,12 +409,12 @@ make the same changes as `tenant/hermes/config.yaml`:
 
 ```bash
 hermes profile update day-desk
-hermes -p day-desk config set agent.disabled_toolsets '[code_execution, file, browser, computer_use, delegation]'
 hermes -p day-desk config set terminal.backend docker
 hermes -p day-desk config set terminal.docker_image day-desk-sandbox:1
 hermes -p day-desk config set terminal.container_persistent false
 hermes -p day-desk config set terminal.cwd /day-desk
 hermes -p day-desk config set terminal.env_passthrough '[DAYDESK_GITHUB_TOKEN]'
+hermes -p day-desk config set gateway.standalone true
 hermes -p day-desk gateway restart
 ```
 
@@ -424,7 +424,7 @@ After setting it up, check in Telegram that Day Desk:
 
 1. answers "what needs me?" with the WorkItems `factory status` shows waiting on you;
 2. checks a repo without pr-gatekeeper, says what it lacks, and does not enable it;
-3. enables a ready repo only after you approve the `factory_add_repo` call;
+3. enables a ready repo when you ask, with no approval prompt;
 4. starts an issue only after you approve `factory_approve_issue`, and a worker starts on it
    within a minute;
 5. runs `whoami; pwd; env | cut -d= -f1` in the sandbox and gets `daydesk`, `/day-desk` and
