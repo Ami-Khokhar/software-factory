@@ -86,6 +86,17 @@
     "activeWorkOrderId": { "type": ["string", "null"] },
     "providerTaskId": { "type": ["string", "null"], "description": "agent-relay's id for the active task." },
     "worker": { "type": ["string", "null"], "description": "agent-relay agentId used." },
+    "remoteVerify": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["branch", "sha", "startedAt"],
+      "description": "While state is implementing for a remote-verify repo (ADR-0045): the scratch branch that holds the patch, its commit, and when the GitHub run was waited for from. Absent or null otherwise.",
+      "properties": {
+        "branch": { "type": "string", "minLength": 1 },
+        "sha": { "type": "string", "minLength": 1 },
+        "startedAt": { "type": "string", "format": "date-time" }
+      }
+    },
     "owner": {
       "type": ["string", "null"],
       "description": "Named human owner, required while state is human_waiting."

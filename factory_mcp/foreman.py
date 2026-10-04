@@ -20,6 +20,7 @@ BOOTSTRAP_PREFIX = "factory-bootstrap/"
 MAX_PLAN_ISSUES = 10  # one approval covers this many issues at most (ADR-0024)
 REGATE_MARKER = re.compile(r"<!-- factory regate (\d+) -->")
 # A pass that ran out of time: worker/runner.py's harness timeout, or the relay's task timeout
+REMOTE_VERIFY_WORKFLOW = ".github/workflows/factory-verify.yml"  # the workflow's name there is `factory-verify`
 OUT_OF_TIME = re.compile(r"the harness timed out|task timed_out")
 
 
@@ -578,7 +579,11 @@ class Foreman:
         errors = documents.check_result(result, order)
         if not errors and result["status"] != "completed":
             errors = [f"worker reported {result['status']}: {result.get('error')}"]
-        sha, files = None, []
+        sha, files, evidence = None, [], (result or {}).get("evidence", [])
+        if not errors and order.get("remoteVerify"):
+            wi, errors, evidence, waiting = self._remote_verify(wi, order, result["patch"])
+            if waiting:
+                return wi
         if not errors:
             try:
                 sha = self.push_patch(wi, order, result["patch"])
@@ -589,27 +594,79 @@ class Foreman:
         if errors:
             return self.fail(wi, order, f"{task['agentId']}: " + "; ".join(errors))
         self.store.log("result", {"workOrder": order["id"], "commitSha": sha}, wi["id"])
-        done = dict(wi, headSha=sha, attempts=[], activeWorkOrderId=None, providerTaskId=None)
+        done = dict(wi, headSha=sha, attempts=[], activeWorkOrderId=None, providerTaskId=None, remoteVerify=None)
         if wi.get("prNumber"):
             wi = self._write(wi, dict(done, state="reviewing"), "pushed")
             try:  # the gate lints the body against the PR's paths, which this push may have changed
                 self.github.edit_pull(wi["repo"], wi["prNumber"],
-                                      documents.pr_body(wi, order, files, result["evidence"], task["agentId"]))
+                                      documents.pr_body(wi, order, files, evidence, task["agentId"]))
             except GitHubError as exc:  # the push stands; the gate's lint names what the body lacks
                 self.store.log("pr_body_failed", {"error": str(exc)}, wi["id"])
             return wi
-        pr = self.open_pr(wi, order, files, result["evidence"], task["agentId"])
+        pr = self.open_pr(wi, order, files, evidence, task["agentId"])
         return self._write(wi, dict(done, state="pr_open", prNumber=pr["number"]), "pr_opened",
                            pr=pr["number"])
 
-    def push_patch(self, wi, order, patch):
+    def _remote_verify(self, wi, order, patch):
+        """Have a GitHub macOS runner run the repo's verify on the patch (ADR-0045), without blocking the
+        tick. The first call pushes the patch to a scratch branch and keeps it in `remoteVerify`; each
+        later call looks for the run. Returns (WorkItem, errors, evidence, waiting): errors say why the
+        attempt failed, evidence is the passing run, and waiting means the WorkItem is held for the run
+        or for the owner."""
+        pending = wi.get("remoteVerify")
+        repo = wi["repo"]
+        if pending is None:
+            base = patch.get("baseSha") or (order["headSha"] if order["kind"] == "fix" else order["baseSha"])
+            if self.github.file(repo, REMOTE_VERIFY_WORKFLOW, base) is None:  # the scratch branch is built on it
+                reason = (f"{repo} has no {REMOTE_VERIFY_WORKFLOW}, which runs its verify on a macOS runner: "
+                          "add it (docs/RUNBOOK.md, Remote verify setup), then retry")
+                return self._write(wi, dict(wi, state="human_waiting", activeWorkOrderId=None,
+                                            providerTaskId=None, blockedOn=reason), "remote_verify_unavailable",
+                                   error=reason), [], [], True
+            branch = f"factory-verify/{wi['issueNumber']}-{len(self.store.workorders(wi['id']))}"
+            try:
+                sha = self.push_patch(wi, order, patch, branch, force=True)
+            except patches.PatchError as exc:
+                return wi, [f"patch not pushed: {exc}"], [], False
+            wi = self._write(wi, dict(wi, remoteVerify={"branch": branch, "sha": sha, "startedAt": now()}),
+                             "remote_verify_started", branch=branch, sha=sha)
+            return wi, [], [], True
+        since = calendar.timegm(time.strptime(pending["startedAt"], "%Y-%m-%dT%H:%M:%SZ"))
+        late = time.time() - since > self.config.remote_verify_seconds
+        runs, query_error = [], None
+        try:
+            runs = [run for run in self.github.workflow_runs(repo, pending["sha"], "factory-verify")
+                    if run["status"] == "completed"]
+        except GitHubError as exc:  # the deadline applies whatever the query does
+            query_error = str(exc)
+            self.store.log("remote_verify_query_failed", {"error": query_error}, wi["id"])
+        if not runs and not late:
+            return wi, [], [], True
+        try:  # the scratch branch has done its job; a stale one is harmless, so a failure is only logged
+            self.github.delete_branch(repo, pending["branch"])
+        except GitHubError as exc:
+            self.store.log("scratch_branch_not_deleted", {"branch": pending["branch"], "error": str(exc)}, wi["id"])
+        if query_error:
+            return wi, [f"remote verify: the runs of factory-verify could not be read ({query_error}); check "
+                        "that FACTORY_GITHUB_TOKEN may read Actions (docs/RUNBOOK.md, Remote verify setup)"], [], False
+        if not runs:
+            return wi, [f"remote verify: no finished run of factory-verify on {pending['sha'][:12]} after "
+                        f"{self.config.remote_verify_seconds // 60} min; check that workflow's runs"], [], False
+        run = runs[0]
+        if run.get("conclusion") == "success":
+            return wi, [], [{"kind": "test", "command": "factory-verify workflow (GitHub macOS runner)",
+                             "exit": 0, "tail": f"run {run.get('html_url') or run['id']}: success"}], False
+        tail = " ".join(self.github.run_log_tail(repo, run["id"], 1500).replace("```", "").split())
+        return wi, [f"remote verify {run.get('conclusion')}: {tail}"], [], False
+
+    def push_patch(self, wi, order, patch, branch=None, force=None):
         """Apply the Result's patch on the WorkOrder's base and push it to the WorkItem's branch
-        (ADR-0017). Returns the pushed commit."""
+        (ADR-0017), or to a scratch `branch`. Returns the pushed commit."""
         base = patch.get("baseSha") or (order["headSha"] if order["kind"] == "fix" else order["baseSha"])
         limits = order["constraints"]
         return patches.apply(self.config.git_url.format(repo=wi["repo"]), self.config.github_token,
-                             wi["branch"], base, patch, f"{wi['goal']} (#{wi['issueNumber']})\n\n"
-                             f"WorkOrder {order['id']}", force=order["kind"] != "fix",
+                             branch or wi["branch"], base, patch, f"{wi['goal']} (#{wi['issueNumber']})\n\n"
+                             f"WorkOrder {order['id']}", force=order["kind"] != "fix" if force is None else force,
                              protected=limits["protectedPaths"], limits=(self._default_branch(wi["repo"]),
                              limits["maxChangedLines"], limits["maxChangedFiles"]))
 
@@ -641,7 +698,7 @@ class Foreman:
         """Record the attempt; two failed attempts block the WorkItem with the evidence. Implement attempts
         that all ran out of time say the issue is too big for one pass: a retry is likely to run out too."""
         attempts = list(wi.get("attempts") or []) + [reason]
-        new = dict(wi, attempts=attempts, activeWorkOrderId=None, providerTaskId=None,
+        new = dict(wi, attempts=attempts, activeWorkOrderId=None, providerTaskId=None, remoteVerify=None,
                    state="changes_requested" if order["kind"] == "fix" else "ready")
         if len(attempts) >= 2:
             fix = "Fix the cause named in attempts, then call factory_resolve_human."

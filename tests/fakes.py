@@ -36,6 +36,7 @@ class FakeGitHub:
         self.contents = {}  # (repo, path) -> file text on the default branch
         self.labels = {}  # repo -> names of the labels the Foreman created
         self.labelled = []  # (repo, number, labels) of every label the Foreman added to an issue
+        self.logs, self.deleted = {}, []  # run id -> failed job log; (repo, branch) of each branch deleted
         self.commits = {}  # (repo, sha) -> GitHub's commit; any other commit is a person's push
 
     def add_issue(self, repo, number, labels=("factory:ready",), body=ISSUE_BODY, state="open", author=None):
@@ -104,6 +105,13 @@ class FakeGitHub:
     def workflow_runs(self, repo, sha, name="pr-gatekeeper"):
         return [run for run in self.workflow_run_list.get((repo, sha), []) if run.get("name") == name]
 
+    def run_log_tail(self, repo, run_id, chars=2000):
+        return self.logs.get(run_id, "(no log)")[-chars:]
+
+    def delete_branch(self, repo, branch):
+        self.deleted.append((repo, branch))
+        self.branches.pop((repo, branch), None)
+
     def repository(self, repo):
         from factory_mcp.github import GitHubError
         if self.repos.get(repo, {}) is None:
@@ -111,7 +119,10 @@ class FakeGitHub:
         return dict({"full_name": repo, "default_branch": "main", "archived": False,
                      "permissions": {"push": True}}, **self.repos.get(repo, {}))
 
-    def file(self, repo, path):
+    def file(self, repo, path, ref=None):
+        """The file on the default branch; `contents[(repo, path, ref)]` overrides it at that ref."""
+        if (repo, path, ref) in self.contents:
+            return self.contents[(repo, path, ref)]
         return self.contents.get((repo, path))
 
     def branch_head(self, repo, branch):

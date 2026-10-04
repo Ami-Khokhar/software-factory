@@ -70,6 +70,13 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   [decisions.md](decisions.md), ADR-0005).
 - **`WorkItem.gateRound` mirrors pr-gatekeeper's round number** and is never
   incremented by controller retries.
+- **`WorkOrder.remoteVerify` and `WorkItem.remoteVerify` (ADR-0045).** Both are optional, so
+  older documents stay valid. `WorkOrder.remoteVerify: true` is set for a repo in
+  `FACTORY_REMOTE_VERIFY_REPOS`: the worker skips the repo's verify and returns a patch with no
+  test evidence, and factory-mcp does not require any from it. `WorkItem.remoteVerify` is
+  `{branch, sha, startedAt}` while the WorkItem is `implementing` and waits for the GitHub run on
+  its scratch branch `factory-verify/<issue>-<n>`; it is `null` otherwise. No stored WorkItem
+  needs a migration: a document without the field reads as not waiting.
 - **`WorkOrder.lessons` is data (ADR-0020).** At most 10 of the repo's
   owner-approved lessons, each `{fingerprint, text}` with text of at most 300
   characters, newest first; `[]` when the repo has none. The worker rules say to

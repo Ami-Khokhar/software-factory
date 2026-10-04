@@ -233,6 +233,62 @@ To take a repo away from the factory, remove it from `FACTORY_REPOS` or delete i
 WorkItems stay as they are: no worker starts and no PR opens for them, and they carry on if the
 repo comes back. A worker already running finishes; its Result is read when the repo comes back.
 
+### Remote verify: a repo whose verify needs macOS
+
+The worker runs in a Linux container, so a verify such as ideadump's
+`xcodegen generate && xcodebuild test ...` cannot pass there. For such a repo the factory has a
+GitHub macOS runner run the verify instead (ADR-0045). Nothing runs model-written code on your Mac.
+How it goes: the worker writes the patch and skips its verify; factory-mcp pushes the patch to
+`factory-verify/<issue>-<n>`; a workflow in the repo runs the verify there; factory-mcp reads the
+result and deletes that branch. A pass continues as for any repo. A failure is a failed attempt, and
+the run's log tail goes to the next WorkOrder as a finding, so Day Desk may retry it like any code
+failure. Each run counts as a pass in the budget.
+
+One-time setup per repo:
+
+1. Add the workflow below as `.github/workflows/factory-verify.yml` in the repo, through a PR that
+   you merge yourself: `.github/` is protected, so a worker cannot add it. It runs on the pushed
+   branch with no secrets and read-only access, and the patch cannot change `.github/`, so the
+   branch's copy is the merged one. Check that the runner image has the simulator the verify names
+   (ideadump asks for `iPhone 17`; if `macos-latest` lacks it, use the newest macOS label in
+   GitHub's runner-images list). This was not run for this runbook: run it once by hand
+   (`git push origin HEAD:refs/heads/factory-verify/test`, then read the run, then delete the branch).
+2. Add the repo to `FACTORY_REMOTE_VERIFY_REPOS` (comma-separated, like `FACTORY_LOCAL_ONLY_REPOS`) in
+   factory-mcp's environment, then restart factory-mcp. Optional: `FACTORY_REMOTE_VERIFY_SECONDS`.
+3. Check: `FACTORY_GITHUB_TOKEN` must be able to push branches, read Actions runs and delete branches
+   (fine-grained: Contents write, Actions read). A WorkItem of that repo then shows
+   `remoteVerify` in `factory_status` while it waits, and a `remote_verify_started` row in its history.
+
+```yaml
+name: factory-verify
+on:
+  push:
+    branches: ['factory-verify/**']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: |
+          command -v xcodegen >/dev/null || brew install xcodegen
+          bash -c "$(jq -r .verify .github/pr-gatekeeper.json)"
+```
+
+Cost: a public repo's standard GitHub-hosted runners, macOS included, are free. In a private repo
+macOS minutes bill at 10 times the Linux rate and draw on the plan's included minutes.
+
+The gate needs a macOS runner too. In `pr-gatekeeper`, `.github/workflows/gatekeeper.yml` sets
+`runs-on: ubuntu-latest` on the `gates` job (line 45), and on `review` (line 104). The reusable
+workflow's inputs are only `pr`, `base_sha` and `gatekeeper_ref` (lines 20-32), so a calling repo
+cannot choose the runner: the gate's verify of an iOS repo fails on Linux until pr-gatekeeper gets an
+input for it (say `gates_runs_on`, default `ubuntu-latest`) and the repo's caller workflow passes
+`macos-latest`. That is a change in pr-gatekeeper, not in this repo, and it is not made yet.
+
 ## Starting, stopping, rebooting
 
 The relay and factory-mcp are launchd services: they start at login and restart when they

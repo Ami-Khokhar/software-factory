@@ -13,7 +13,8 @@ EVIDENCE_KEYS = {"kind", "command", "exit", "tail"}
 
 def workorder(wi, kind, attempt, config, base_sha=None, findings=(), lessons=()):
     key = f"{wi['id']}:r{wi.get('gateRound', 0)}:{kind}:a{attempt}"
-    return {"schemaVersion": "factory.workorder/v1", "id": key, "workItemId": wi["id"],
+    remote = {"remoteVerify": True} if config.remote_verify(wi["repo"]) else {}  # ADR-0045
+    return {**remote, "schemaVersion": "factory.workorder/v1", "id": key, "workItemId": wi["id"],
             "round": wi.get("gateRound", 0), "kind": kind, "repo": wi["repo"], "baseSha": base_sha,
             "headSha": wi.get("headSha") if kind == "fix" else None, "goal": wi["goal"],
             "description": wi.get("description") or "", "acceptance": wi["acceptance"],
@@ -126,7 +127,8 @@ def check_result(result, order):
         return errors
     if patch is None:
         errors.append("a completed Result needs a patch")
-    for required in order["requiredEvidence"]:
+    # A remote-verify order's passing test evidence is the GitHub run's, added after the worker's Result
+    for required in [] if order.get("remoteVerify") else order["requiredEvidence"]:
         kind = EVIDENCE_KIND[required]
         if not any(e["kind"] == kind and e["exit"] == 0 for e in evidence):
             errors.append(f"required evidence {required}: no passing {kind} entry")
