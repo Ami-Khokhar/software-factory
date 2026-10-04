@@ -135,6 +135,10 @@ class GitHubClientTest(unittest.TestCase):
         self.assertEqual(self.github.edit_pull("o/r", 7, "new body"), {"number": 7, "body": "new body"})
         self.assertEqual(Api.seen, [("/repos/o/r/pulls/7", {"body": "new body"})])
 
+    def test_editing_an_issue_replaces_its_body(self):
+        self.github.edit_issue("o/r", 7, "new body")
+        self.assertEqual(Api.seen, [("/repos/o/r/issues/7", {"body": "new body"})])
+
     def test_errors_carry_status(self):
         with self.assertRaises(GitHubError) as caught:
             self.github.issue("o/r", 404)

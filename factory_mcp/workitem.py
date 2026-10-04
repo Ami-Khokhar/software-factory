@@ -76,6 +76,14 @@ def depends_on(body):
     return [int(number) for number in DEPENDS_ON.findall(body or "")]
 
 
+def with_dependencies(body, numbers):
+    """`body` with its `Depends on #n` lines replaced by one for each of `numbers`, as factory_start_plan
+    writes them: at the top, then a blank line (ADR-0042)."""
+    rest = re.sub(DEPENDS_ON.pattern + r".*\n?", "", body or "", flags=re.I | re.M).lstrip("\n")
+    lines = [f"Depends on #{number}" for number in numbers]
+    return "\n".join(lines) + ("\n\n" if lines and rest else "\n" if lines else "") + rest
+
+
 def workers_named(body):
     """The relay agents that `Worker: <id>` lines choose, in order (#100)."""
     return WORKER.findall(body or "")

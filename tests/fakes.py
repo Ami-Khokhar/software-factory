@@ -140,6 +140,10 @@ class FakeGitHub:
     def close_issue(self, repo, number):
         self.issues[(repo, number)]["state"] = "closed"
 
+    def edit_issue(self, repo, number, body):
+        self.issues[(repo, number)]["body"] = body
+        return self.issues[(repo, number)]
+
     def create_label(self, repo, name, color, description):
         self.labels.setdefault(repo, set()).add(name)
 

@@ -20,6 +20,7 @@ mcp_servers:
         - factory_approve_issue
         - factory_propose_issue
         - factory_start_plan
+        - factory_set_dependencies
         - factory_resolve_human
   factory:
     url: "http://127.0.0.1:43125/mcp"

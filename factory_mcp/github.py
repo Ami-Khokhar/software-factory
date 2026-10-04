@@ -125,6 +125,10 @@ class GitHub:
         return self._request("PATCH", f"{self.api}/repos/{repo}/issues/{number}",
                              {"state": "closed", "state_reason": "completed"})[0]
 
+    def edit_issue(self, repo, number, body):
+        """Replace an issue's body."""
+        return self._request("PATCH", f"{self.api}/repos/{repo}/issues/{number}", {"body": body})[0]
+
     def create_label(self, repo, name, color, description):
         """Create a label. One that exists already is left as it is."""
         try:
