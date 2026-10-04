@@ -865,7 +865,7 @@ way, and a hand edit has no guard against a cycle or a dead dependency.
 
 **Decision.** `factory_set_dependencies` takes a WorkItem id, the issue numbers it waits for (`[]`
 for none) and who asked. Because the order lives in the issue body (ADR-0024), it replaces the
-body's `Depends on #n` lines and leaves the rest of the body as it was; the next tick reads them
+body's `Depends on #n` lines (each whole, with any text after the number) and leaves the rest of the body as it was; the next tick reads them
 like any edit. Code refuses the change when the WorkItem is not `issued`, `planned` or `ready`, or
 has a WorkOrder on record (a retry back to `ready` has one), so a change never moves a WorkItem
 a worker has started. Each number must be an issue of the same repo (the tool takes numbers, so

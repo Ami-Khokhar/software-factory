@@ -2,7 +2,7 @@
 touched waits for, so independent issues of a plan run side by side."""
 import unittest
 
-from factory_mcp import tools
+from factory_mcp import metrics, tools
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
@@ -49,7 +49,13 @@ class SetDependenciesTest(unittest.TestCase):
         self.set(THIRD, [200], by="day-desk", agent=True)
         self.assertEqual([h["detail"] for h in self.foreman.store.history(THIRD)
                           if h["action"] == "dependencies_changed"],
-                         [{"by": "day-desk", "from": [201], "to": [200], "agent": True}])
+                         [{"by": "day-desk", "was": [201], "now": [200], "agent": True}])
+
+    def test_the_audit_entry_leaves_the_end_state_reading_of_the_history_working(self):
+        """`from` and `to` hold states in every other entry, and metrics looks them up in a set, so a
+        list there would break factory_report for the whole store."""
+        self.set(THIRD, [200])
+        self.assertIsNone(metrics.ended_at(self.foreman.store.history(THIRD)))
 
     def test_a_workitem_no_worker_has_touched_may_change_and_any_other_may_not(self):
         self.foreman.tick()  # FIRST gets a pass

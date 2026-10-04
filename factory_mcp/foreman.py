@@ -780,7 +780,7 @@ class Foreman:
             body = workitem.with_dependencies(issue.get("body"), depends_on)
             if body != (issue.get("body") or ""):
                 self.github.edit_issue(repo, wi["issueNumber"], body)
-            self.store.log("dependencies_changed", {"by": by, "from": before, "to": depends_on,
+            self.store.log("dependencies_changed", {"by": by, "was": before, "now": depends_on,
                                                     **({"agent": True} if agent else {})}, workitem_id)
             if wi.get("waitingOn") is not None:  # the next tick sets it again if the wait goes on
                 wi = self.store.put(dict(wi, waitingOn=None))
