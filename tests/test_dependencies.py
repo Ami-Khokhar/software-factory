@@ -62,7 +62,7 @@ class SetDependenciesTest(unittest.TestCase):
         with self.assertRaisesRegex(ToolError, "o/r#200 is implementing; dependencies change only"):
             self.set(FIRST, [])
         self.foreman.store.put(dict(self.foreman.store.get(FIRST), state="ready"))  # a retry: a pass is on record
-        with self.assertRaisesRegex(ToolError, "o/r#200 is ready; dependencies change only"):
+        with self.assertRaisesRegex(ToolError, "o/r#200 already had a worker pass, so its dependencies stay"):
             self.set(FIRST, [])
         for state in ("pr_open", "closed", "cancelled"):
             self.foreman.store.put(dict(self.foreman.store.get(THIRD), state=state))

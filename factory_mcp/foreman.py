@@ -457,7 +457,8 @@ class Foreman:
 
     def _wait_for(self, wi, numbers):
         """Hold a ready WorkItem until each issue its `Depends on #n` lines name has merged (ADR-0024).
-        One that ended without a merge goes to a person: only the owner changes the plan's order."""
+        One that ended without a merge goes to a person, who may change the order with
+        factory_set_dependencies (ADR-0042)."""
         for number in numbers:
             status, how = self._dependency(wi["repo"], number)
             if status == "open":
@@ -769,9 +770,12 @@ class Foreman:
             wi = self.store.get(workitem_id)
             if wi is None:
                 raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
-            if wi["state"] not in ("issued", "planned", "ready") or self.store.workorders(workitem_id):
-                raise ToolError(f"{workitem_id} is {wi['state']}; dependencies change only on a WorkItem "
-                                "that no worker has touched")
+            if wi["state"] not in ("issued", "planned", "ready"):
+                raise ToolError(f"{workitem_id} is {wi['state']}; dependencies change only on an issued, planned "
+                                "or ready WorkItem. Answer it with factory_resolve_human instead")
+            if self.store.workorders(workitem_id):
+                raise ToolError(f"{workitem_id} already had a worker pass, so its dependencies stay. Close it and "
+                                "open a new issue to run it in another order")
             repo = wi["repo"]
             for number in depends_on:
                 self._check_dependency(wi, number)

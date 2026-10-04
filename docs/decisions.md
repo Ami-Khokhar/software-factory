@@ -455,6 +455,8 @@ owner fixes it without guessing.
 
 ## ADR-0024 — One approval starts a plan, and `Depends on #n` orders it
 
+**Amended by ADR-0042**: factory_set_dependencies changes the order of a WorkItem no worker has touched.
+
 **Context.** Day Desk turned a goal into issues with one `factory_propose_issue` call per issue,
 then one `factory_approve_issue` call per issue, and Hermes asked the owner before each call: a
 goal of 6 issues cost 12 approvals. The owner reviewed the plan once, in chat; the other approvals
