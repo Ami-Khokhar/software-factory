@@ -100,6 +100,14 @@ class GitHubClientTest(unittest.TestCase):
     def test_a_log_that_cannot_be_read_is_said_not_raised(self):
         self.assertIn("could not be read", self.github.run_log_tail("o/r", 404))
 
+    def test_a_log_read_that_times_out_is_said_not_raised(self):
+        with mock.patch("urllib.request.build_opener", side_effect=TimeoutError("read timed out")):
+            self.assertIn("could not be read", self.github.run_log_tail("o/r", 9))
+
+    def test_a_file_is_read_at_the_ref_asked_for(self):
+        self.github.file("o/r", "f", "abc123")
+        self.assertIn("/repos/o/r/contents/f?ref=abc123", [path for path, _ in LogApi.seen])
+
     def test_a_branch_is_deleted_by_its_ref(self):
         self.github.delete_branch("o/r", "factory-verify/1-0")
         self.assertIn(("/repos/o/r/git/refs/heads/factory-verify/1-0", "DELETE"), LogApi.seen)
@@ -173,6 +181,24 @@ class ForemanTest(unittest.TestCase):
             wi = self.foreman.tick(ID)["workItem"]
         self.assertIn("no finished run of factory-verify", wi["attempts"][0])
         self.assertEqual(self.github.deleted, [(REPO, "factory-verify/1-1")])
+
+    def test_a_failing_run_query_waits_then_fails_the_attempt_at_the_deadline_and_deletes_the_branch(self):
+        from factory_mcp.github import GitHubError
+        self.finish()
+        with mock.patch.object(self.github, "workflow_runs", side_effect=GitHubError(403, "Resource not accessible")):
+            wi = self.foreman.tick(ID)["workItem"]  # before the deadline: wait
+            self.assertEqual((wi["state"], self.github.deleted), ("implementing", []))
+            with mock.patch.object(time, "time", return_value=time.time() + 601):
+                wi = self.foreman.tick(ID)["workItem"]
+        self.assertEqual((wi["state"], wi["remoteVerify"]), ("ready", None))
+        self.assertIn("Resource not accessible", wi["attempts"][0])
+        self.assertIn("docs/RUNBOOK.md", wi["attempts"][0])
+        self.assertEqual(self.github.deleted, [(REPO, "factory-verify/1-1")])
+
+    def test_the_workflow_must_exist_where_the_scratch_branch_is_built(self):
+        self.github.contents[(REPO, REMOTE_VERIFY_WORKFLOW, "base0")] = None  # on main now, not at the base
+        wi = self.finish()
+        self.assertEqual((wi["state"], self.git.pushes), ("human_waiting", []))
 
     def test_a_repo_without_the_workflow_waits_for_the_owner_and_pushes_nothing(self):
         del self.github.contents[(REPO, REMOTE_VERIFY_WORKFLOW)]

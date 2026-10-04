@@ -107,7 +107,7 @@ class GitHub:
                 with urllib.request.urlopen(err.headers["Location"], timeout=60) as response:
                     text = response.read().decode("utf-8", "replace")
             return text[-chars:]
-        except (GitHubError, urllib.error.URLError, KeyError) as exc:
+        except (GitHubError, urllib.error.URLError, OSError, KeyError) as exc:  # OSError: a read that timed out
             return f"(the run's log could not be read: {exc})"
 
     def delete_branch(self, repo, branch):
@@ -116,10 +116,11 @@ class GitHub:
     def repository(self, repo):
         return self._request("GET", f"{self.api}/repos/{repo}")[0]
 
-    def file(self, repo, path):
-        """A file's text on the default branch, or None if there is no such file."""
+    def file(self, repo, path, ref=None):
+        """A file's text on the default branch (or at `ref`), or None if there is no such file."""
+        query = "?" + urllib.parse.urlencode({"ref": ref}) if ref else ""
         try:
-            doc = self._request("GET", f"{self.api}/repos/{repo}/contents/{urllib.parse.quote(path)}")[0]
+            doc = self._request("GET", f"{self.api}/repos/{repo}/contents/{urllib.parse.quote(path)}{query}")[0]
         except GitHubError as err:
             if err.status == 404:
                 return None

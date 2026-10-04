@@ -958,8 +958,9 @@ looks for the finished run and stores the wait as `WorkItem.remoteVerify`, so th
 blocks. Pass: delete the scratch branch, then push `factory/<issue>` and open the PR as before,
 with the run as evidence. Failure: delete the branch and record a failed attempt whose finding is
 the log tail, so the next WorkOrder gets it; it counts in the pass budget. No finished run after
-`FACTORY_REMOTE_VERIFY_SECONDS` (default 1800): a failed attempt too. A repo without the workflow
-file goes to `human_waiting` before any push, with no attempt used. The workflow is not written by
+`FACTORY_REMOTE_VERIFY_SECONDS` (default 1800): a failed attempt too. A repo whose base commit has no workflow
+file goes to `human_waiting` before any push, with no attempt used. A run query that fails (a token
+without Actions read) is waited out until that deadline, then fails the attempt and deletes the branch. The workflow is not written by
 bootstrap: `.github/` is the owner's, so the runbook gives the file and the owner merges it.
 
 **Consequence.** The gate must pass on macOS too, and pr-gatekeeper fixes its `gates` job to

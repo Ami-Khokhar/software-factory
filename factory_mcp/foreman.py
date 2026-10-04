@@ -616,7 +616,8 @@ class Foreman:
         pending = wi.get("remoteVerify")
         repo = wi["repo"]
         if pending is None:
-            if self.github.file(repo, REMOTE_VERIFY_WORKFLOW) is None:  # no run could ever start
+            base = patch.get("baseSha") or (order["headSha"] if order["kind"] == "fix" else order["baseSha"])
+            if self.github.file(repo, REMOTE_VERIFY_WORKFLOW, base) is None:  # the scratch branch is built on it
                 reason = (f"{repo} has no {REMOTE_VERIFY_WORKFLOW}, which runs its verify on a macOS runner: "
                           "add it (docs/RUNBOOK.md, Remote verify setup), then retry")
                 return self._write(wi, dict(wi, state="human_waiting", activeWorkOrderId=None,
@@ -630,15 +631,24 @@ class Foreman:
             wi = self._write(wi, dict(wi, remoteVerify={"branch": branch, "sha": sha, "startedAt": now()}),
                              "remote_verify_started", branch=branch, sha=sha)
             return wi, [], [], True
-        runs = [run for run in self.github.workflow_runs(repo, pending["sha"], "factory-verify")
-                if run["status"] == "completed"]
         since = calendar.timegm(time.strptime(pending["startedAt"], "%Y-%m-%dT%H:%M:%SZ"))
-        if not runs and time.time() - since <= self.config.remote_verify_seconds:
+        late = time.time() - since > self.config.remote_verify_seconds
+        runs, query_error = [], None
+        try:
+            runs = [run for run in self.github.workflow_runs(repo, pending["sha"], "factory-verify")
+                    if run["status"] == "completed"]
+        except GitHubError as exc:  # the deadline applies whatever the query does
+            query_error = str(exc)
+            self.store.log("remote_verify_query_failed", {"error": query_error}, wi["id"])
+        if not runs and not late:
             return wi, [], [], True
         try:  # the scratch branch has done its job; a stale one is harmless, so a failure is only logged
             self.github.delete_branch(repo, pending["branch"])
         except GitHubError as exc:
             self.store.log("scratch_branch_not_deleted", {"branch": pending["branch"], "error": str(exc)}, wi["id"])
+        if query_error:
+            return wi, [f"remote verify: the runs of factory-verify could not be read ({query_error}); check "
+                        "that FACTORY_GITHUB_TOKEN may read Actions (docs/RUNBOOK.md, Remote verify setup)"], [], False
         if not runs:
             return wi, [f"remote verify: no finished run of factory-verify on {pending['sha'][:12]} after "
                         f"{self.config.remote_verify_seconds // 60} min; check that workflow's runs"], [], False

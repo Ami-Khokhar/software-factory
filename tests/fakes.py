@@ -119,7 +119,10 @@ class FakeGitHub:
         return dict({"full_name": repo, "default_branch": "main", "archived": False,
                      "permissions": {"push": True}}, **self.repos.get(repo, {}))
 
-    def file(self, repo, path):
+    def file(self, repo, path, ref=None):
+        """The file on the default branch; `contents[(repo, path, ref)]` overrides it at that ref."""
+        if (repo, path, ref) in self.contents:
+            return self.contents[(repo, path, ref)]
         return self.contents.get((repo, path))
 
     def branch_head(self, repo, branch):
