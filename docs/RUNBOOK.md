@@ -279,6 +279,11 @@ and that the `factory-update` job names: `/usr/bin/python3 -m pip install -r req
   `rebuild_skipped`.
 - **Blocked: `verify exited 1`.** The repo's tests failed in the sandbox. Run the verify command
   yourself. If the tests fail on `main` too, fix `main` first.
+- **Blocked: `verify exited 127` or a platform error (xcodebuild, a simulator).** The worker
+  sandbox is Debian Linux with git, python3, node and ripgrep, no macOS tools and no secrets
+  (`worker/Dockerfile`). The verify cannot pass there, so a retry only spends passes (ADR-0044).
+  Day Desk says so and offers the workarounds in the skill's `environment.md`: a verify that runs
+  on Linux, a split that touches only files a Linux check covers, your own local run, or close.
 - **Blocked: `docker is not available`.** Start OrbStack, then `factory retry <id> "docker was down"`.
 - **Blocked: each attempt ran out of time.** The issue is likely too big for one pass, and a timed-out
   pass keeps none of its work, so a retry is likely to run out too. Ask Day Desk to split it into
@@ -370,6 +375,12 @@ checkout, edit the source path in `~/.hermes/profiles/day-desk/distribution.yaml
 `~/.local/share/software-factory/tenant/hermes`.
 The deploy does not restart Day Desk's gateway, because the job runs inside it; a sandbox change
 reaches new shell sessions at once, and `hermes -p day-desk gateway restart` is for anything else.
+
+When you reply to an escalation, Day Desk first reads the failure and the repo's verify command.
+If the failure is an environment limit, it does not retry: it explains why and offers workarounds
+for you to pick (ADR-0044). It also warns you before the first approval in a repo whose verify
+needs a platform the worker lacks. It reads this from the skill's `environment.md`, which you
+update when `worker/Dockerfile` or the gate changes.
 
 Day Desk has every Hermes toolset (ADR-0041). Its terminal, file and code tools run in the
 sandbox below; its browser and computer use act on your Mac as you. It cannot tick or take in a WorkItem itself (factory-mcp does),
