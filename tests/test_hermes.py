@@ -23,10 +23,11 @@ class ProfileTest(unittest.TestCase):
 
     def test_day_desk_drives_with_the_agent_token_and_runs_the_rest_on_the_owner_token(self):
         """ADR-0030: the driving tools run on the agent token, which makes factory-mcp list only
-        them. ADR-0041: the other tools run on the owner's token, also with no yes per call. A new
-        tool is added here on purpose."""
+        them, so the profile keeps no include list to go stale (ADR-0048). ADR-0041: the other
+        tools run on the owner's token, also with no yes per call. A new tool is added here on
+        purpose."""
         self.assertEqual((DRIVE["trust"], DRIVE["headers"]["Authorization"]), ("full", "Bearer ${FACTORY_AGENT_TOKEN}"))
-        self.assertEqual(set(DRIVE["tools"]["include"]), tools.AGENT_TOOLS)
+        self.assertNotIn("tools", DRIVE)  # the token's AGENT_TOOLS is the list (ADR-0048)
         self.assertEqual((OWNER["trust"], OWNER["headers"]["Authorization"]), ("full", "Bearer ${FACTORY_MCP_TOKEN}"))
         real = set(tools.build(None, None))
         self.assertEqual(set(OWNER["tools"]["include"]), real - tools.AGENT_TOOLS - {"factory_tick", "factory_intake"})
@@ -35,7 +36,7 @@ class ProfileTest(unittest.TestCase):
         text = (PROFILE / "skills" / "software-factory" / "SKILL.md").read_text()
         self.assertEqual(yaml.safe_load(text.split("---")[1])["name"], "software-factory")
         self.assertLessEqual(set(re.findall(r"factory_[a-z_]+", text)),
-                             set(DRIVE["tools"]["include"]) | set(OWNER["tools"]["include"]))
+                             set(tools.AGENT_TOOLS) | set(OWNER["tools"]["include"]))
 
     def test_the_install_asks_for_every_secret_the_config_uses(self):
         manifest = yaml.safe_load((PROFILE / "distribution.yaml").read_text())

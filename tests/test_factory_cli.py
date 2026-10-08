@@ -121,18 +121,23 @@ class UpdateTest(unittest.TestCase):
         defaults = {"hermes profile show": subprocess.CompletedProcess([], 0, shown, "")}
 
         def run(*cmd, **_):
-            result = {**defaults, **(results or {})}.get(" ".join(cmd[:3]), subprocess.CompletedProcess([], 0, "", ""))
-            if isinstance(result, Exception):
-                raise result
-            return result
+            text = " ".join(str(part) for part in cmd)
+            found = next((value for key, value in (results or {}).items() if text.startswith(key)), None)
+            if found is None:  # no exact result: the defaults, then success
+                found = next((value for key, value in defaults.items() if text.startswith(key)),
+                             subprocess.CompletedProcess([], 0, "", ""))
+            if isinstance(found, Exception):
+                raise found
+            return found
         with mock.patch.object(cli, "run", side_effect=run) as ran, contextlib.redirect_stdout(printed):
             cli.cmd_update([])
         return [call.args for call in ran.call_args_list], printed.getvalue()
 
     def test_a_change_to_day_desk_updates_its_profile_and_an_unrelated_one_does_not(self):
         commands, _ = self.deploy_with("tenant/hermes/skills/software-factory/SKILL.md", "new skill\n")
-        self.assertEqual(commands, [("hermes", "profile", "show", "day-desk"),
-                                    ("hermes", "profile", "update", "day-desk", "-y")])
+        self.assertEqual(commands[:2], [("hermes", "profile", "show", "day-desk"),
+                                        ("hermes", "profile", "update", "day-desk", "-y")])
+        self.assertEqual(commands[2][:5], ("hermes", "-p", "day-desk", "config", "get"))
         commands, _ = self.deploy_with("notes.txt", "x\n")
         self.assertEqual(commands, [])
 
@@ -141,10 +146,20 @@ class UpdateTest(unittest.TestCase):
         self.assertIn(("docker", "build", "-q", "-t", "day-desk-sandbox:1",
                        str(self.deploy / "tenant" / "hermes" / "sandbox")), commands)
 
-    def test_a_config_change_is_reported_for_a_hand_merge(self):
-        _, printed = self.deploy_with("tenant/hermes/config.yaml", "mcp_servers: {}\n")
-        self.assertIn("tenant/hermes/config.yaml changed", printed)
-        self.assertIn("merge the change into it by hand", printed)
+    def test_a_config_change_removes_the_driving_tool_list_the_token_replaces(self):
+        commands, printed = self.deploy_with("tenant/hermes/config.yaml", "mcp_servers: {}\n", results={
+            "hermes -p day-desk config get": subprocess.CompletedProcess([], 0, '["factory_status"]', "")})
+        self.assertIn(("hermes", "-p", "day-desk", "config", "unset",
+                       "mcp_servers.factory_drive.tools.include"), commands)
+        self.assertIn("removed mcp_servers.factory_drive.tools.include", printed)
+        self.assertIn("merge any other change into it by hand", printed)
+
+    def test_a_config_change_with_no_driving_tool_list_runs_no_unset(self):
+        commands, printed = self.deploy_with("tenant/hermes/config.yaml", "mcp_servers: {}\n", results={
+            "hermes -p day-desk config get": subprocess.CompletedProcess([], 1, "", "Config key not set")})
+        self.assertNotIn(("hermes", "-p", "day-desk", "config", "unset",
+                          "mcp_servers.factory_drive.tools.include"), commands)
+        self.assertNotIn("removed mcp_servers.factory_drive.tools.include", printed)
 
     def test_a_failing_profile_update_fails_the_deploy_loudly(self):
         failed = subprocess.CompletedProcess([], 1, "", "Error: no such profile 'day-desk'")

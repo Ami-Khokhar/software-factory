@@ -85,13 +85,32 @@ class ResolveHumanTest(unittest.TestCase):
         self.foreman.resolve_human(ID, "retry", "owner: once more", "day-desk", agent=True, owner_asked=True)
         self.assertEqual(self.tick()["state"], "implementing")
 
-    def test_owner_asked_is_for_day_desks_retry_only(self):
+    def test_owner_asked_is_day_desks_flag_and_the_owner_calls_without_it(self):
         self.block()
-        for kwargs in ({"agent": True}, {"agent": False}):
-            with self.assertRaisesRegex(ToolError, "ownerAsked is for Day Desk's retry"):
-                self.foreman.resolve_human(ID, "close", "n", "x", owner_asked=True, **kwargs)
-        with self.assertRaisesRegex(ToolError, "ownerAsked is for Day Desk's retry"):
+        with self.assertRaisesRegex(ToolError, "ownerAsked is Day Desk's flag"):
             self.foreman.resolve_human(ID, "retry", "n", "amteshwar", owner_asked=True)
+        wi = self.foreman.resolve_human(ID, "close", "Not worth it", "amteshwar")
+        self.assertEqual(wi["state"], "cancelled")
+
+    def test_an_owner_asked_close_answers_a_workitem_day_desk_already_answered(self):
+        self.block()
+        self.foreman.resolve_human(ID, "retry", "try again", "day-desk", agent=True)  # its one answer
+        self.block()
+        with self.assertRaisesRegex(ToolError, "already resolved"):
+            self.foreman.resolve_human(ID, "close", "not worth it", "day-desk", agent=True)
+        wi = self.foreman.resolve_human(ID, "close", "owner: give up on this one", "day-desk", agent=True,
+                                        owner_asked=True)
+        self.assertEqual(wi["state"], "cancelled")
+        detail = [h for h in self.foreman.store.history(ID) if h["action"] == "human_resolved"][-1]["detail"]
+        self.assertTrue(detail["agent"] and detail["ownerAsked"])
+
+    def test_an_owner_asked_regate_sends_the_pr_back_to_the_gate(self):
+        self.gate_says_human()
+        wi = self.foreman.resolve_human(ID, "regate", "owner: send it back", "day-desk", agent=True,
+                                        owner_asked=True)
+        self.assertEqual((wi["state"], wi["blockedOn"]), ("reviewing", None))
+        detail = [h for h in self.foreman.store.history(ID) if h["action"] == "human_resolved"][-1]["detail"]
+        self.assertTrue(detail["agent"] and detail["ownerAsked"])
 
     def test_blocked_escalation_then_retry(self):
         wi = self.block()

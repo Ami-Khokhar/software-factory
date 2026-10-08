@@ -138,8 +138,10 @@ def build(store, foreman, agent=False):
         Tool("factory_resolve_human",
              "Record a person's decision on a WorkItem in human_waiting, blocked or exhausted: retry (the "
              "factory tries again, with the note as a finding; the owner's retry buys a fresh budget of "
-             "passes, Day Desk's does not, unless ownerAsked says the owner asked for this retry in chat: then Day Desk may retry an exhausted or spent one and it buys a fresh budget), regate (back to the gate: a fix the "
-             "person pushed, or the same head when the gate failed itself) or close.",
+             "passes, Day Desk's does not), regate (back to the gate: a fix the person pushed, or the same "
+             "head when the gate failed itself) or close. ownerAsked says the owner asked for this retry, "
+             "regate or close in this chat: then Day Desk may answer a WorkItem it already answered once, "
+             "and a retry may be of an exhausted or spent one and buys a fresh budget.",
              {"type": "object", "required": ["id", "resolution", "note", "by"],
               "additionalProperties": False,
               "properties": {"id": {"type": "string"},
@@ -147,8 +149,8 @@ def build(store, foreman, agent=False):
                              "note": {"type": "string", "minLength": 1},
                              "by": {"type": "string", "minLength": 1, "description": "who decided"},
                              "ownerAsked": {"type": "boolean", "description":
-                                            "Day Desk only, retry only: the owner asked for this retry in this "
-                                            "chat, and the note quotes the owner's words"}}},
+                                            "Day Desk only: the owner asked for this retry, regate or close "
+                                            "in this chat, and the note quotes the owner's words"}}},
              "write", lambda args: {"workItem": foreman.resolve_human(
                  args["id"], args["resolution"], args["note"], args["by"], agent=agent,
                  owner_asked=args.get("ownerAsked", False))}),
@@ -180,9 +182,11 @@ def build(store, foreman, agent=False):
         Tool("factory_set_dependencies",
              "Change which issues a WorkItem waits for, before any worker has touched it: replaces the "
              "'Depends on #n' lines of its issue with the issue numbers given, and [] lets it start at "
-             "once. Use it so independent issues of a plan run side by side. Refused when the WorkItem "
-             "has had a worker pass, when a number is itself, a pull request, missing, closed without a "
-             "merged PR, cancelled or exhausted, or when the change would make a cycle.",
+             "once. Use it so independent issues of a plan run side by side. A WorkItem in human_waiting "
+             "because a dependency ended has no pass, so its order may change too: fix it, then answer it "
+             "with factory_resolve_human retry. Refused when the WorkItem has had a worker pass, when a "
+             "number is itself, a pull request, missing, closed without a merged PR, cancelled or "
+             "exhausted, or when the change would make a cycle.",
              {"type": "object", "required": ["id", "dependsOn", "by"], "additionalProperties": False,
               "properties": {"id": {"type": "string", "description": "owner/repo#issue"},
                              "dependsOn": {"type": "array", "maxItems": MAX_PLAN_ISSUES,

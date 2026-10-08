@@ -64,11 +64,23 @@ class SetDependenciesTest(unittest.TestCase):
         self.foreman.store.put(dict(self.foreman.store.get(FIRST), state="ready"))  # a retry: a pass is on record
         with self.assertRaisesRegex(ToolError, "o/r#200 already had a worker pass, so its dependencies stay"):
             self.set(FIRST, [])
+        self.foreman.store.put(dict(self.foreman.store.get(FIRST), state="human_waiting"))
+        with self.assertRaisesRegex(ToolError, "o/r#200 already had a worker pass, so its dependencies stay"):
+            self.set(FIRST, [])
         for state in ("pr_open", "closed", "cancelled"):
             self.foreman.store.put(dict(self.foreman.store.get(THIRD), state=state))
             with self.assertRaisesRegex(ToolError, f"is {state}; dependencies change only"):
                 self.set(THIRD, [])
         self.assertEqual(self.body(202), f"Depends on #201\n\n{ISSUE_BODY}")
+
+    def test_a_human_waiting_workitem_with_no_pass_may_change_its_order(self):
+        # Agentspace#5: its dependency was cancelled and replaced, so the order was fixable before a pass.
+        self.foreman.store.put(dict(self.foreman.store.get(THIRD), state="human_waiting",
+                                    blockedOn="this issue depends on #201, which ended cancelled"))
+        self.set(THIRD, [200], by="day-desk", agent=True)
+        self.assertEqual(self.body(202), f"Depends on #200\n\n{ISSUE_BODY}")
+        wi = self.foreman.resolve_human(THIRD, "retry", "wait for the replacement", "day-desk", agent=True)
+        self.assertEqual((wi["state"], wi["blockedOn"]), ("ready", None))
 
     def test_a_dependency_must_be_an_open_issue_of_the_same_repo_that_has_not_ended(self):
         self.github.add_issue(REPO, 300, state="closed")

@@ -713,11 +713,13 @@ class Foreman:
         """A person's answer to human_waiting, blocked or exhausted (ADR-0006): retry, regate or close.
         Day Desk, driving (`agent`), answers each WorkItem once; after that the owner decides (ADR-0030).
         A person's retry starts a fresh budget of passes and Day Desk's keeps the budget it has (ADR-0035),
-        so Day Desk may not retry a WorkItem that used its budget on its own. When the owner asked for the
-        retry in chat (`owner_asked`, ADR-0043), it is the owner's decision: it buys a fresh budget and
-        does not use up Day Desk's one answer."""
-        if owner_asked and not (agent and resolution == "retry"):
-            raise ToolError("ownerAsked is for Day Desk's retry that the owner asked for; use it with resolution retry")
+        so Day Desk may not retry a WorkItem that used its budget on its own. When the owner asked in chat
+        (`owner_asked`, ADR-0043, extended by ADR-0046), it is the owner's decision, not Day Desk's: it
+        answers a WorkItem Day Desk already answered, for any of the three resolutions, and a retry buys
+        a fresh budget."""
+        if owner_asked and not agent:
+            raise ToolError("ownerAsked is Day Desk's flag for a decision the owner asked for in chat; the "
+                            "owner's own call does not need it")
         if not self.store.acquire(workitem_id, self.holder):
             raise ToolError(f"{workitem_id} is being ticked; try again")
         try:
@@ -811,8 +813,10 @@ class Foreman:
 
     def set_dependencies(self, workitem_id, depends_on, by, agent=False):
         """Replace the `Depends on #n` lines of a WorkItem no worker has touched (ADR-0042), so
-        independent issues of a plan can run side by side. The order lives in the issue body
-        (ADR-0024), so this edits the issue; the next tick reads it, as it reads any edit."""
+        independent issues of a plan can run side by side. A WorkItem waiting on a dependency that
+        ended is human_waiting with no pass, so its order may change too (ADR-0047). The order lives
+        in the issue body (ADR-0024), so this edits the issue; the next tick reads it, as it reads
+        any edit."""
         if not isinstance(by, str) or not by.strip():
             raise ToolError("changing dependencies needs the name of the person who asked")
         if (not isinstance(depends_on, list) or len(depends_on) > MAX_PLAN_ISSUES
@@ -827,9 +831,9 @@ class Foreman:
             wi = self.store.get(workitem_id)
             if wi is None:
                 raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
-            if wi["state"] not in ("issued", "planned", "ready"):
-                raise ToolError(f"{workitem_id} is {wi['state']}; dependencies change only on an issued, planned "
-                                "or ready WorkItem. Answer it with factory_resolve_human instead")
+            if wi["state"] not in ("issued", "planned", "ready", "human_waiting"):
+                raise ToolError(f"{workitem_id} is {wi['state']}; dependencies change only on an issued, planned, "
+                                "ready or human_waiting WorkItem. Answer it with factory_resolve_human instead")
             if self.store.workorders(workitem_id):
                 raise ToolError(f"{workitem_id} already had a worker pass, so its dependencies stay. Close it and "
                                 "open a new issue to run it in another order")

@@ -92,9 +92,12 @@ issue.
 
 When issues of the plan do not build on each other, free them in the same turn: call
 factory_set_dependencies with the WorkItem id, the issue numbers it must wait for as `dependsOn`
-(`[]` for none) and the owner's name as `by`. Use it only on a WorkItem that is `ready` and has
-no worker pass yet. The factory refuses the rest, a dependency that ended, and a cycle: give the
-reason word for word. Tell the owner which issues now run side by side.
+(`[]` for none) and the owner's name as `by`. Use it on a WorkItem that is `ready` or
+`human_waiting` and has no worker pass yet. When a replacement plan cancels an issue that other
+open issues depend on, re-point those issues in the same turn, then answer each with
+factory_resolve_human retry so it waits on the new plan. The factory refuses a WorkItem with a
+worker pass, a dependency that ended, and a cycle: give the reason word for word. Tell the owner
+which issues now run side by side.
 
 For one issue that the owner wants to read on GitHub before it starts, call factory_propose_issue
 instead. It opens the issue labelled `factory:proposed`; nothing starts until "Start an issue".
@@ -121,12 +124,13 @@ A factory-watch alert names a WorkItem that waits on the owner. When the owner r
 3. Call factory_resolve_human with the id, the choice, the owner's own words as the note, and the
    owner's name as `by`.
 
-When the WorkItem is `exhausted`, or a `retry` would go past its budget of passes, the tool
-refuses unless the owner, in this chat, asked to retry that WorkItem. Then set `ownerAsked` true
-on a `retry`, and quote the owner's words as the note. The retry buys a fresh budget of passes.
-Never set `ownerAsked` for a retry you chose yourself, and never in the factory-drive job. Before
-you retry, say it first when the cause is an environment limit, for example a verify the Linux
-worker cannot run: a retry will fail the same way.
+When the WorkItem is `exhausted`, a `retry` would go past its budget of passes, or you already
+answered it once, the tool refuses unless the owner, in this chat, asked for that retry, regate or
+close. Then set `ownerAsked` true, quote the owner's words as the note, and make the call. A retry
+buys a fresh budget of passes, and an owner-asked answer does not use up your one answer. Never
+set `ownerAsked` for a choice you made yourself, and never in the factory-drive job. Before you
+retry, say it first when the cause is an environment limit, for example a verify the Linux worker
+cannot run: a retry will fail the same way.
 
 When the reason says each attempt ran out of time, the issue is too big for one pass, and a retry
 is likely to run out too. Offer a split instead: plan smaller issues for the same goal, as in
