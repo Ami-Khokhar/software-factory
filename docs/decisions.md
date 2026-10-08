@@ -893,6 +893,8 @@ changes: `waitingOn` keeps its meaning and the dependencies stay in the issue bo
 
 ## ADR-0043 — Day Desk may retry a spent WorkItem when the owner asks in chat
 
+**Extended by ADR-0046** to `close` and `regate`.
+
 **Context.** ADR-0035 said Day Desk may not retry a WorkItem that used its budget of passes, so
 `exhausted` waited for `factory retry` on the Mac. The owner hit this on Ami-Khokhar/ideadump#2:
 the owner was in Telegram, asked for the retry, and Day Desk had to refuse.
@@ -971,3 +973,66 @@ a passing patch (scratch branch, then the PR's gate run). The scratch branch liv
 repo for a few minutes, and a crash may leave one: it is harmless and the next push replaces it.
 The log tail is model-influenced text: it travels as data, like every finding (ADR-0007). Not
 tested against a real macOS run: the workflow in the runbook was not run.
+
+---
+
+## ADR-0046 — Day Desk may close or regate when the owner asks in chat
+
+**Context.** ADR-0030 lets Day Desk answer each WorkItem once, and ADR-0043 gave the owner's
+in-chat retry its own path. On 8 October 2026 the owner was in Telegram with
+Ami-Khokhar/Agentspace#12: Day Desk had answered it once already, the owner said "yes" to replacing
+it with a smaller plan, and the factory refused Day Desk's close. The owner had to run
+`factory close Ami-Khokhar/Agentspace#12` on the Mac, and #13, which waited on #12, waited on that.
+
+**Decision.** `factory_resolve_human`'s `ownerAsked` applies to `retry`, `regate` and `close`. With
+the agent token and the flag, it answers a WorkItem Day Desk already answered once, and, for a
+retry, an exhausted WorkItem or one past its budget (which then buys a fresh budget). The skill
+sets the flag only when the owner, in the current chat, asked for that choice, with the owner's
+words as the note; the factory-drive job never sets it. The owner's own call does not need the flag.
+A wrong `close` cancels a WorkItem the owner can open again; it does not merge, push or spend.
+
+**Consequence.** The owner's decision in chat is executable without a terminal command. The flag
+is still a claim the code cannot check, so the guard is the skill and the audit row holds `agent`
+and `ownerAsked`, as in ADR-0043. An owner-asked answer does not use up ADR-0030's one answer.
+
+---
+
+## ADR-0047 — A WorkItem stranded on a dependency that ended may change its order
+
+**Context.** ADR-0042 lets factory_set_dependencies rewrite the `Depends on #n` lines of a WorkItem
+no worker has touched, but it allowed only the states issued, planned and ready. On 8 October 2026
+Ami-Khokhar/Agentspace#5 depended on #4; the owner replaced and cancelled #4 with #11–#14, so #5
+went human_waiting with no worker pass, and Day Desk could not point it at #14. The owner edited
+the GitHub issue body by hand. Ami-Khokhar/Agentspace#13 hit the same wall that evening.
+
+**Decision.** `set_dependencies` also accepts a human_waiting WorkItem, and still refuses one that
+has had a worker pass. It changes the issue's dependency lines and clears a live `waitingOn`; the
+WorkItem stays human_waiting until a person or Day Desk answers it with `factory_resolve_human`
+retry, which reads the new lines on the next tick.
+
+**Consequence.** The stranded-dependency case is fixable from Telegram: change the order, then
+retry. The skill says so and names the replacement issues. A human_waiting WorkItem that ended for
+another reason with no pass can also change its order; that is safe because no worker has built on
+it. This extends ADR-0042.
+
+---
+
+## ADR-0048 — Day Desk's driving tool list comes from the agent token, not its config
+
+**Context.** factory-mcp lists only `tools.AGENT_TOOLS` under `FACTORY_AGENT_TOKEN` (ADR-0030), and
+Day Desk's profile also enumerated those tools in `mcp_servers.factory_drive.tools.include`.
+`hermes profile update` keeps the live config.yaml, because it also holds the owner's model and
+Telegram settings, and the deploy only printed a note to merge the change by hand. That copy went
+stale: `factory_set_dependencies` merged into the template on 4 October 2026 and never reached the
+running Day Desk, so on 8 October the owner edited Ami-Khokhar/Agentspace#5 on GitHub by hand.
+
+**Decision.** `tenant/hermes/config.yaml` keeps no `tools.include` for `factory_drive`: the agent
+token is the guard and the source of the list, so a new AGENT_TOOL needs no profile edit. When
+`tenant/hermes/` changes, `factory update` removes `mcp_servers.factory_drive.tools.include` from
+the live profile with `hermes config unset` if it is set, and says so. The owner-token server keeps
+its include list: there the list is a real restriction, and setup, secrets and lessons stay
+owner-only (ADR-0041).
+
+**Consequence.** A driving tool reaches Day Desk within one deploy with no hand merge. The
+factory-owned key is safe to remove; every other live setting is untouched. An install that never
+runs the update can remove the list by hand (RUNBOOK).

@@ -322,8 +322,11 @@ build or profile update stops the deploy with its message, and the next update r
 the deploy record, which names the last commit for which every step succeeded. The first update
 starts the record at the commit already deployed, so build the images and install the profile from
 the deployed checkout once by hand, as below. A retry restarts factory-mcp only when it rebuilds the
-worker image, which the restart follows. A change to `tenant/hermes/config.yaml` is only reported: the
-live config also holds your model and Telegram settings, so merge it by hand.
+worker image, which the restart follows. A change to `tenant/hermes/config.yaml` is reported: the
+live config also holds your model and Telegram settings, so merge the rest by hand. The one
+factory-owned key the update changes by itself is `mcp_servers.factory_drive.tools.include`, which
+it removes when present: the agent token already limits Day Desk's driving tools, and a stale copy
+of that list once hid `factory_set_dependencies` (ADR-0048).
 Run `factory update` yourself to deploy at once. The
 tests need the packages in `requirements.txt`, installed once for the Python that runs `factory`
 and that the `factory-update` job names: `/usr/bin/python3 -m pip install -r requirements.txt`.
@@ -476,6 +479,7 @@ make the same changes as `tenant/hermes/config.yaml`:
 
 ```bash
 hermes profile update day-desk
+hermes -p day-desk config unset mcp_servers.factory_drive.tools.include  # its agent token lists the driving tools (ADR-0048)
 hermes -p day-desk config set terminal.backend docker
 hermes -p day-desk config set terminal.docker_image day-desk-sandbox:1
 hermes -p day-desk config set terminal.container_persistent false

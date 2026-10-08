@@ -91,8 +91,10 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   person's retry (ADR-0035).** The budget of `FACTORY_MAX_PASSES` counts only the
   passes after it. WorkItems stored before this field have none; readers treat
   that as 0. The tool `factory_resolve_human` takes an optional `ownerAsked`
-  boolean (Day Desk's retry only): it buys a fresh budget like a person's retry,
-  and the history row of the answer holds `agent` and `ownerAsked` (ADR-0043).
+  boolean: Day Desk sets it only when the owner asked in chat for this retry,
+  regate or close. It answers a WorkItem Day Desk already answered once, and a
+  retry buys a fresh budget like a person's retry; the history row of the answer
+  holds `agent` and `ownerAsked` (ADR-0043, extended by ADR-0046).
 - **`WorkItem.description` is the issue's text outside its Acceptance section
   (ADR-0038).** Intake freezes it with `goal` and `acceptance`, and each
   WorkOrder carries it to the worker as data. WorkItems stored before this field
@@ -102,7 +104,8 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   dispatched. The Foreman sets it to null when the wait ends. WorkItems stored
   before this field have no `waitingOn`; readers treat that as null, so the
   store needs no migration. `factory_set_dependencies` rewrites the issue's
-  `Depends on #n` lines (ADR-0042) and clears `waitingOn`; the schema does not
+  `Depends on #n` lines (ADR-0042) and clears `waitingOn`; it also accepts a
+  `human_waiting` WorkItem with no worker pass (ADR-0047). The schema does not
   change.
 - **An issue's `Worker: <id>` lines choose its worker (ADR-0029).** They are read
   from the issue on each tick, like `Depends on #n`, and are not stored in the

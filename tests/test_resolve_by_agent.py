@@ -58,6 +58,15 @@ class ResolveByAgentTest(unittest.TestCase):
         self.assertTrue(self.may_resolve())
         self.assertEqual(self.resolve(self.agent)["workItem"]["state"], "ready")
 
+    def test_an_owner_asked_close_via_the_tool_frees_a_workitem_day_desk_answered(self):
+        self.resolve(self.agent)  # its one answer
+        self.block_again()
+        asked = {"id": "o/r#1", "resolution": "close", "by": "day-desk", "note": "owner: close it",
+                 "ownerAsked": True}
+        self.assertEqual(self.agent["factory_resolve_human"].fn(asked)["workItem"]["state"], "cancelled")
+        detail = [h for h in self.store.history("o/r#1") if h["action"] == "human_resolved"][-1]["detail"]
+        self.assertTrue(detail["agent"] and detail["ownerAsked"])
+
 
 if __name__ == "__main__":
     unittest.main()

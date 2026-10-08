@@ -11,17 +11,9 @@ mcp_servers:
     headers:
       Authorization: "Bearer ${FACTORY_AGENT_TOKEN}"  # factory-mcp lists only the driving tools for it
     trust: full  # no yes per call: factory-mcp's guards bound these tools, and the token names the caller
-    tools:
-      include:
-        - factory_status
-        - factory_repo_check
-        - factory_lessons
-        - factory_report
-        - factory_approve_issue
-        - factory_propose_issue
-        - factory_start_plan
-        - factory_set_dependencies
-        - factory_resolve_human
+    # No tools.include here: the token already limits the list to factory_mcp.tools.AGENT_TOOLS, and a
+    # hand-merged copy of that list once hid a new driving tool (ADR-0048). `factory update` removes
+    # one from a profile installed before that.
   factory:
     url: "http://127.0.0.1:43125/mcp"
     headers:

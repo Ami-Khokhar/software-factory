@@ -45,7 +45,8 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
   pushes one README-only commit to an empty repo's default branch; the owner merges the PR before
   normal worker passes start (ADR-0019). One owner approval of `factory_start_plan` opens all the
   issues of a plan, and they run in order (ADR-0024); `factory_set_dependencies` then frees the
-  independent ones before a worker starts them (ADR-0042).
+  independent ones before a worker starts them, and re-points one stranded on a dependency that
+  ended (ADR-0042, ADR-0047).
 
 ## What crosses each boundary
 
@@ -123,7 +124,7 @@ A tick comes from the background loop or from `factory_tick`.
      merges. Then `closed`.
 3. **Entering `human_waiting`, `blocked` or `exhausted`** comments on the issue and mentions the
    owner. `factory watch` also tells the owner in Telegram of `human_waiting`, `blocked` and
-   `exhausted`: Day Desk can resolve the first two on its own and the owner can answer all three; Day Desk answers `exhausted` only when the owner asked for the retry in chat (ADR-0035, ADR-0043).
+   `exhausted`: Day Desk can resolve the first two on its own and the owner can answer all three; Day Desk answers `exhausted`, or a WorkItem it already answered once, only when the owner asked for that choice in chat (ADR-0035, ADR-0043, ADR-0046).
 
 ## State machine
 
@@ -152,7 +153,7 @@ The states are the enum in `schemas/workitem.schema.json`.
 | any live state | the issue closed without a merged PR | `cancelled` |
 | `ready`, `changes_requested` | `FACTORY_MAX_PASSES` WorkOrders were dispatched since the last person's retry | `exhausted` |
 | `human_waiting`, `blocked` | `factory_resolve_human`: retry, regate or close | `ready` or `changes_requested`, `reviewing`, or `cancelled`; a regate with no gate run going and no new verdict edits the PR body's `<!-- factory regate n -->` line, which starts a gate run (ADR-0034) |
-| `exhausted` | the owner's `factory_resolve_human`: retry or close; Day Desk is refused, unless `ownerAsked` marks a retry the owner asked for in chat (ADR-0043) | `ready` or `changes_requested` with a fresh budget of passes, or `cancelled` (ADR-0035) |
+| `exhausted` | the owner's `factory_resolve_human`: retry or close; Day Desk is refused, unless `ownerAsked` marks what the owner asked for in chat (ADR-0043, ADR-0046) | `ready` or `changes_requested` with a fresh budget of passes, or `cancelled` (ADR-0035) |
 
 `closed` and `cancelled` are terminal, and so is `exhausted` until the owner retries it.
 `human_waiting` is not: it waits for the owner's decision (ADR-0006).
@@ -203,7 +204,7 @@ The states are the enum in `schemas/workitem.schema.json`.
 | The budget ends a WorkItem | `Foreman.dispatch` | `test_actions`: `test_budget_exhausts` |
 | A plan opens no issue when one of its issues fails a check | `Foreman.start_plan` | `test_plan`: `test_one_issue_that_fails_a_check_opens_no_issue` |
 | An issue starts only after each `Depends on #n` issue merged | `Foreman._wait_for` | `test_plan`: `test_a_dependent_waits_while_its_dependency_is_open_and_starts_once_it_merged`, `test_a_dependency_that_ends_without_a_merge_sends_the_dependent_to_a_person` |
-| Dependencies change only before a worker starts, in one repo, without a cycle or an ended issue | `Foreman.set_dependencies` | `test_dependencies`: `test_a_workitem_no_worker_has_touched_may_change_and_any_other_may_not`, `test_a_dependency_must_be_an_open_issue_of_the_same_repo_that_has_not_ended`, `test_a_change_that_would_make_a_cycle_is_refused` |
+| Dependencies change only before any worker pass, in one repo, without a cycle or an ended issue; a stranded `human_waiting` one may change too | `Foreman.set_dependencies` | `test_dependencies`: `test_a_workitem_no_worker_has_touched_may_change_and_any_other_may_not`, `test_a_human_waiting_workitem_with_no_pass_may_change_its_order`, `test_a_dependency_must_be_an_open_issue_of_the_same_repo_that_has_not_ended`, `test_a_change_that_would_make_a_cycle_is_refused` |
 | The harness never touches the host | `worker/runner.py` | `test_worker_runner`: `test_the_harness_gets_a_copy_and_never_the_checkout`, `test_hooks_and_filters_the_harness_plants_never_run_on_the_host` |
 | A patch for a remote-verify repo reaches the WorkItem's branch only after its `factory-verify` run passed | `Foreman._remote_verify` | `test_remote_verify`: `test_a_pass_deletes_the_scratch_branch_then_pushes_the_branch_and_opens_the_pr`, `test_a_failure_is_an_attempt_with_the_log_tail_and_the_next_order_carries_it` |
 | Passes of one repo take its checkout in turns, up to `FACTORY_PASSES_PER_REPO` at once | `worker/runner.py` `checkout_lock`, `Foreman.dispatch` | `test_worker_runner`: `test_a_runner_waits_for_the_checkout_while_another_pass_holds_it`; `test_safety`: `test_passes_of_one_repo_run_at_once_up_to_the_limit` |

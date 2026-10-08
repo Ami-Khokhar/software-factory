@@ -545,11 +545,20 @@ def cmd_update(_):
             die(f"update: Day Desk's profile is installed from {source.group(1).strip() if source else 'nowhere'}, "
                 f"not {want}, so an update would copy the wrong files. Install it from {want} (RUNBOOK)")
         must("hermes profile update", "hermes", "profile", "update", "day-desk", "-y")
+        # Day Desk's driving tool list comes from the agent token (ADR-0048). A hand-merged
+        # `tools.include` in the live profile is a stale copy that hides a new AGENT_TOOL, so
+        # remove it. `hermes config get` exits non-zero when the key is absent, so this is a no-op
+        # on the runs after the first.
+        include_key = "mcp_servers.factory_drive.tools.include"
+        if run("hermes", "-p", "day-desk", "config", "get", include_key, "--json").returncode == 0:
+            must("hermes config unset", "hermes", "-p", "day-desk", "config", "unset", include_key)
+            print(f"update: removed {include_key} from Day Desk's profile; the agent token lists its "
+                  "driving tools (ADR-0048)")
     deployed_file.write_text(new + "\n")
     print(f"update: deployed {new[:7]} (was {since[:7]})")
     if changed("tenant/hermes/config.yaml"):
         print("update: tenant/hermes/config.yaml changed. The live ~/.hermes/profiles/day-desk/config.yaml "
-              "keeps your model and Telegram settings, so merge the change into it by hand (RUNBOOK)")
+              "keeps your model and Telegram settings, so merge any other change into it by hand (RUNBOOK)")
 
 
 def cmd_serve(_):
