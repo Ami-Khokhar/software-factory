@@ -33,6 +33,31 @@
       "items": { "$ref": "#/$defs/evidence" }
     },
     "error": { "type": ["string", "null"] },
+    "diagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional bounded timing output for the controller to log, added after v1 shipped: an overall elapsed time, the per-phase breakdown, and a redacted output tail. Older Results without it stay valid, and the producer is not wired yet (the controller reads it when a harness starts sending it).",
+      "required": ["elapsedMs"],
+      "properties": {
+        "elapsedMs": { "type": "integer", "minimum": 0 },
+        "phases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["phase", "elapsedMs"],
+            "properties": {
+              "phase": { "enum": ["checkout", "preparation", "environment setup",
+                                   "harness execution", "patch collection", "verification"] },
+              "elapsedMs": { "type": "integer", "minimum": 0 },
+              "exitCode": { "type": "integer" },
+              "tail": { "type": "string", "maxLength": 4000 }
+            }
+          }
+        },
+        "tail": { "type": "string", "maxLength": 4000 }
+      }
+    },
     "startedAt": { "type": "string", "format": "date-time" },
     "finishedAt": { "type": "string", "format": "date-time" }
   },
