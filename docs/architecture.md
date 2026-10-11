@@ -140,7 +140,7 @@ The states are the enum in `schemas/workitem.schema.json`.
 | `ready`, `changes_requested` | a `Worker:` line names an agent that is not in `FACTORY_WORKERS` | `human_waiting`; nothing is dispatched |
 | `ready` | a `Depends on #n` issue closed without a merged PR, ended `cancelled` or `exhausted`, or does not exist | `human_waiting` |
 | `implementing` | the task completed, the Result is valid and the guards pass | `pr_open`, or `reviewing` when the PR already exists |
-| `implementing` | the task failed, or the Result or a guard failed | back to `ready` (`changes_requested` for a fix) with an `attempts` entry; `blocked` after 2 |
+| `implementing` | the task failed, or the Result or a guard failed | back to `ready` (`changes_requested` for a fix) with an `attempts` entry; `blocked` after 2; a diagnosis that names the environment pauses as `human_waiting` on the first attempt (ADR-0051) |
 | `pr_open` | the gate's check run, or its workflow run when the token cannot read check runs, exists on the head | `reviewing` |
 | `reviewing` | a verdict on the current head: MERGE, CHANGES or HUMAN | `merge_pending`, `changes_requested` or `human_waiting` |
 | `reviewing` | the gate's check run (or workflow run) finished, not cancelled, with no verdict | `human_waiting` |

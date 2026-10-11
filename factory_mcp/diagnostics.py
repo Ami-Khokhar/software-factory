@@ -93,6 +93,15 @@ def diagnose(order, result):
     return {"cause": None, "context": ""}
 
 
+def environment_fault(cause):
+    """Whether a cause names the environment, not the work (ADR-0051): a setup or checkout phase the
+    harness's own diagnostics reported as failed. A failing test is the work, an empty patch is the
+    worker's output, and a harness timeout — a phase that only ran out of the clock — is not evidence
+    against the environment; those keep the normal retry.
+    """
+    return cause == "checkout or setup"
+
+
 def entry(reason, diagnosis):
     """The attempt text the WorkItem and the next WorkOrder carry: the reason plus the sanitized
     diagnosis, or the reason alone when there is nothing to say."""

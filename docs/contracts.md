@@ -137,6 +137,15 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   **Deployment prerequisite:** the producer side comes first — do not make the
   field required or start reading `phases` for decisions until a worker harness
   actually emits it.
+  **A confirmed environment fault pauses (ADR-0051).** When the diagnosis names the
+  environment (`checkout or setup`), the WorkItem stops on the first failed attempt:
+  it goes to `human_waiting` with the repair reason in `blockedOn`, and the Foreman
+  dispatches no worker — a second pass, on whichever worker routing picks, would meet
+  the same broken checkout. A `failing test`, an `empty patch` and a `harness timeout`
+  are not environment faults and keep the normal recovery (back to `ready`, next pass
+  after this one). A person repairs the environment and calls `factory_resolve_human`
+  with `retry`, which buys the next pass as before. No schema changes: the pause rides
+  the states and fields the WorkItem already has.
 - **Unknown properties are rejected** (`additionalProperties: false`) so a cell
   cannot smuggle vendor-specific fields across a boundary.
 

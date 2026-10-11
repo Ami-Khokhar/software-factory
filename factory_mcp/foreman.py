@@ -696,7 +696,9 @@ class Foreman:
     def fail(self, wi, order, reason, diagnosis=None):
         """Record the attempt; two failed attempts block the WorkItem with the evidence. The
         diagnosis (diagnostics.diagnose) rides with the reason: an evidence-backed cause with its
-        sanitized bounded context, nothing when a cause stays unknown."""
+        sanitized bounded context, nothing when a cause stays unknown. A diagnosis that names the
+        environment (diagnostics.environment_fault) pauses the WorkItem on the first attempt
+        instead: a second pass would meet the same broken environment (ADR-0051)."""
         diagnosis = diagnosis or {"cause": None, "context": ""}
         detail = dict(reason=reason, diagnosis=diagnosis["context"], worker=wi.get("worker"))
         if diagnosis["cause"]:
@@ -704,7 +706,14 @@ class Foreman:
         attempts = list(wi.get("attempts") or []) + [diagnostics.entry(reason, diagnosis)]
         new = dict(wi, attempts=attempts, activeWorkOrderId=None, providerTaskId=None, remoteVerify=None,
                    state="changes_requested" if order["kind"] == "fix" else "ready")
-        if len(attempts) >= 2:
+        if diagnostics.environment_fault(diagnosis["cause"]):
+            # A confirmed environment fault pauses for repair (ADR-0051): a second pass, whichever
+            # worker it lands on, would meet the same broken checkout, so nobody runs until a person
+            # repairs it and retries.
+            new.update(state="human_waiting", blockedOn=(
+                f"a worker's environment failed ({diagnosis['cause']}). Repair the environment, "
+                "then call factory_resolve_human with retry; no worker runs until then."))
+        elif len(attempts) >= 2:
             new.update(state="blocked",
                        blockedOn=f"{len(attempts)} worker attempts at the {order['kind']} WorkOrder failed. "
                                  "Fix the cause named in attempts, then call factory_resolve_human.")

@@ -72,7 +72,9 @@ class DiagnosticsTest(unittest.TestCase):
         self.assertIn(ENV_SENTINEL.split("=")[0] + "=<redacted>", log["detail"]["diagnosis"])
         for secret in (ENV_SENTINEL, "PLAINTEXT_KEY=hunter2", TOKEN_SENTINEL):
             self.assertNotIn(secret, json.dumps(log["detail"]))
-        self.assertEqual(set(log["detail"]), {"to", "from", "reason", "worker", "cause", "diagnosis"})
+        # "environment": this fault now pauses too (ADR-0051), so the detail carries the repair text
+        self.assertEqual(set(log["detail"]),
+                         {"to", "from", "reason", "worker", "cause", "diagnosis", "escalation"})
         self.assertIn("diagnosis: checkout or setup: exit 128:", wi["attempts"][0])
 
         # Evidence in one status: the same cause, and nothing else, on the attempt_failed entry.
@@ -156,15 +158,17 @@ class DiagnosticsTest(unittest.TestCase):
         self.assertIn("Fix the cause named in attempts", wi["blockedOn"])
 
     def test_the_next_workorder_carries_the_bounded_diagnosis_without_the_secrets(self):
-        diagnostics = {"elapsedMs": 1500, "phases": [
-            {"phase": "checkout", "elapsedMs": 1200, "exitCode": 128,
-             "tail": f"{ENV_SENTINEL} {TOKEN_SENTINEL} late"}]}
-        self.fail_with(diagnostics, error="git fetch failed")
+        # A failing test, not a checkout fault, so the pass retries and the next order carries the tail
+        diagnostics = {"elapsedMs": 9000, "phases": [
+            {"phase": "harness execution", "elapsedMs": 1000, "exitCode": 0},
+            {"phase": "verification", "elapsedMs": 8000, "exitCode": 1,
+             "tail": f"FAILED {ENV_SENTINEL} {TOKEN_SENTINEL} late"}]}
+        self.fail_with(diagnostics, error="verify exited 1")
         wi, task = self.dispatch()
         order = json.loads(task["input"].split("WorkOrder:\n", 1)[1])
         problem = order["findingsToAddress"][0]["problem"]
         self.assertEqual(order["findingsToAddress"][0]["fingerprint"], "previous-attempt")
-        self.assertIn("diagnosis: checkout or setup: exit 128:", problem)
+        self.assertIn("diagnosis: failing test: exit 1: FAILED", problem)
         self.assertIn("late", problem)  # the relevant tail of the cause
         self.assertNotIn("very-secret-env-value", problem)
         self.assertNotIn(TOKEN_SENTINEL, task["input"])
