@@ -96,10 +96,13 @@ class RunnerTest(unittest.TestCase):
         self.flags = ["--credential", f"{self.auth}:/home/node/.pi/agent"]
         self.mounts = []
         self.harness_runs = []
+        self.sandbox_runs = []
 
         def local_run(sandbox, argv, seconds, mount, harness=False, env=None):
             """Sandbox.run without Docker: the same argv in the mounted directory, marked sandboxed."""
             self.mounts.append(mount)
+            if harness:
+                self.sandbox_runs.append(argv)
             if harness:
                 self.harness_runs.append({
                     "argv": argv,
@@ -110,6 +113,7 @@ class RunnerTest(unittest.TestCase):
                         for name in os.listdir(scratch)}, "mode": Path(scratch).stat().st_mode & 0o777}
                         for scratch, target in sandbox.credentials],
                 })
+            self.sandbox_runs.append(argv)
             done = subprocess.run(argv, cwd=mount, capture_output=True, text=True, timeout=60,
                                   env=dict(os.environ, **SANDBOX_ENV, **(env or {})))
             return done.returncode, done.stdout, done.stderr
@@ -130,11 +134,13 @@ class RunnerTest(unittest.TestCase):
             self.addCleanup(p.stop)
         self.addCleanup(self.tmp.cleanup)
 
-    def run_order(self, mode, kind="implement", repo="o/r", head=None, remote_verify=False):
+    def run_order(self, mode, kind="implement", repo="o/r", head=None, remote_verify=False,
+                  max_lines=600):
         wi = workitem(id="o/r#7", repo=repo, issueNumber=7, goal="Fix the app", headSha=head)
         config = Config(mcp_token="t", repos=frozenset(),
                         remote_verify_repos=frozenset({repo}) if remote_verify else frozenset())
         order = documents.workorder(wi, kind, 0, config, self.base)
+        order["constraints"]["maxChangedLines"] = max_lines
         text = documents.worker_input(order, "factory/7")
         out = io.StringIO()
         cwd = os.getcwd()
@@ -217,6 +223,42 @@ class RunnerTest(unittest.TestCase):
         result, order = self.run_order("nothing")
         self.assertEqual((result["status"], result["error"]), ("failed", "the harness made no change"))
         self.assertEqual(documents.check_result(result, order), [])
+
+    def test_a_whole_pull_request_over_its_limits_fails_before_the_verify(self):
+        """A fix on an open PR is measured with the implementation it follows: the branch's whole
+        diff against the default branch's merge base must fit the WorkOrder (ADR-0040), and the
+        runner refuses it before the verify runs, with the actual size and what remains."""
+        branch = Path(self.tmp.name) / "branch"
+        sh(self.tmp.name, "clone", "-q", str(self.origin), str(branch))
+        sh(branch, "checkout", "-q", "-b", "factory/7")
+        (branch / "notes.txt").write_text("note\n" * 601)  # the prior implementation: 601 lines
+        sh(branch, "add", "-A")
+        sh(branch, "-c", "user.name=w", "-c", "user.email=w@w", "commit", "-qm", "round 1")
+        sh(branch, "push", "-q", "origin", "factory/7")
+        head = sh(branch, "rev-parse", "HEAD")
+        result, _ = self.run_order("fix", kind="fix", head=head)
+        self.assertEqual(result["status"], "failed", result)
+        self.assertIn("603 lines in 2 files", result["error"])
+        self.assertIn("leaves -3 lines", result["error"])
+        phase = self.phases_of(result)["patch collection"]
+        self.assertIn("603 lines in 2 files", phase.get("tail", ""))
+        self.assertNotIn("verification", self.phases_of(result))
+        self.assertEqual(result["evidence"], [])
+        verify_runs = [argv for argv in self.sandbox_runs
+                       if argv[:2] == ["sh", "-c"] and "check.py" in argv[2]]
+        self.assertEqual(verify_runs, [], "the verify ran on an oversized pull request")
+
+    def test_a_whole_pull_request_at_its_limit_is_collected(self):
+        result, order = self.run_order("fix", max_lines=2)  # app.txt: one in, one out
+        self.assertEqual(result["status"], "completed", result.get("error"))
+        self.assertEqual(documents.check_result(result, order), [])
+
+    def test_the_worker_gets_the_whole_pr_size_check(self):
+        result, _ = self.run_order("fix")
+        self.assertEqual(result["status"], "completed", result.get("error"))
+        text = self.harness_runs[0]["argv"][-1]
+        self.assertIn("git diff --shortstat $(git merge-base origin/HEAD HEAD) HEAD", text)
+        self.assertIn("including the commits already on the branch", text)
 
     def test_a_failed_harness_fails_the_pass_before_collecting(self):
         result, _ = self.run_order("fail")

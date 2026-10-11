@@ -43,7 +43,9 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   **must** carry `patch` (format + diff, which `worker/runner.py` returns) and a
   passing test in its evidence. factory-mcp pushes the patch itself, after it
   refuses one that touches a protected path or takes the PR over its size limits;
-  a worker never pushes. The Result is
+  a worker never pushes. The runner rejects an oversized pull request first, before the
+  verify runs: the size is the branch's own diff against its merge base with the
+  default branch, including the commits a fix follows (ADR-0040). The Result is
   the last JSON line of the relay task's output; the Foreman reads nothing else
   the worker prints. This is what makes any harness that can commit a
   first-class worker.
