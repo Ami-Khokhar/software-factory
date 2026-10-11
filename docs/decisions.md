@@ -1036,3 +1036,31 @@ owner-only (ADR-0041).
 **Consequence.** A driving tool reaches Day Desk within one deploy with no hand merge. The
 factory-owned key is safe to remove; every other live setting is untouched. An install that never
 runs the update can remove the list by hand (RUNBOOK).
+
+---
+
+## ADR-0049 — `factory update` verifies Day Desk's tool discovery after a profile update
+
+**Context.** ADR-0048 removed the hand-merged driving tool list, so a profile update is the only
+step between a merged AGENT_TOOL and Day Desk being able to drive it — and until now nothing
+checked that the updated profile actually serves the tools. A profile update that silently drops a
+factory server or a tool again leaves Day Desk blind, just as ADR-0048's stale `tools.include` did,
+while the deploy records success.
+
+**Decision.** When `factory update` updates Day Desk's profile, it verifies before it advances the
+deploy record: it calls `tools/list` on the running factory-mcp for both tokens, and asks the live
+profile (`hermes -p day-desk mcp tools <server>`) what it discovers from `factory_drive` and
+`factory`. The drive server, whose discovery is not filtered, must discover every tool the agent
+token lists; the owner server filters through its tools.include, so there the shipped
+`tenant/hermes/config.yaml` include list must be discovered and each of those tools must really be
+on the owner token's list (an old name fails). Anything missing, a failed profile update, or a
+factory-mcp that answers with no tool list fails the deploy with the missing names. The
+verification only reads; it never writes the profile, and it never prints a token or a setting.
+
+**Consequence.** A deploy record can no longer claim success while Day Desk cannot reach a tool the
+factory just merged; the update retries on the next run with the previous baseline in place. A
+deploy on a machine where factory-mcp is down cannot record success either, which is honest for a
+deploy whose steps must prove the profile works. The tokens stay in the secrets file; nothing new
+to keep in sync. The check needs an installed `hermes` that can list a profile's discovered
+servers; where it cannot, the update fails with the profile update itself already done, and the
+next update retries the whole set of steps.

@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import socket
 import subprocess
 import tempfile
@@ -19,13 +20,44 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
+import factory_mcp.tools  # the factory tools, to compare what the deployed script ships with
+
 LOADER = importlib.machinery.SourceFileLoader(
     "factory_cli", str(Path(__file__).resolve().parent.parent / "scripts" / "factory"))
 cli = importlib.util.module_from_spec(importlib.util.spec_from_loader("factory_cli", LOADER))
 LOADER.exec_module(cli)
 ENV = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
            GIT_COMMITTER_EMAIL="t@t")
+AGENT_TOOLS = factory_mcp.tools.AGENT_TOOLS
 PASS = "import unittest\n\n\nclass T(unittest.TestCase):\n    def test(self):\n        self.assertTrue(True)\n"
+
+
+class McpEndpoint(ThreadingHTTPServer):
+    """A controlled factory-mcp endpoint: tools/list answers what a token's listing names."""
+
+    daemon_threads = True
+    asked = ()
+
+    def answer(self, request):
+        McpEndpoint.asked = self.asked = (*self.asked, request.headers.get("Authorization", ""))
+        names = self.listings.get(request.headers.get("Authorization", ""), None)
+        body = ({"jsonrpc": "2.0", "id": 1, "result": {"tools": [{"name": name} for name in names]}}
+                if names is not None else {"error": "unauthorized"})
+        data = json.dumps(body).encode()
+        request.send_response(200 if names is not None else 401)
+        if names is not None:
+            request.send_header("content-type", "application/json")
+        request.send_header("content-length", str(len(data)))
+        request.end_headers()
+        request.wfile.write(data)
+
+
+class McpRequest(BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.server.answer(self)
+
+    def log_message(self, *args):
+        pass
 
 
 def git(cwd, *args):
@@ -59,13 +91,34 @@ class UpdateTest(unittest.TestCase):
         git(root, "clone", "-q", str(self.origin), str(self.dev))
         self.commit("tests/test_ok.py", PASS)
         git(self.dev, "push", "-q", "origin", "HEAD:main")
+        git(self.dev, "push", "-q", "origin", "HEAD:main")
+        # The template config.yaml, where the deploy reads the owner's include list from, is in the
+        # repo the tests deploy (#188).
+        template = Path(__file__).resolve().parent.parent / "tenant" / "hermes" / "config.yaml"
+        self.commit("tenant/hermes/config.yaml", template.read_text())
+        git(self.dev, "push", "-q", "origin", "HEAD:main")
         git(root, "clone", "-q", str(self.origin), str(self.deploy))
+        self.mcp = McpEndpoint(("127.0.0.1", 0), McpRequest)
+        self.mcp.listings = {"Bearer owner-token": self.include(),
+                             "Bearer agent-token": sorted(AGENT_TOOLS)}
+        threading.Thread(target=self.mcp.serve_forever, daemon=True).start()
+        self.addCleanup(self.mcp.shutdown)
+        port = self.mcp.server_address[1]
         self.restarts = []
         for p in (mock.patch.object(cli, "HERE", self.deploy), mock.patch.object(cli, "STATE", root / "state"),
                   mock.patch.object(cli, "restart_factory_mcp", lambda: self.restarts.append(1)),
-                  mock.patch.object(cli, "branch_merged", lambda branch: False)):
+                  mock.patch.object(cli, "branch_merged", lambda branch: False),
+                  mock.patch.object(cli, "PORT", port),
+                  mock.patch.object(cli, "SETTINGS", {"FACTORY_MCP_TOKEN": "owner-token",
+                                                       "FACTORY_AGENT_TOKEN": "agent-token"})):
             p.start()
             self.addCleanup(p.stop)
+
+    def include(self):
+        """The owner tool names the real template includes, as the deploy reads them."""
+        template = Path(__file__).resolve().parent.parent / "tenant" / "hermes" / "config.yaml"
+        return re.findall(r"^\s*-\s*(factory_\w+)\s*$", template.read_text(), re.M)
+
 
     def change_script(self, text):
         """Commit a scripts/factory whose deploy_steps runs `text` first, as an update commit would
@@ -173,13 +226,21 @@ class UpdateTest(unittest.TestCase):
             git(self.dev, "push", "-q", "origin", "HEAD:main")
         printed = io.StringIO()
         shown = f"Profile: day-desk\nInstalled from: {self.deploy / 'tenant' / 'hermes'}\n"
-        defaults = {"hermes profile show": subprocess.CompletedProcess([], 0, shown, "")}
+        defaults = [("hermes profile show", subprocess.CompletedProcess([], 0, shown, "")),
+                    ("hermes -p day-desk mcp tools factory_drive",
+                     subprocess.CompletedProcess([], 0, json.dumps(sorted(AGENT_TOOLS)), "")),
+                    ("hermes -p day-desk mcp tools factory",
+                     subprocess.CompletedProcess([], 0, json.dumps(self.include()), ""))]
 
         def run(*cmd, **_):
             text = " ".join(str(part) for part in cmd)
-            found = next((value for key, value in (results or {}).items() if text.startswith(key)), None)
+            def hits(key):
+                return text.startswith(key) and (len(text) == len(key) or text[len(key)] == " ")
+            # on an argument boundary, so `...tools factory` does not win over `...tools factory_drive`
+            found = next((value for key, value in sorted((results or {}).items(), key=lambda kv: len(kv[0]),
+                                                         reverse=True) if hits(key)), None)
             if found is None:  # no exact result: the defaults, then success
-                found = next((value for key, value in defaults.items() if text.startswith(key)),
+                found = next((value for key, value in defaults if text.startswith(key)),
                              subprocess.CompletedProcess([], 0, "", ""))
             if isinstance(found, Exception):
                 raise found
@@ -265,6 +326,72 @@ class UpdateTest(unittest.TestCase):
         elsewhere = subprocess.CompletedProcess([], 0, "Installed from: /Users/me/dev/software-factory/tenant/hermes\n", "")
         with self.assertRaisesRegex(SystemExit, "installed from /Users/me/dev/software-factory/tenant/hermes, not "):
             self.deploy_with("tenant/hermes/SOUL.md", "soul\n", results={"hermes profile show": elsewhere})
+
+    def test_an_update_that_changed_the_profile_verifies_the_tools_both_tokens_list(self):
+        commands, printed = self.deploy_with("tenant/hermes/SOUL.md", "soul\n")
+        self.assertIn(("hermes", "-p", "day-desk", "mcp", "tools", "factory_drive"), commands)
+        self.assertIn(("hermes", "-p", "day-desk", "mcp", "tools", "factory"), commands)
+        self.assertEqual(set(self.mcp.asked), {"Bearer agent-token", "Bearer owner-token"})
+        # Nothing private leaks and nothing private is touched: profile show and update only, the
+        # factory-owned unset it already knows, no install, no model, gateway or config writes.
+        touched = {" ".join(map(str, command)) for command in commands if command[:1] == ("hermes",)}
+        self.assertFalse([c for c in touched if c.startswith("hermes profile install")
+                          or c.startswith("hermes -p day-desk config set")
+                          or c.startswith("hermes -p day-desk model")
+                          or c.startswith("hermes -p day-desk gateway")])
+        for secret in ("owner-token", "agent-token", "Authorization", "Bearer"):
+            self.assertNotIn(secret, printed)
+        self.assertIn("update: deployed", printed)
+
+    def test_a_driving_tool_the_live_profile_misses_keeps_the_record_until_the_next_update(self):
+        missed = sorted(AGENT_TOOLS - {"factory_resolve_human"})
+        with self.assertRaisesRegex(SystemExit, "factory_resolve_human"):
+            self.deploy_with("tenant/hermes/SOUL.md", "soul\n", results={
+                "hermes -p day-desk mcp tools factory_drive":
+                    subprocess.CompletedProcess([], 0, json.dumps(missed), "")})
+        record = (cli.STATE / "deployed").read_text()  # the previous baseline is kept
+        self.assertEqual(len(self.restarts), 1)  # but the already-verified code runs on factory-mcp
+        commands, printed = self.deploy_with()  # a fixed profile: the same commit deploys
+        self.assertIn("update: deployed", printed)
+        self.assertIn(("hermes", "-p", "day-desk", "mcp", "tools", "factory_drive"), commands)
+        self.assertNotEqual((cli.STATE / "deployed").read_text(), record)
+
+    def test_an_owner_tool_the_live_profile_misses_fails_the_deploy_loudly(self):
+        include = self.include()
+        missed = [tool for tool in include if tool != "factory_approve_lesson"]
+        with self.assertRaisesRegex(SystemExit, "factory_approve_lesson"):
+            self.deploy_with("tenant/hermes/SOUL.md", "soul\n", results={
+                "hermes -p day-desk mcp tools factory":
+                    subprocess.CompletedProcess([], 0, json.dumps(missed), "")})
+
+    def test_a_profile_update_that_blinds_both_servers_fails_before_any_deploy_record(self):
+        with self.assertRaisesRegex(SystemExit, "the live tool discovery check failed"):
+            self.deploy_with("tenant/hermes/SOUL.md", "soul\n", results={
+                "hermes -p day-desk mcp tools": subprocess.CompletedProcess([], 1, "", "no such profile")})
+        self.assertNotIn("update: deployed", (cli.STATE / "deployed").read_text())
+
+    def test_a_discovery_answer_the_update_cannot_read_fails_the_deploy_too(self):
+        with self.assertRaisesRegex(SystemExit, r"discovers 0 of the 9 factory_drive tools"):
+            self.deploy_with("tenant/hermes/SOUL.md", "soul\n", results={
+                "hermes -p day-desk mcp tools":
+                    subprocess.CompletedProcess([], 0, "Profile: day-desk\nnot json\n", "")})
+
+    def test_an_unset_token_cannot_be_verified_so_the_deploy_does_not_record_success(self):
+        settings = dict(cli.SETTINGS)  # the one with both tokens, from setUp's patches
+        settings.pop("FACTORY_AGENT_TOKEN")
+        with mock.patch.object(cli, "SETTINGS", settings), self.assertRaisesRegex(
+                SystemExit, "lists no tools for the factory_drive token"):
+            self.deploy_with("tenant/hermes/SOUL.md", "soul\n")
+        self.assertNotIn("update: deployed", (cli.STATE / "deployed").read_text())
+
+    def test_mcp_tools_answers_the_names_a_token_lists_and_none_when_it_cannot(self):
+        self.assertEqual(cli.mcp_tools("agent-token"), sorted(AGENT_TOOLS))
+        self.assertEqual(cli.mcp_tools("owner-token"), sorted(self.include()))
+        self.assertEqual(cli.mcp_tools("not-a-token"), None)  # unauthorized
+        self.assertEqual(cli.mcp_tools(""), None)  # an unset token never reaches the endpoint
+        self.assertEqual(cli.mcp_tools(None), None)
+        with mock.patch.object(cli, "PORT", cli.PORT + 1):  # nothing listens there
+            self.assertEqual(cli.mcp_tools("agent-token"), None)
 
     def test_a_failing_commit_is_not_deployed(self):
         old = self.head()
