@@ -98,6 +98,9 @@ class UpdateTest(unittest.TestCase):
         self.commit("tenant/hermes/config.yaml", template.read_text())
         git(self.dev, "push", "-q", "origin", "HEAD:main")
         git(root, "clone", "-q", str(self.origin), str(self.deploy))
+        # A config dir with no secrets file, so `service_env` builds the deploy environment from
+        # the patched SETTINGS alone and never the real ~/.config/factory-mcp (finding 1ff5bc93).
+        config = root / "config"
         self.mcp = McpEndpoint(("127.0.0.1", 0), McpRequest)
         self.mcp.listings = {"Bearer owner-token": self.include(),
                              "Bearer agent-token": sorted(AGENT_TOOLS)}
@@ -106,6 +109,7 @@ class UpdateTest(unittest.TestCase):
         port = self.mcp.server_address[1]
         self.restarts = []
         for p in (mock.patch.object(cli, "HERE", self.deploy), mock.patch.object(cli, "STATE", root / "state"),
+                  mock.patch.object(cli, "CONFIG", config),
                   mock.patch.object(cli, "restart_factory_mcp", lambda: self.restarts.append(1)),
                   mock.patch.object(cli, "branch_merged", lambda branch: False),
                   mock.patch.object(cli, "PORT", port),
