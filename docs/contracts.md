@@ -110,6 +110,20 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
 - **An issue's `Worker: <id>` lines choose its worker (ADR-0029).** They are read
   from the issue on each tick, like `Depends on #n`, and are not stored in the
   WorkItem. `WorkItem.worker` still records the agent of the current pass.
+- **`Result.diagnostics` is a bounded, optional timing report (consumer first).**
+  A harness that sends one gets its timings logged; a Result without it — every
+  Result today, and any Result the schema change predates — stays valid. The
+  shape: `elapsedMs` (integer, >= 0, the only required field), optionally
+  `phases` (each `{phase, elapsedMs}` plus an optional `exitCode` and optional
+  `tail`) and an optional `tail`. `phase` is one of checkout, preparation,
+  environment setup, harness execution, patch collection, verification — the
+  boundaries any harness behind the adapter can report, so no worker producer
+  is wired yet. Tails are at most 4000 characters so a diagnostic dump cannot
+  leak unbounded output or a secret past the relay. Both the schema and the
+  Foreman's Result check (which must stay identical) enforce these bounds.
+  **Deployment prerequisite:** the producer side comes first — do not make the
+  field required or start reading `phases` for decisions until a worker harness
+  actually emits it.
 - **Unknown properties are rejected** (`additionalProperties: false`) so a cell
   cannot smuggle vendor-specific fields across a boundary.
 

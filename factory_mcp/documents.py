@@ -5,8 +5,13 @@ from .lessons import MAX_PER_WORKORDER, MAX_TEXT
 from .store import now
 
 EVIDENCE_KIND = {"tests-pass": "test"}
-RESULT_KEYS = {"schemaVersion", "workOrderId", "status", "patch", "evidence", "error", "startedAt",
-               "finishedAt"}
+RESULT_KEYS = {"schemaVersion", "workOrderId", "status", "patch", "evidence", "error", "diagnostics",
+               "startedAt", "finishedAt"}
+PHASES = ("checkout", "preparation", "environment setup", "harness execution", "patch collection",
+          "verification")
+# The same bounds result.schema.json states: a tail is text of at most 4000 characters, so a
+# diagnostic dump can neither leak unbounded output nor push the Result over the relay's limits.
+MAX_DIAGNOSTIC_TAIL = 4000
 PATCH_KEYS = {"format", "diff", "baseSha"}
 EVIDENCE_KEYS = {"kind", "command", "exit", "tail"}
 
@@ -92,6 +97,27 @@ def _evidence_ok(e):
             and isinstance(e.get("tail"), (str, type(None))))
 
 
+def _diag_tail_ok(tail):
+    return isinstance(tail, str) and len(tail) <= MAX_DIAGNOSTIC_TAIL
+
+
+def _diagnostic_phase_ok(phase):
+    return (isinstance(phase, dict) and set(phase) <= {"phase", "elapsedMs", "exitCode", "tail"}
+            and phase.get("phase") in PHASES and _integer(phase.get("elapsedMs"))
+            and phase["elapsedMs"] >= 0
+            and _integer(phase.get("exitCode", 0))
+            and _diag_tail_ok(phase.get("tail", "")))
+
+
+def _diagnostics_ok(diagnostics):
+    return (isinstance(diagnostics, dict) and set(diagnostics) <= {"elapsedMs", "phases", "tail"}
+            and _integer(diagnostics.get("elapsedMs")) and diagnostics["elapsedMs"] >= 0
+            and ("phases" not in diagnostics
+                 or (isinstance(diagnostics["phases"], list)
+                     and all(_diagnostic_phase_ok(p) for p in diagnostics["phases"])))
+            and ("tail" not in diagnostics or _diag_tail_ok(diagnostics["tail"])))
+
+
 def _patch_ok(patch):
     return (isinstance(patch, dict) and set(patch) <= PATCH_KEYS and patch.get("format") in ("unified", "mbox")
             and _text(patch.get("diff")) and isinstance(patch.get("baseSha"), (str, type(None))))
@@ -120,6 +146,10 @@ def check_result(result, order):
         errors.append("error must be text")
     if result.get("status") == "failed" and not result.get("error"):
         errors.append("a failed Result needs an error")
+    if "diagnostics" in result and not _diagnostics_ok(result["diagnostics"]):
+        errors.append("diagnostics need an integer elapsedMs, and at most phases (each a known phase "
+                      "with an integer elapsedMs, plus an integer exitCode and a bounded tail) and a "
+                      "bounded tail")
     patch = result.get("patch")
     if patch is not None and not _patch_ok(patch):
         errors.append("patch needs format unified|mbox and a diff, and at most a baseSha")

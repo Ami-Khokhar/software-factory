@@ -33,8 +33,13 @@ def result(**fields):
     return {key: value for key, value in doc.items() if value is not ...}
 
 
+BASIC_DIAGNOSTICS = {"elapsedMs": 60000, "phases": [
+    {"phase": "environment setup", "elapsedMs": 20000}]}
+
+
 # (case, Result, accepted). Each case varies one rule the schema states.
 CASES = [
+    ("legacy: no diagnostics", result(), True),
     ("a unified patch", result(), True),
     ("an mbox patch with its base", result(patch={"format": "mbox", "diff": "From x", "baseSha": "b0"}), True),
     ("completed with no patch", result(patch=...), False),
@@ -61,6 +66,32 @@ CASES = [
      result(status="failed", patch=..., error="crashed", evidence=None), False),
     ("a tail that is not text", result(evidence=[dict(PASSING, tail=5)]), False),
     ("an error that is not text", result(status="failed", patch=..., error=7), False),
+    ("diagnostics with the overall time only", result(diagnostics={"elapsedMs": 60000}), True),
+    ("diagnostics with phases and a tail", result(diagnostics={
+        "elapsedMs": 60000,
+        "phases": [{"phase": "harness execution", "elapsedMs": 40000, "exitCode": 0, "tail": "OK"}],
+        "tail": "OK"}), True),
+    ("diagnostics on a failed Result", result(status="failed", patch=..., error="slow",
+                                             diagnostics={"elapsedMs": 1}), True),
+    ("diagnostics with an unknown phase", result(diagnostics={"elapsedMs": 1, "phases": [
+        {"phase": "coffee break", "elapsedMs": 1}]}), False),
+    ("diagnostics without elapsedMs", result(diagnostics={"phases": []}), False),
+    ("diagnostics with an unknown field", result(diagnostics={"elapsedMs": 1, "host": "w1"}), False),
+    ("diagnostics with a text elapsedMs", result(diagnostics={"elapsedMs": "1"}), False),
+    ("diagnostics with a negative elapsedMs", result(diagnostics={"elapsedMs": -1}), False),
+    ("diagnostics with a boolean exit", result(diagnostics={"elapsedMs": 1, "phases": [
+        {"phase": "verification", "elapsedMs": 1, "exitCode": True}]}), False),
+    ("diagnostics with an over-long tail", result(diagnostics={"elapsedMs": 1, "tail": "x" * 4001}), False),
+    ("diagnostics with a tail at the limit", result(diagnostics={"elapsedMs": 1, "tail": "x" * 4000}), True),
+    ("diagnostics with a phase tail that is not text", result(diagnostics={"elapsedMs": 1,
+        "phases": [{"phase": "verification", "elapsedMs": 1, "tail": 5}]}), False),
+    ("diagnostics that are not an object", result(diagnostics="slow"), False),
+    ("a phase exitCode of 0.0, which JSON counts as an integer", result(diagnostics={
+        "elapsedMs": 1, "phases": [
+            {"phase": "verification", "elapsedMs": 1, "exitCode": 0.0}]}), True),
+    ("a phase exitCode of 1.0, a serialised integer", result(diagnostics={
+        "elapsedMs": 1, "phases": [
+            {"phase": "verification", "elapsedMs": 1, "exitCode": 1.0}]}), True),
 ]
 
 
