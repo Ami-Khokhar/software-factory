@@ -117,8 +117,12 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   `phases` (each `{phase, elapsedMs}` plus an optional `exitCode` and optional
   `tail`) and an optional `tail`. `phase` is one of checkout, preparation,
   environment setup, harness execution, patch collection, verification — the
-  boundaries any harness behind the adapter can report, so no worker producer
-  is wired yet. Tails are at most 4000 characters so a diagnostic dump cannot
+  boundaries the runner's phases can report. The producer is
+  `worker/runner.py` (#192): it emits this on every Result — `elapsedMs` for the whole pass, one
+  entry per phase with how long it took, the exit code where there is one, and a tail of its
+  output — and it redacts each tail: copied credentials, configured secret values, environment
+  values and the WorkOrder's command payload never reach the relay, and a harness timeout keeps
+  the output it had printed. Tails are at most 4000 characters so a diagnostic dump cannot
   leak unbounded output or a secret past the relay. Both the schema and the
   Foreman's Result check (which must stay identical) enforce these bounds.
   **Consumed for the attempt audit (ADR-0050).** When an attempt fails, the Foreman names a
@@ -134,9 +138,12 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   check rejected, so it names a cause only from the shapes that check would
   have accepted — it never raises on one — and a test evidence entry without an
   integer non-zero exit is not a failing test.
-  **Deployment prerequisite:** the producer side comes first — do not make the
-  field required or start reading `phases` for decisions until a worker harness
-  actually emits it.
+  **Deployment prerequisite (the hold point, ADR-0052):** the consumer
+  deploys first. Do not rebuild the worker image (the producer) until the consumer —
+  `factory-mcp` with the Result check, the attempt diagnosis and the environment pause
+  (#189–#191) — is already deployed and running. The producer's tests were red against the
+  runner before the fix, and the gate passed with legacy behavior preserved: a Result without
+  `diagnostics` stays valid, checked and merged.
   **A confirmed environment fault pauses (ADR-0051).** When the diagnosis names the
   environment (`checkout or setup`), the WorkItem stops on the first failed attempt:
   it goes to `human_waiting` with the repair reason in `blockedOn`, and the Foreman

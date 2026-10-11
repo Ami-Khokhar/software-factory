@@ -1122,3 +1122,28 @@ recommendation, which is the honest reading of what the factory knows. The diagn
 else the Result carries, including the diagnostics the Result check rejected: malformed shapes and
 evidence with no exit name no cause and cannot raise out of a tick, so a WorkItem is never left
 `implementing` serving a crash on every later tick instead of the check's wording.
+
+## ADR-0052 — The runner ships its diagnostics behind a deployed consumer
+
+**Context.** #189–#191 deployed the consumer side of `Result.diagnostics` — the Result check, the
+attempt diagnosis and the environment pause — while no producer emitted the field. #192 wires
+`worker/runner.py` to emit it: one phase entry per pass stage with elapsed milliseconds, the exit
+code where there is one, and a bounded, redacted tail, with a harness timeout keeping the output it
+had already printed. The worker image runs on every machine separately from factory-mcp, so a
+producer that ships before the consumer's flag-deployed controller can put a field a controller
+rejects into every Result until the image is rebuilt down — a pass lost per WorkOrder.
+
+**Decision.** The producer rollout is gated on the consumer: rebuild the worker image (or enable it
+at all) only once `factory-mcp` with the #189–#191 consumer is deployed and running. The gate's
+verify proves the ordering in tests: the phase-diagnostic tests fail against the runner from before
+this change (red before the fix), and the tests that existed before it pass unchanged with a legacy
+Result — one without `diagnostics` — still valid, still checked, still merged. The runner redacts
+before serializing (copied credentials, configured secret values, environment values, the
+WorkOrder's command payload), and the controller's sanitize behind it remains the second line, so
+neither side trusts the other.
+
+**Consequence.** A pass that rolls out in either order still works: an old image keeps producing
+legacy Results the deployed controller accepts, and a rebuilt image produces diagnostics only a
+deployed consumer reads. A harness timeout's output — bounded and redacted — rides into the
+attempt diagnosis, so a worker that ran out of time is named from its own evidence instead of a
+reason string.

@@ -42,6 +42,7 @@ git diff --binary "$FACTORY_BASE" HEAD
 """
 MAX_PATCH_BYTES = 2_000_000
 CONTAINER_HOME = "/tmp/factory-home"
+DIAGNOSTIC_TAIL = 4000  # the Result schema's cap for a diagnostic tail
 
 
 class WorkerError(Exception):
@@ -87,6 +88,31 @@ def workorder_from(text):
         return json.loads(text[at + len(marker):])
     except ValueError as exc:
         raise WorkerError(f"the WorkOrder is not JSON: {exc}") from None
+
+
+# The shapes the controller's sanitize also looks for (factory_mcp/diagnostics.py): the worker
+# redacts before serializing the Result, and the controller checks behind it (#192).
+_ENV_VALUE = re.compile(r"\b([A-Z][A-Z0-9_]{2,})=\S+")
+_CREDENTIAL = re.compile(
+    r"(?i)\b(access|auth)?[-_ ]?(token|password|passwd|passphrase|secret|bearer|authorization|"
+    r"credential|api[-_ ]?key|private[-_ ]?key)s?(\s*[=:]\s*|\s+)\S+")
+_TOKEN = re.compile(r"(?i)\bgh[pousr]_[A-Za-z0-9]{6,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b"
+                    r"|\bAKIA[0-9A-Z]{16}\b|\bBearer\s+\S+")
+_WORKORDER_PAYLOAD = re.compile(r"(?s)\{.*?factory\.workorder/v1.*?\}")
+
+
+def redact(text, secrets, limit=DIAGNOSTIC_TAIL):
+    """Bounded output for a Result: whitespace collapsed; copied credentials and configured secret
+    values matched whole; environment values, credential-shaped text, known tokens and the
+    WorkOrder's command payload replaced."""
+    line = " ".join((text or "").split())
+    for secret in secrets:
+        if secret:
+            line = line.replace(secret, "<redacted>")
+    line = _WORKORDER_PAYLOAD.sub(" ", line)
+    line = _ENV_VALUE.sub(r"\1=<redacted>", line)
+    line = _CREDENTIAL.sub(r"\g<2>=<redacted>", line)
+    return _TOKEN.sub("<redacted>", line)[:limit]
 
 
 def origin_repo(cwd):
@@ -207,9 +233,12 @@ class Sandbox:
         cmd += [self.image, "timeout", "--kill-after=10", str(int(seconds)), *argv]
         try:
             done = subprocess.run(cmd, capture_output=True, text=True, timeout=seconds + 60)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
             subprocess.run(["docker", "kill", name], capture_output=True)
-            return 124, "", "timed out"
+            # Whatever the sandbox printed before the kill rides on the exception (#192);
+            # communicate hands back bytes even in text mode.
+            out = textify(exc.stdout)
+            return 124, out, textify(exc.stderr) or ("" if out else "timed out")
         except OSError as exc:
             raise WorkerError(f"docker is not available: {exc}") from None
         if done.returncode == 125:
@@ -231,6 +260,13 @@ def collect(sandbox, work, base, goal):
     if len(diff.encode()) > MAX_PATCH_BYTES:
         raise WorkerError(f"the patch is over {MAX_PATCH_BYTES} bytes")
     return diff if diff.endswith("\n") else diff + "\n"
+
+
+def textify(output):
+    """Subprocess output the kill left on a TimeoutExpired: bytes even when text was asked for."""
+    if isinstance(output, bytes):
+        return output.decode("utf-8", "replace")
+    return output or ""
 
 
 def credential_copies(specs, scratch):
@@ -279,6 +315,21 @@ def main(argv=None):
               "evidence": [], "startedAt": now()}
     scratch = tempfile.mkdtemp(prefix="factory-run-")
     work = os.path.join(scratch, "work")
+    started = time.monotonic()
+    phases, secrets, echoed = [], set(), ""
+
+    def record(name, begin, code=None, output=""):
+        """One phase's diagnostics: elapsed milliseconds, the exit code where there is one, and a
+        redacted tail. Failures where no exit code exists still name the phase."""
+        entry = {"phase": name, "elapsedMs": int((time.monotonic() - begin) * 1000)}
+        if code is not None:
+            entry["exitCode"] = code
+        tail = redact(output, secrets)
+        if tail:
+            entry["tail"] = tail
+        phases.append(entry)
+        return entry
+
     try:
         order = workorder_from(text)
         result["workOrderId"] = order["id"]
@@ -286,27 +337,57 @@ def main(argv=None):
         if repo != order["repo"]:
             raise WorkerError(f"the checkout {cwd} is {repo}, not {order['repo']}")
         branch = "factory/" + order["workItemId"].rsplit("#", 1)[1]
-        with checkout_lock(cwd) as waited:
-            base = prepare(cwd, order, branch, work)
-            verify = verify_command(cwd, base)
+        checkout_start = time.monotonic()
+        try:
+            with checkout_lock(cwd) as waited:
+                base = prepare(cwd, order, branch, work)
+                verify = verify_command(cwd, base)
+        except WorkerError:
+            record("checkout", checkout_start)
+            raise
+        record("checkout", checkout_start)
         if not verify and not order.get("remoteVerify"):
             raise WorkerError("the base commit has no .github/pr-gatekeeper.json verify command")
-        credentials = credential_copies(args.credential, scratch)
-        harness_env = env_pairs(args.env)
-        seconds = max(120, order["budget"]["wallMs"] // 1000 - 60 - waited)
-        ensure_docker()
-        sandbox = Sandbox(args.image, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]), credentials, harness_env)
+        setup_start = time.monotonic()
+        try:
+            credentials = credential_copies(args.credential, scratch)
+            harness_env = env_pairs(args.env)
+            seconds = max(120, order["budget"]["wallMs"] // 1000 - 60 - waited)
+            ensure_docker()
+            sandbox = Sandbox(args.image, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]),
+                              credentials, harness_env)
+        except WorkerError:
+            record("environment setup", setup_start)
+            raise
+        record("environment setup", setup_start)
+        secrets = {value for value in harness_env.values() if value}
+        for directory, _ in credentials:
+            for name in os.listdir(directory):
+                with open(os.path.join(directory, name)) as handle:
+                    secrets.add(handle.read())
+        harness_start = time.monotonic()
         code, out, err = sandbox.run([*harness, text], seconds * 0.7, work, harness=True)
-        print((out + err)[-4000:], flush=True)  # for the relay log; the Result line comes last
+        echoed = out + err
+        record("harness execution", harness_start, code, echoed)
+        print(echoed[-4000:], flush=True)  # for the relay log; the Result line comes last
         if code == 124:
             raise WorkerError("the harness timed out")
         if code != 0:
             detail = " ".join((err or out).split())[-300:]
             raise WorkerError(f"the harness exited {code}" + (f": {detail}" if detail else ""))
-        diff = collect(sandbox, work, base, order["goal"])
+        patch_start = time.monotonic()
+        try:
+            diff = collect(sandbox, work, base, order["goal"])
+        except WorkerError:
+            record("patch collection", patch_start)
+            raise
+        record("patch collection", patch_start, 0)
         if not order.get("remoteVerify"):  # else a GitHub runner runs the verify (ADR-0045)
+            verify_start = time.monotonic()
             code, out, err = sandbox.run(["sh", "-c", verify], seconds * 0.25, work)
             output = out + err
+            echoed += output
+            record("verification", verify_start, code, output)
             tail = output[-2000:].replace("```", "")
             result["evidence"] = [{"kind": "test", "command": verify, "exit": code, "tail": tail}]
             if code != 0:
@@ -318,6 +399,13 @@ def main(argv=None):
         result["error"] = f"runner failed: {type(exc).__name__}: {exc}"
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+    diagnostics = {"elapsedMs": max(0, int((time.monotonic() - started) * 1000))}
+    if phases:
+        diagnostics["phases"] = phases
+    tail = redact(echoed, secrets)
+    if tail:
+        diagnostics["tail"] = tail
+    result["diagnostics"] = diagnostics
     result["finishedAt"] = now()
     print(json.dumps(result), flush=True)
     return 0
