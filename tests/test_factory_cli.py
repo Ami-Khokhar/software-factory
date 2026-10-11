@@ -67,6 +67,38 @@ class UpdateTest(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
+    def change_script(self, text):
+        """Commit a scripts/factory whose deploy_steps runs `text` first, as an update commit would
+        that introduces a new deploy step."""
+        script = (Path(__file__).resolve().parent.parent / "scripts" / "factory").read_text()
+        anchor = "    if restart:  # a retry restarted already, unless it rebuilds the worker\n"
+        self.commit("scripts/factory", script.replace(anchor, text + anchor))
+        git(self.dev, "push", "-q", "origin", "HEAD:main")
+
+    def test_a_changed_update_script_runs_its_new_deploy_step_once(self):
+        self.change_script('    marker = HERE / "deploy-step.log"\n'
+                           '    marker.write_text((marker.read_text() if marker.exists() else "") + "step\\n")\n')
+        commands, printed = self.deploy_with()
+        self.assertEqual((self.deploy / "deploy-step.log").read_text(), "step\n")  # the new step, once
+        self.assertIn("update: deployed", printed)
+        self.assertEqual(len(self.restarts), 1)  # and factory-mcp still restarts once
+        self.assertEqual(self.deploy_with(), ([], ""))  # and nothing runs again on the next update
+
+    def test_a_failing_new_deploy_step_keeps_the_record_and_succeeds_on_the_next_update(self):
+        self.change_script('    marker = HERE / "deploy-step.log"\n'
+                           '    if not marker.exists():\n'
+                           '        marker.write_text("step\\n")\n'
+                           '        die("update: the new step failed; the next update tries again")\n')
+        with self.assertRaisesRegex(SystemExit,
+                                    r"the new update script failed at [0-9a-f]{7}[\s\S]*the new step failed"):
+            self.deploy_with()
+        record = (cli.STATE / "deployed").read_text()  # the previous successful baseline is kept
+        commands, printed = self.deploy_with()  # the same commit deploys now, without a guard loop
+        self.assertIn("update: deployed", printed)
+        self.assertNotEqual((cli.STATE / "deployed").read_text(), record)
+        self.assertEqual((self.deploy / "deploy-step.log").read_text(), "step\n")
+        self.assertEqual(self.deploy_with(), ([], ""))
+
     def commit(self, name, text, cwd=None, message=None):
         cwd = cwd or self.dev
         (cwd / name).parent.mkdir(parents=True, exist_ok=True)

@@ -319,7 +319,10 @@ the old version running, and the job sends you why. It also rebuilds the worker 
 `worker/Dockerfile` changed, rebuilds Day Desk's sandbox image when `tenant/hermes/sandbox/`
 changed, and runs `hermes profile update day-desk -y` when `tenant/hermes/` changed. A failed
 build or profile update stops the deploy with its message, and the next update runs it again from
-the deploy record, which names the last commit for which every step succeeded. The first update
+the deploy record, which names the last commit for which every step succeeded. A change to
+`scripts/factory` brings its own new deploy logic, so after the tests pass the updated script runs
+its own deploy steps once more (`--deploy-steps`, under a guard so it cannot chain); the record
+advances only after those steps finish, so a step they fail at retries on the next update too. The first update
 starts the record at the commit already deployed, so build the images and install the profile from
 the deployed checkout once by hand, as below. A retry restarts factory-mcp only when it rebuilds the
 worker image, which the restart follows. A change to `tenant/hermes/config.yaml` is reported: the
