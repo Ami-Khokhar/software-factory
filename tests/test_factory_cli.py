@@ -67,6 +67,61 @@ class UpdateTest(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
+    def change_script(self, text):
+        """Commit a scripts/factory whose deploy_steps runs `text` first, as an update commit would
+        that introduces a new deploy step."""
+        script = (Path(__file__).resolve().parent.parent / "scripts" / "factory").read_text()
+        anchor = "    if restart:  # a retry restarted already, unless it rebuilds the worker\n"
+        self.commit("scripts/factory", script.replace(anchor, text + anchor))
+        git(self.dev, "push", "-q", "origin", "HEAD:main")
+
+    def test_a_changed_update_script_runs_its_new_deploy_step_once(self):
+        self.change_script('    marker = HERE / "deploy-step.log"\n'
+                           '    marker.write_text((marker.read_text() if marker.exists() else "") + "step\\n")\n')
+        commands, printed = self.deploy_with()
+        self.assertEqual((self.deploy / "deploy-step.log").read_text(), "step\n")  # the new step, once
+        self.assertIn("update: deployed", printed)
+        self.assertEqual(len(self.restarts), 1)  # and factory-mcp still restarts once
+        self.assertEqual(self.deploy_with(), ([], ""))  # and nothing runs again on the next update
+
+    def test_a_failing_new_deploy_step_keeps_the_record_and_succeeds_on_the_next_update(self):
+        self.change_script('    marker = HERE / "deploy-step.log"\n'
+                           '    if not marker.exists():\n'
+                           '        marker.write_text("step\\n")\n'
+                           '        die("update: the new step failed; the next update tries again")\n')
+        with self.assertRaisesRegex(SystemExit,
+                                    r"the new update script failed at [0-9a-f]{7}[\s\S]*the new step failed"):
+            self.deploy_with()
+        record = (cli.STATE / "deployed").read_text()  # the previous successful baseline is kept
+        self.assertEqual(len(self.restarts), 0)  # factory-mcp runs the old code until the steps succeed
+        commands, printed = self.deploy_with()  # the same commit deploys now, without a guard loop
+        self.assertIn("update: deployed", printed)
+        self.assertEqual(len(self.restarts), 1)  # and that retry still restarted factory-mcp onto the new code
+        self.assertNotEqual((cli.STATE / "deployed").read_text(), record)
+        self.assertEqual((self.deploy / "deploy-step.log").read_text(), "step\n")
+        self.assertEqual(self.deploy_with(), ([], ""))
+
+    def test_the_reexecuted_script_deploys_from_the_record_its_parent_passes(self):
+        # The child once read the ambient state file, which names a commit this checkout has never
+        # seen and makes every path look changed (the finding #187 r1:630f6b1a058d856b).
+        (cli.STATE / "deployed").parent.mkdir(parents=True, exist_ok=True)
+        (cli.STATE / "deployed").write_text("0" * 40 + "\n")
+        since = self.commit("notes.txt", "x\n")
+        git(self.dev, "push", "-q", "origin", "HEAD:main")
+        new = self.commit("worker/Dockerfile", "FROM scratch\n")
+        git(self.dev, "push", "-q", "origin", "HEAD:main")
+        git(self.deploy, "fetch", "-q", "origin")
+        git(self.deploy, "checkout", "-q", new)
+        with self.assertRaisesRegex(SystemExit, "not a command to run by hand"):
+            cli.cmd_update(["--deploy-steps"])  # no UPDATE_SINCE: nothing to start from
+        with mock.patch.dict(os.environ, {cli.UPDATE_SINCE: since}), \
+                mock.patch.object(cli, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run:
+            cli.cmd_update(["--deploy-steps"])
+        self.assertEqual([call.args for call in run.call_args_list], [
+            ("docker", "build", "-q", "-t", "factory-worker:candidate", str(self.deploy / "worker")),
+            ("docker", "run", "--rm", "factory-worker:candidate", "sh", "-c", cli.WORKER_CHECK),
+            ("docker", "tag", "factory-worker:candidate", "factory-worker:latest")])
+
     def commit(self, name, text, cwd=None, message=None):
         cwd = cwd or self.dev
         (cwd / name).parent.mkdir(parents=True, exist_ok=True)
