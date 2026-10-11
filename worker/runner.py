@@ -42,6 +42,16 @@ git diff --binary "$FACTORY_BASE" HEAD
 """
 MAX_PATCH_BYTES = 2_000_000
 CONTAINER_HOME = "/tmp/factory-home"
+# Preflight exit codes: one distinct nonzero code per unavailable part of the environment. Any
+# nonzero code on a setup phase is the environment to the pause consumer (ADR-0051), so each one
+# is evidence of "checkout or setup", never of the work.
+NO_DOCKER, NO_IMAGE, NO_HARNESS, NO_CREDENTIAL, NO_VERIFY = 69, 72, 71, 66, 78
+# What the setup phase's tail says, without a host path, a credential or the harness's payload.
+PREFLIGHT_TAILS = {NO_DOCKER: "preflight: the Docker daemon is not available",
+                   NO_IMAGE: "preflight: the configured worker image is not in the local store",
+                   NO_HARNESS: "preflight: the configured harness is not in the worker image",
+                   NO_CREDENTIAL: "preflight: a configured credential-copy is missing or unreadable",
+                   NO_VERIFY: "preflight: verify command missing from the base commit"}
 DIAGNOSTIC_TAIL = 4000  # the Result schema's cap for a diagnostic tail
 
 
@@ -198,7 +208,7 @@ def ensure_docker(wait=120, poll=2):
         if docker_status() == 0:
             return
         time.sleep(poll)
-    raise WorkerError("docker is not available: OrbStack did not start", docker_status())
+    raise WorkerError("docker is not available: OrbStack did not start", NO_DOCKER)
 
 
 class Sandbox:
@@ -253,6 +263,34 @@ class Sandbox:
         return done.returncode, done.stdout, done.stderr
 
 
+def preflight(order, image, harness_argv, credential_specs, env_specs, scratch, work, verify):
+    """Checks the environment before the coding harness runs: the Docker daemon, the configured
+    worker image, the harness inside it, the configured credential files and the base commit's
+    verify command. Each failure raises WorkerError with its preflight code (ADR-0051), so the
+    failed pass pauses as the environment instead of spending the budget on a broken one.
+    Returns the credentials' 0700 copies and the harness env.
+    """
+    ensure_docker()
+    try:
+        done = subprocess.run(["docker", "image", "inspect", image], capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        raise WorkerError("docker is not available", NO_DOCKER) from None
+    if done.returncode != 0:
+        raise WorkerError(f"the configured worker image {image} is not in the local Docker store",
+                          NO_IMAGE)
+    credentials = credential_copies(credential_specs, scratch)
+    harness_env = env_pairs(env_specs)
+    if not verify and not order.get("remoteVerify"):
+        raise WorkerError("the base commit has no .github/pr-gatekeeper.json verify command",
+                          NO_VERIFY)
+    probe = Sandbox(image, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]))
+    code, _, _ = probe.run(["sh", "-c", 'command -v -- "$1"', "sh", harness_argv[0]], 60, work)
+    if code != 0:
+        raise WorkerError(f"the configured harness {harness_argv[0]!r} is not in the worker image",
+                          NO_HARNESS)
+    return credentials, harness_env
+
+
 def collect(sandbox, work, base, goal):
     """The harness's work as one unified diff against `base`, computed in the sandbox. Uncommitted
     changes are committed first, so a harness that forgot to commit still hands its work over."""
@@ -286,11 +324,16 @@ def credential_copies(specs, scratch):
             raise WorkerError(f"--credential {spec!r} is not HOST_FILE:/container/dir")
         host = os.path.expanduser(host)
         if not os.path.isfile(host):
-            raise WorkerError(f"no model credential at {host}")
+            raise WorkerError(f"no model credential at {host}", NO_CREDENTIAL)
+        if not os.access(host, os.R_OK):
+            raise WorkerError(f"the model credential at {host} is not readable", NO_CREDENTIAL)
         directory = os.path.join(scratch, f"credential-{n}")
         os.mkdir(directory, 0o700)
         copy = os.path.join(directory, os.path.basename(host))
-        shutil.copyfile(host, copy)
+        try:
+            shutil.copyfile(host, copy)
+        except PermissionError:
+            raise WorkerError(f"the model credential at {host} is not readable", NO_CREDENTIAL) from None
         os.chmod(copy, 0o600)
         copies.append((directory, target))
     return copies
@@ -353,20 +396,18 @@ def main(argv=None):
             record("checkout", checkout_start, getattr(exc, "code", None))
             raise
         record("checkout", checkout_start, 0)
-        if not verify and not order.get("remoteVerify"):
-            raise WorkerError("the base commit has no .github/pr-gatekeeper.json verify command")
         setup_start = time.monotonic()
         try:
-            credentials = credential_copies(args.credential, scratch)
-            harness_env = env_pairs(args.env)
-            seconds = max(120, order["budget"]["wallMs"] // 1000 - 60 - waited)
-            ensure_docker()
-            sandbox = Sandbox(args.image, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]),
-                              credentials, harness_env)
+            credentials, harness_env = preflight(order, args.image, harness, args.credential,
+                                                 args.env, scratch, work, verify)
         except WorkerError as exc:
-            record("environment setup", setup_start, getattr(exc, "code", None))
+            code = getattr(exc, "code", None)
+            record("environment setup", setup_start, code, PREFLIGHT_TAILS.get(code, ""))
             raise
         record("environment setup", setup_start, 0)
+        seconds = max(120, order["budget"]["wallMs"] // 1000 - 60 - waited)
+        sandbox = Sandbox(args.image, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]),
+                          credentials, harness_env)
         secrets = {value for value in harness_env.values() if value}
         # A copied credential's whole content is a secret, in both the raw and collapsed form:
         # the tail is whitespace-collapsed before any replace, so a multi-line credential (a

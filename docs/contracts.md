@@ -124,6 +124,12 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   values and the WorkOrder's command payload never reach the relay, and a harness timeout keeps
   the output it had printed. The exit code rides where the command has one: a failing checkout
   names its git exit, a setup phase its docker exit, and patch collection the sandbox's exit.
+  A setup-phase failure of the runner's `preflight` (#193) is also the environment to the pause
+  consumer: the worker checks the Docker daemon, the configured worker image, the harness inside
+  it, the configured credential-copy and the base commit's verify command before the coding
+  harness runs, and each failing check raises its own code — 69 daemon, 72 image, 71 harness,
+  66 credential, 78 verify — so none of the pass's remaining time is spent where the pass starts
+  over against the same broken environment.
   Tails are at most 4000 characters so a diagnostic dump cannot
   leak unbounded output or a secret past the relay. Both the schema and the
   Foreman's Result check (which must stay identical) enforce these bounds.
