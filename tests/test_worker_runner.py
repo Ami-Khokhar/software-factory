@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "worker"))
 import runner  # noqa: E402
 
 HARNESS = r'''
-import os, stat, subprocess, sys, time
+import os, re, stat, subprocess, sys, time
 mode = sys.argv[1]
 def git(*args):
     subprocess.run(["git", *args], check=True, capture_output=True)
@@ -44,6 +44,15 @@ if mode == "plant":  # a filter driver and hooks, which run wherever git touches
         path = os.path.join(".git", "hooks", hook)
         open(path, "w").write("#!/bin/sh\n" + trap + "\n")
         os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
+if mode == "sizecheck":  # run the worker rule's size command in this copy, fail if it cannot
+    told = re.search(r"check the size before you finish with: (.+)", sys.argv[-1], re.M).group(1)
+    done = subprocess.run(["sh", "-c", told], capture_output=True, text=True)
+    open("app.txt", "w").write("fixed\n")
+    git("add", "-A")
+    git("-c", "user.name=h", "-c", "user.email=h@h", "commit", "-qm", "harness work")
+    sys.stderr.write(done.stderr)
+    sys.stderr.flush()
+    sys.exit(done.returncode)
 if mode == "fail":
     print("pi could not reach the model", file=sys.stderr)
     sys.exit(17)
@@ -253,12 +262,20 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(result["status"], "completed", result.get("error"))
         self.assertEqual(documents.check_result(result, order), [])
 
-    def test_the_worker_gets_the_whole_pr_size_check(self):
+    def test_the_worker_gets_a_runnable_whole_pr_size_check(self):
+        """prepare removes the origin remote from the copy the harness mounts, so the size rule
+        names the ref that copy actually has: the default branch under source/ (#194)."""
         result, _ = self.run_order("fix")
         self.assertEqual(result["status"], "completed", result.get("error"))
         text = self.harness_runs[0]["argv"][-1]
-        self.assertIn("git diff --shortstat $(git merge-base origin/HEAD HEAD) HEAD", text)
+        self.assertIn("git diff --shortstat $(git merge-base source/HEAD HEAD) HEAD", text)
         self.assertIn("including the commits already on the branch", text)
+
+    def test_the_size_command_the_rule_names_runs_in_the_harnesss_own_copy(self):
+        """Red for the earlier gate finding: the rule named origin/HEAD, which is gone from the
+        harness's mount, so the command failed and the harness could not self-check the size."""
+        result, _ = self.run_order("sizecheck")
+        self.assertEqual(result["status"], "completed", result.get("error"))
 
     def test_a_failed_harness_fails_the_pass_before_collecting(self):
         result, _ = self.run_order("fail")
