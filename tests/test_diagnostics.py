@@ -92,8 +92,20 @@ class DiagnosticsTest(unittest.TestCase):
         wi = self.fail_with(diagnostics)
         self.assertEqual(self.attempt_log()["detail"]["cause"], "harness timeout")
 
+    def test_a_harness_phase_killed_for_time_is_a_harness_timeout_whatever_the_clock_says(self):
+        """Exit 124 is the runner's own kill for time, so even a phase the wall clock could never
+        cover — the runner leaves room for patch collection and the verify — names the timeout
+        (ADR-0052)."""
+        diagnostics = {"elapsedMs": 900, "phases": [
+            {"phase": "harness execution", "elapsedMs": 850, "exitCode": 124,
+             "tail": "step one kthxbye"}]}
+        wi = self.fail_with(diagnostics)
+        self.assertEqual(self.attempt_log()["detail"]["cause"], "harness timeout")
+        self.assertIn("exit 124", wi["attempts"][0])
+
     def test_a_harness_phase_short_of_the_budget_is_not_a_timeout(self):
-        """An early exit is some other failure; only the clock makes a phase a timeout."""
+        """An early exit is some other failure; only the clock or the runner's own kill for time
+        makes a phase a timeout."""
         diagnostics = {"elapsedMs": 500, "phases": [
             {"phase": "harness execution", "elapsedMs": 480, "exitCode": 2, "tail": "agent crashed"}]}
         self.fail_with(diagnostics)

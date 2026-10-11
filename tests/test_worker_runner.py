@@ -48,7 +48,12 @@ if mode == "fail":
     sys.exit(17)
 if mode == "timeout":
     print("step one", flush=True)
-    print("CODEX_KEY: " + os.environ["CODEX_KEY"], flush=True)
+    print("CODEX_KEY: " + os.environ.get("CODEX_KEY", ""), flush=True)
+    # Debugging: every file in every directory the agent logged in with, printed whole.
+    for directory in os.environ.get("CREDENTIAL_DIRS", "").split(":"):
+        if os.path.isdir(directory):
+            for name in sorted(os.listdir(directory)):
+                print(open(os.path.join(directory, name)).read(), flush=True)
     print(sys.argv[-1], flush=True)
     time.sleep(30)
 print("DONE")
@@ -308,27 +313,60 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual((result["status"], phase["exitCode"]), ("failed", 1))
         self.assertIn("python3 check.py", result["evidence"][0]["command"])
 
-    def test_a_failing_patch_collection_names_its_phase(self):
+    def test_a_failing_patch_collection_names_its_phase_and_exit(self):
         result, _ = self.run_order("nothing")
         self.assertEqual((result["status"], result["error"]),
                          ("failed", "the harness made no change"))
-        self.assertIn("patch collection", self.phases_of(result))
+        phase = self.phases_of(result)["patch collection"]
+        self.assertEqual(("exitCode" in phase, phase.get("exitCode") is None), (False, True))
+        original = runner.Sandbox.run
 
-    def test_a_failing_checkout_or_setup_names_its_phase(self):
+        def collected(sandbox, argv, seconds, mount, harness=False, env=None):
+            """The agent's own harness, collecting with git: the sandbox's own exit code rides:"""
+            if harness:
+                return original(sandbox, argv, seconds, mount, harness=True, env=env)
+            return 3, "", "not a commit we know"
+
+        with mock.patch.object(runner.Sandbox, "run", collected):
+            result, _ = self.run_order("fix")
+        self.assertEqual((result["status"], self.phases_of(result)["patch collection"]["exitCode"]),
+                         ("failed", 3))
+
+    def test_a_failing_checkout_or_setup_names_its_phase_and_exit(self):
+        """A phase the consumer can name is one that carries the command's exit code when there is
+        one (ADR-0051): a broken checkout still pauses with the repair reason, not a second pass."""
+        real_git = runner.git
+
+        def broken_fetch(cwd, *args, **kwargs):
+            if args[0] == "fetch":
+                raise runner.WorkerError("git fetch failed: fatal: dead remote", 128)
+            return real_git(cwd, *args, **kwargs)
+
+        with mock.patch.object(runner, "git", broken_fetch):
+            result, _ = self.run_order("fix")
+        self.assertEqual((result["status"], result["error"]),
+                         ("failed", "git fetch failed: fatal: dead remote"))
+        self.assertEqual(self.phases_of(result)["checkout"].get("exitCode"), 128)
         with mock.patch.object(runner, "prepare", side_effect=runner.WorkerError("git fetch failed")):
             result, _ = self.run_order("fix")
         self.assertEqual((result["status"], result["error"]), ("failed", "git fetch failed"))
         self.assertIn("checkout", self.phases_of(result))
-        with mock.patch.object(runner, "credential_copies",
-                               side_effect=runner.WorkerError("no model credential at nowhere.json")):
+        with mock.patch.object(runner, "ensure_docker", side_effect=runner.WorkerError(
+                "docker is not available: OrbStack did not start", 7)):
             result, _ = self.run_order("fix")
-        self.assertIn("environment setup", self.phases_of(result))
+        self.assertEqual((result["status"],
+                          self.phases_of(result)["environment setup"].get("exitCode")), ("failed", 7))
 
     def test_a_harness_timeout_keeps_its_output_and_redacts_secrets(self):
         """The container's kill returns what it printed before it died (#192): the diagnostics tail
-        holds it with the credential, its env value and the WorkOrder's command payload removed."""
+        holds it with the copied credential's content, the env value and the WorkOrder's command
+        payload removed, along with the phase's timing"""
+        # One line, no braces in either credential: the WorkOrder-payload rule eats from the
+        # first '{', so nothing but the secrets built from the copies themselves can keep these
+        # values out of the tail.
         key = Path(self.tmp.name) / "codex.json"
-        key.write_text('{"OPENAI_API_KEY": "sk-hunter2"}')
+        key.write_text("hunter-file9=opendoor")
+        self.auth.write_text("hunter-agent=opendoor")
         self.flags = ["--credential", f"{self.auth}:/home/node/.pi/agent",
                       "--credential", f"{key}:/tmp/factory-home/.codex",
                       "--env", "CODEX_KEY=sk-hunter2"]
@@ -340,6 +378,8 @@ class RunnerTest(unittest.TestCase):
             if harness:
                 sandbox_timeout.append(seconds)
                 env = dict(sandbox.harness_env, **(env or {}))
+                env.pop("CREDENTIAL_DIRS", None)
+                env["CREDENTIAL_DIRS"] = ":".join(scratch for scratch, _ in sandbox.credentials)
                 argv = ["timeout", "--kill-after=1", "1", *argv]
             try:
                 done = subprocess.run(argv, cwd=mount, capture_output=True, text=True,
@@ -358,8 +398,15 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(documents.check_result(result, order), [], result["diagnostics"])
         tail = phase["tail"]
         self.assertIn("step one", tail)
+        self.assertGreaterEqual(phase["elapsedMs"], 900)
+        # The configured env value: the harness prints CODEX_KEY's value itself.
         self.assertNotIn("sk-hunter2", tail)
         self.assertNotIn("hunter2", tail)
+        # The copied credential's content: the harness prints the file itself, so only the
+        # runner's credential-reading loop can keep it out of the tail.
+        self.assertNotIn("hunter-file9", tail)
+        self.assertNotIn("hunter-agent", tail)
+        self.assertNotIn("opendoor", tail)
         self.assertNotIn("factory.workorder/v1", tail)
         self.assertNotIn("Fix the app", tail)
 

@@ -46,7 +46,12 @@ DIAGNOSTIC_TAIL = 4000  # the Result schema's cap for a diagnostic tail
 
 
 class WorkerError(Exception):
-    """The WorkOrder cannot be carried out; the message becomes the Result's error."""
+    """The WorkOrder cannot be carried out; the message becomes the Result's error. When the
+    failure is a command's own exit code, that code rides along for the phase diagnostics."""
+
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code
 
 
 def now():
@@ -75,7 +80,8 @@ def git(cwd, *args, timeout=300):
     except subprocess.TimeoutExpired:
         raise WorkerError(f"git {args[0]} timed out after {timeout}s") from None
     if done.returncode != 0:
-        raise WorkerError(f"git {args[0]} failed: {(done.stderr or done.stdout).strip()[-300:]}")
+        raise WorkerError(f"git {args[0]} failed: {(done.stderr or done.stdout).strip()[-300:]}",
+                          done.returncode)
     return done.stdout.strip()
 
 
@@ -168,17 +174,18 @@ def verify_command(cwd, base):
     return config.get("verify") if isinstance(config.get("verify"), str) else None
 
 
-def docker_answers():
+def docker_status():
+    """The exit code of `docker info`, or None when it could not run at all."""
     try:
-        return subprocess.run(["docker", "info"], capture_output=True, timeout=30).returncode == 0
+        return subprocess.run(["docker", "info"], capture_output=True, timeout=30).returncode
     except (OSError, subprocess.TimeoutExpired):
-        return False
+        return None
 
 
 def ensure_docker(wait=120, poll=2):
     """Start Docker (OrbStack) when it does not answer, so the first pass after a reboot needs no
     person."""
-    if docker_answers():
+    if docker_status() == 0:
         return
     for cmd in (["orb", "start"], ["open", "-g", "-a", "OrbStack"]):
         try:
@@ -188,10 +195,10 @@ def ensure_docker(wait=120, poll=2):
             continue
     deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
-        if docker_answers():
+        if docker_status() == 0:
             return
         time.sleep(poll)
-    raise WorkerError("docker is not available: OrbStack did not start")
+    raise WorkerError("docker is not available: OrbStack did not start", docker_status())
 
 
 class Sandbox:
@@ -252,9 +259,9 @@ def collect(sandbox, work, base, goal):
     code, diff, err = sandbox.run(["sh", "-c", EXTRACT], 300, work,
                                   env={"FACTORY_BASE": base, "FACTORY_GOAL": goal})
     if code == 3:
-        raise WorkerError("the harness rewrote history below the commit it was given")
+        raise WorkerError("the harness rewrote history below the commit it was given", 3)
     if code != 0:
-        raise WorkerError(f"collecting the work failed ({code}): {' '.join(err.split())[-300:]}")
+        raise WorkerError(f"collecting the work failed ({code}): {' '.join(err.split())[-300:]}", code)
     if not diff.strip():
         raise WorkerError("the harness made no change")
     if len(diff.encode()) > MAX_PATCH_BYTES:
@@ -342,10 +349,10 @@ def main(argv=None):
             with checkout_lock(cwd) as waited:
                 base = prepare(cwd, order, branch, work)
                 verify = verify_command(cwd, base)
-        except WorkerError:
-            record("checkout", checkout_start)
+        except WorkerError as exc:
+            record("checkout", checkout_start, getattr(exc, "code", None))
             raise
-        record("checkout", checkout_start)
+        record("checkout", checkout_start, 0)
         if not verify and not order.get("remoteVerify"):
             raise WorkerError("the base commit has no .github/pr-gatekeeper.json verify command")
         setup_start = time.monotonic()
@@ -356,15 +363,19 @@ def main(argv=None):
             ensure_docker()
             sandbox = Sandbox(args.image, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]),
                               credentials, harness_env)
-        except WorkerError:
-            record("environment setup", setup_start)
+        except WorkerError as exc:
+            record("environment setup", setup_start, getattr(exc, "code", None))
             raise
-        record("environment setup", setup_start)
+        record("environment setup", setup_start, 0)
         secrets = {value for value in harness_env.values() if value}
+        # A copied credential's whole content is a secret, stripped because the tail is
+        # whitespace-collapsed before any replace.
         for directory, _ in credentials:
             for name in os.listdir(directory):
                 with open(os.path.join(directory, name)) as handle:
-                    secrets.add(handle.read())
+                    value = handle.read().strip()
+                    if value:
+                        secrets.add(value)
         harness_start = time.monotonic()
         code, out, err = sandbox.run([*harness, text], seconds * 0.7, work, harness=True)
         echoed = out + err
@@ -378,8 +389,8 @@ def main(argv=None):
         patch_start = time.monotonic()
         try:
             diff = collect(sandbox, work, base, order["goal"])
-        except WorkerError:
-            record("patch collection", patch_start)
+        except WorkerError as exc:
+            record("patch collection", patch_start, getattr(exc, "code", None))
             raise
         record("patch collection", patch_start, 0)
         if not order.get("remoteVerify"):  # else a GitHub runner runs the verify (ADR-0045)

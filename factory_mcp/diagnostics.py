@@ -16,8 +16,11 @@ CAUSES = ("checkout or setup", "harness timeout", "empty patch", "failing test")
 # What one attempt's diagnosis may add to an attempt entry, an escalation, or the next WorkOrder.
 MAX_CONTEXT = 300
 # A harness phase that ran at least this share of the WorkOrder's wall clock is one that ran out
-# of its time, not one that failed early of something else.
+# of its time, not one that failed early of something else. Exit 124 is the runner's own kill for
+# time, so it names the timeout whatever the clock says; the runner's share of the wall is always
+# under this share, which it can satisfy only through its exit code.
 TIME_SHARE = 0.9
+TIMEOUT_EXIT = 124
 SETUP_PHASES = ("checkout", "preparation", "environment setup")
 
 # An environment value as an exporter writes it: a name in caps, then = and the value. Lowercase
@@ -45,9 +48,10 @@ def diagnose(order, result):
 
     From the Foreman's own facts and the Result's optional diagnostics, whichever spoke first:
     a completed Result without a patch is an empty patch; a setup or verification phase with a
-    failing exit code names itself; a harness execution phase only names a timeout when it ran
-    most of the WorkOrder's wall clock; a test evidence entry with a failing exit is a failing
-    test. No diagnostics, no cause: a timeout suggested by the reason strings alone stays unknown.
+    failing exit code names itself; a harness execution phase names a timeout when it exited 124,
+    the runner's own kill for time, or ran most of the WorkOrder's wall clock; a test evidence
+    entry with a failing exit is a failing test. No diagnostics, no cause: a timeout suggested by
+    the reason strings alone stays unknown.
     """
     if isinstance(result, dict):
         if result.get("status") == "completed" and not isinstance(result.get("patch"), dict):
@@ -72,9 +76,10 @@ def diagnose(order, result):
                 return {"cause": "failing test",
                         "context": sanitize(f"exit {exit_code}: {tail}")}
             elapsed = phase.get("elapsedMs", 0)
-            if (phase["phase"] == "harness execution" and isinstance(elapsed, int)
-                    and not isinstance(elapsed, bool) and elapsed >= 0
-                    and elapsed >= TIME_SHARE * order["budget"]["wallMs"]):
+            if (phase["phase"] == "harness execution"
+                    and (exit_code == TIMEOUT_EXIT
+                         or (isinstance(elapsed, int) and not isinstance(elapsed, bool)
+                             and elapsed >= 0 and elapsed >= TIME_SHARE * order["budget"]["wallMs"]))):
                 return {"cause": "harness timeout",
                         "context": sanitize(f"exit {exit_code}: {tail}")}
         evidence = result.get("evidence")
