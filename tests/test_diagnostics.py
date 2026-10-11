@@ -118,6 +118,30 @@ class DiagnosticsTest(unittest.TestCase):
         self.assertEqual(self.attempt_log()["detail"]["cause"], "failing test")
         self.assertIn("diagnosis: failing test: exit 1: FAILED", wi["attempts"][0])
 
+    def test_malformed_diagnostics_fail_the_attempt_instead_of_crashing_the_tick(self):
+        """RED before the guard: shapes the Result check rejects must not raise out of diagnose,
+        or the WorkItem stays implementing and every later tick crashes."""
+        for diagnostics in ({"elapsedMs": 1, "phases": [{"elapsedMs": 1, "exitCode": 1}]},
+                            {"phases": ["checkout"]},
+                            {"phases": {"phase": "checkout", "exitCode": 1}},
+                            {"phase": "harness execution", "elapsedMs": "970", "exitCode": 1}):
+            with self.subTest(diagnostics=diagnostics):
+                self.setUp()
+                wi = self.fail_with(diagnostics, error="git fetch failed")
+                log = self.attempt_log()
+                self.assertTrue(log["detail"]["reason"].startswith(
+                    "codex: diagnostics need an integer elapsedMs"), log["detail"]["reason"])
+                self.assertNotIn("cause", log["detail"])
+                self.assertEqual(wi["state"], "ready")
+
+    def test_an_evidence_entry_without_an_exit_is_not_a_failing_test(self):
+        """RED before the guard: an entry with no exit is not evidence of a failing test."""
+        evidence = ({"kind": "test", "command": "make test"},)
+        wi = self.fail_with(error="the harness timed out", evidence=evidence)
+        detail = self.attempt_log()["detail"]
+        self.assertNotIn("cause", detail)
+        self.assertNotIn("failing test", wi["attempts"][0])
+
     def test_a_timeout_with_no_supporting_diagnostics_stays_unknown(self):
         wi = self.fail_with(diagnostics=None)
         detail = self.attempt_log()["detail"]

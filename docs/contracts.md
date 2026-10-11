@@ -130,7 +130,10 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   values and the WorkOrder command payload redacted at the controller) into the audit
   `attempt_failed` entry, the escalation, and the next WorkOrder's `previous-attempt`
   `findingsToAddress` problem text. No schema changes: attempts stay strings and
-  `findingRef` is unchanged.
+  `findingRef` is unchanged. The diagnosis also runs on the Results the Result
+  check rejected, so it names a cause only from the shapes that check would
+  have accepted — it never raises on one — and a test evidence entry without an
+  integer non-zero exit is not a failing test.
   **Deployment prerequisite:** the producer side comes first — do not make the
   field required or start reading `phases` for decisions until a worker harness
   actually emits it.

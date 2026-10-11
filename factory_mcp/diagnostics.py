@@ -52,30 +52,43 @@ def diagnose(order, result):
     if isinstance(result, dict):
         if result.get("status") == "completed" and not isinstance(result.get("patch"), dict):
             return {"cause": "empty patch", "context": ""}
-        phases = ((result.get("diagnostics") or {}).get("phases") or []) \
-            if isinstance(result.get("diagnostics"), dict) else []
-        for phase in phases:
-            exit_code = phase.get("exitCode")
-            if not isinstance(exit_code, int) or exit_code == 0:
+        diagnostics = result.get("diagnostics")
+        phases = diagnostics.get("phases") if isinstance(diagnostics, dict) else None
+        for phase in phases if isinstance(phases, list) else ():
+            # Only the shapes the Result check would have accepted name a cause; this diagnose also
+            # runs on the Results that check rejected (foreman.poll), which must fail, not raise.
+            if not isinstance(phase, dict) or not isinstance(phase.get("phase"), str):
                 continue
+            exit_code = phase.get("exitCode")
+            if not isinstance(exit_code, int) or isinstance(exit_code, bool) or exit_code == 0:
+                continue
+            tail = phase.get("tail", "")
+            if not isinstance(tail, str):
+                tail = ""
             if phase["phase"] in SETUP_PHASES:
                 return {"cause": "checkout or setup",
-                        "context": sanitize(f"exit {exit_code}: {phase.get('tail', '')}")}
+                        "context": sanitize(f"exit {exit_code}: {tail}")}
             if phase["phase"] == "verification":
                 return {"cause": "failing test",
-                        "context": sanitize(f"exit {exit_code}: {phase.get('tail', '')}")}
-            if (phase["phase"] == "harness execution"
-                    and phase.get("elapsedMs", 0) >= TIME_SHARE * order["budget"]["wallMs"]):
+                        "context": sanitize(f"exit {exit_code}: {tail}")}
+            elapsed = phase.get("elapsedMs", 0)
+            if (phase["phase"] == "harness execution" and isinstance(elapsed, int)
+                    and not isinstance(elapsed, bool) and elapsed >= 0
+                    and elapsed >= TIME_SHARE * order["budget"]["wallMs"]):
                 return {"cause": "harness timeout",
-                        "context": sanitize(f"exit {exit_code}: {phase.get('tail', '')}")}
-        for evidence in result.get("evidence") or []:
-            if isinstance(evidence, dict) and evidence.get("kind") == "test" \
-                    and evidence.get("exit") != 0:
-                return {"cause": "failing test",
-                        "context": sanitize(f"exit {evidence.get('exit')}: "
-                                            f"{evidence.get('tail') or ''}")}
-        if isinstance(result.get("diagnostics"), dict):  # no nameable cause, but a tail may still help
-            return {"cause": None, "context": sanitize(result["diagnostics"].get("tail", ""))}
+                        "context": sanitize(f"exit {exit_code}: {tail}")}
+        evidence = result.get("evidence")
+        for entry_ in evidence if isinstance(evidence, list) else ():
+            if not isinstance(entry_, dict) or entry_.get("kind") != "test":
+                continue
+            test_exit = entry_.get("exit")
+            if not isinstance(test_exit, int) or isinstance(test_exit, bool) or test_exit == 0:
+                continue  # an entry with no exit, or a bool one, is not evidence of a failing test
+            tail = entry_.get("tail") if isinstance(entry_.get("tail"), str) else ""
+            return {"cause": "failing test",
+                    "context": sanitize(f"exit {test_exit}: {tail}")}
+        if isinstance(diagnostics, dict) and isinstance(diagnostics.get("tail"), str):  # no nameable cause, but a tail may still help
+            return {"cause": None, "context": sanitize(diagnostics["tail"])}
         return {"cause": None, "context": ""}
     return {"cause": None, "context": ""}
 

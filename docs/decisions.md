@@ -1089,4 +1089,7 @@ which of checkout/setup, harness timeout, empty patch or failing test an attempt
 all when nothing names one; owners (and Day Desk) decide retry versus split from that evidence
 instead of the old scope guess. Tails the worker did not redact cannot cross into a retry WorkOrder
 or an escalation. An unknown-cause timeout now costs a fresh attempt instead of a split
-recommendation, which is the honest reading of what the factory knows.
+recommendation, which is the honest reading of what the factory knows. The diagnosis runs whatever
+else the Result carries, including the diagnostics the Result check rejected: malformed shapes and
+evidence with no exit name no cause and cannot raise out of a tick, so a WorkItem is never left
+`implementing` serving a crash on every later tick instead of the check's wording.
