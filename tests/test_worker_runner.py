@@ -361,11 +361,11 @@ class RunnerTest(unittest.TestCase):
         """The container's kill returns what it printed before it died (#192): the diagnostics tail
         holds it with the copied credential's content, the env value and the WorkOrder's command
         payload removed, along with the phase's timing"""
-        # One line, no braces in either credential: the WorkOrder-payload rule eats from the
-        # first '{', so nothing but the secrets built from the copies themselves can keep these
-        # values out of the tail.
+        # The multi-line credential is the ordinary case for an INI or pretty-printed auth file:
+        # its content matches the whitespace-collapsed tail only through the collapsed secret the
+        # runner registers, and neither value is credential-shaped enough for the other rules.
         key = Path(self.tmp.name) / "codex.json"
-        key.write_text("hunter-file9=opendoor")
+        key.write_text("hunter-file9 = opendoor\nsecond = line\n")
         self.auth.write_text("hunter-agent=opendoor")
         self.flags = ["--credential", f"{self.auth}:/home/node/.pi/agent",
                       "--credential", f"{key}:/tmp/factory-home/.codex",
@@ -406,6 +406,7 @@ class RunnerTest(unittest.TestCase):
         # runner's credential-reading loop can keep it out of the tail.
         self.assertNotIn("hunter-file9", tail)
         self.assertNotIn("hunter-agent", tail)
+
         self.assertNotIn("opendoor", tail)
         self.assertNotIn("factory.workorder/v1", tail)
         self.assertNotIn("Fix the app", tail)

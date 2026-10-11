@@ -368,19 +368,22 @@ def main(argv=None):
             raise
         record("environment setup", setup_start, 0)
         secrets = {value for value in harness_env.values() if value}
-        # A copied credential's whole content is a secret, stripped because the tail is
-        # whitespace-collapsed before any replace.
+        # A copied credential's whole content is a secret, in both the raw and collapsed form:
+        # the tail is whitespace-collapsed before any replace, so a multi-line credential (a
+        # pretty-printed auth JSON, a PEM key) matches only through its collapsed form.
         for directory, _ in credentials:
             for name in os.listdir(directory):
                 with open(os.path.join(directory, name)) as handle:
                     value = handle.read().strip()
                     if value:
                         secrets.add(value)
+                        secrets.add(" ".join(value.split()))
         harness_start = time.monotonic()
         code, out, err = sandbox.run([*harness, text], seconds * 0.7, work, harness=True)
         echoed = out + err
         record("harness execution", harness_start, code, echoed)
-        print(echoed[-4000:], flush=True)  # for the relay log; the Result line comes last
+        # for the relay log; the Result line comes last. Redacted by the same rules as the tail.
+        print(redact(echoed[-4000:], secrets), flush=True)
         if code == 124:
             raise WorkerError("the harness timed out")
         if code != 0:
