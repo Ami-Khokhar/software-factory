@@ -298,6 +298,16 @@ The relay and factory-mcp are launchd services: they start at login and restart 
 exit. A worker pass starts OrbStack itself when Docker does not answer, so a reboot needs
 nothing from you. `factory start` checks all three.
 
+### A real-Docker check of the runner's preflight
+
+The unit tests fake the Docker boundary, so once after each `worker/Dockerfile` or preflight
+change, check the preflight against real Docker: with Docker stopped (quit OrbStack), run a
+hand-made WorkOrder like the rehearsal does. The Result must fail before the harness runs, with
+`diagnostics.phases` naming `environment setup`, exit code `69` and the tail `preflight: the
+Docker daemon is not available`, and WorkItem #n must pause as `human_waiting` for the
+environment (ADR-0051) rather than spend its passes. Rerun once with Docker up and a wrong
+`--image`: exit code `72`, same phase.
+
 `factory stop` stops everything now and keeps it stopped. Work in progress is not lost: after
 `factory start`, a cancelled pass counts as one failed attempt and is retried.
 

@@ -1147,3 +1147,26 @@ legacy Results the deployed controller accepts, and a rebuilt image produces dia
 deployed consumer reads. A harness timeout's output — bounded and redacted — rides into the
 attempt diagnosis, so a worker that ran out of time is named from its own evidence instead of a
 reason string.
+
+## ADR-0053 — The runner preflights the environment before the harness
+
+**Context.** A pass against an environment the harness cannot use — Docker down, the configured
+worker image missing from the local store, the harness absent from that image, a credential file
+missing or unreadable, the base commit's verify command gone — still reached the harness first:
+the first failure the diagnostics saw was the harness's, which the pause consumer (ADR-0051) reads
+as unknown or as the work, so the budget spent a pass learning what a host check already knew.
+The environment-fault fields of ADR-0051 and the phase diagnostics of #192 are deployed consumers,
+so the producer side is free to add evidence.
+
+**Decision.** `worker/runner.py` runs a `preflight` before the coding harness runs: the Docker
+daemon, the configured worker image, the harness resolved inside that image through a probe
+container, the configured credential-copy (readable on the host) and the base commit's verify
+command. Each failing check raises its own nonzero exit code (69 daemon, 72 image, 71 harness,
+66 credential, 78 verify) on the `environment setup` phase, whose tail is the bounded preflight
+label — a host path or a command payload never rides on it; the full reason stays in the Result's
+`error` per the existing tests. Any nonzero code on a setup phase names "checkout or setup", so
+the pass pauses instead of a second pass, and a code fault on the harness keeps the normal retry.
+
+**Consequence.** An unavailable environment costs one pass and pauses for repair on the first
+attempt; a healthy environment runs the harness exactly as before. A missing preflight check is
+still a lost pass, which a rehearsal against real Docker (the runbook's preflight check) covers.

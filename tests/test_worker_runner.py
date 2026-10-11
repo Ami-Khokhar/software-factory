@@ -2,6 +2,7 @@
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -12,7 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from factory_mcp import documents
+from factory_mcp import documents, diagnostics
 from factory_mcp.config import Config
 from tests.fakes import workitem
 
@@ -113,9 +114,17 @@ class RunnerTest(unittest.TestCase):
                                   env=dict(os.environ, **SANDBOX_ENV, **(env or {})))
             return done.returncode, done.stdout, done.stderr
 
+        # A fake docker CLI: the preflight's `docker image inspect` runs the host command, and the
+        # image's own containers are behind the faked Sandbox.run.
+        bin = root / "bin"
+        bin.mkdir()
+        (bin / "docker").write_text(
+            '#!/bin/sh\n[ "$1" = image ] && [ -n "$FACTORY_TEST_DOCKER_NO_IMAGE" ] && exit 1\nexit 0\n')
+        os.chmod(bin / "docker", 0o755)
         patches = [mock.patch.object(runner.Sandbox, "run", local_run),
                    mock.patch.object(runner, "ensure_docker", lambda: None),
-                   mock.patch.dict(os.environ, {"FACTORY_TEST_MARKER": str(self.marker)})]
+                   mock.patch.dict(os.environ, {"FACTORY_TEST_MARKER": str(self.marker), "PATH":
+                                                str(bin) + os.pathsep + os.environ["PATH"]})]
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
@@ -322,15 +331,80 @@ class RunnerTest(unittest.TestCase):
         original = runner.Sandbox.run
 
         def collected(sandbox, argv, seconds, mount, harness=False, env=None):
-            """The agent's own harness, collecting with git: the sandbox's own exit code rides:"""
+            """Collecting with git: the sandbox's own exit code rides. The preflight's own probe
+            (a `sh -c` command -v) still runs as it would, so only collection is faked."""
             if harness:
                 return original(sandbox, argv, seconds, mount, harness=True, env=env)
+            if argv[:2] == ["sh", "-c"] and argv[2].startswith("command -v"):
+                return original(sandbox, argv, seconds, mount, harness=False, env=env)
             return 3, "", "not a commit we know"
 
         with mock.patch.object(runner.Sandbox, "run", collected):
             result, _ = self.run_order("fix")
         self.assertEqual((result["status"], self.phases_of(result)["patch collection"]["exitCode"]),
                          ("failed", 3))
+
+    def test_preflight_stops_the_harness_when_the_environment_is_unavailable(self):
+        """#193: every part of the environment is checked before the coding harness runs. A check
+        that fails ends the pass with no harness invocation, names itself with a nonzero exit code
+        and a bounded tail that carries no host path, and reads to the pause consumer as the
+        environment (ADR-0051), not as the harness's work."""
+        def missing_harness(sandbox, argv, seconds, mount, harness=False, env=None):
+            if argv[:2] == ["sh", "-c"] and argv[2].startswith("command -v"):
+                return 127, "", ""
+            return original_run(sandbox, argv, seconds, mount, harness=harness, env=env)
+
+        original_run = runner.Sandbox.run
+        cases = [
+            ("daemon",
+             [mock.patch.object(runner, "ensure_docker", side_effect=runner.WorkerError(
+                 "docker is not available: OrbStack did not start", runner.NO_DOCKER))],
+             runner.NO_DOCKER, runner.PREFLIGHT_TAILS[runner.NO_DOCKER]),
+            ("image", [mock.patch.dict(os.environ, {"FACTORY_TEST_DOCKER_NO_IMAGE": "1"})],
+             runner.NO_IMAGE, runner.PREFLIGHT_TAILS[runner.NO_IMAGE]),
+            ("credential",
+             [mock.patch.object(shutil, "copyfile",
+                                side_effect=PermissionError(13, "Permission denied"))],
+             runner.NO_CREDENTIAL, runner.PREFLIGHT_TAILS[runner.NO_CREDENTIAL]),
+            ("verify", [mock.patch.object(runner, "verify_command", lambda *a, **k: None)],
+             runner.NO_VERIFY, runner.PREFLIGHT_TAILS[runner.NO_VERIFY]),
+            ("harness", [mock.patch.object(runner.Sandbox, "run", missing_harness)],
+             runner.NO_HARNESS, runner.PREFLIGHT_TAILS[runner.NO_HARNESS]),
+        ]
+        for name, patches, code, tail in cases:
+            with self.subTest(name):
+                for patch in patches:
+                    patch.start()
+                    try:
+                        self.one_preflight_failure(code, tail)
+                    finally:
+                        patch.stop()
+
+    def one_preflight_failure(self, code, tail):
+        """One preflight failure: no harness invocation, the failing check's own code and a bounded
+        tail; the pause consumer reads the pass as the environment, not the harness's work."""
+        result, order = self.run_order("fix")
+        self.assertEqual(result["status"], "failed", result)
+        self.assertEqual(self.harness_runs, [], "the harness ran on a broken environment")
+        phase = self.phases_of(result)["environment setup"]
+        self.assertEqual(phase.get("exitCode"), code, result.get("error"))
+        self.assertEqual(phase.get("tail", ""), tail)
+        self.assertEqual(len(tail), len(tail[:runner.DIAGNOSTIC_TAIL]), "tail is not bounded")
+        self.assertNotIn(str(self.tmp.name), result["diagnostics"]["phases"])
+        self.assertEqual(diagnostics.diagnose(order, result)["cause"], "checkout or setup")
+        self.assertTrue(diagnostics.environment_fault(diagnostics.diagnose(order, result)["cause"]))
+
+    def test_preflight_leaves_healthy_and_code_failed_passes_alone(self):
+        """A working environment runs the harness exactly as before, and a harness that fails on
+        its own code is not the environment: the preflight phase exits 0 and the diagnosis of the
+        code failure stays with the harness phase."""
+        result, order = self.run_order("fix")
+        self.assertEqual(result["status"], "completed", result.get("error"))
+        self.assertEqual(len(self.harness_runs), 1)
+        self.assertEqual(self.phases_of(result)["environment setup"].get("exitCode"), 0)
+        result, _ = self.run_order("fail")
+        self.assertEqual(self.phases_of(result)["environment setup"].get("exitCode"), 0)
+        self.assertEqual(diagnostics.diagnose(order, result)["cause"], None)
 
     def test_a_failing_checkout_or_setup_names_its_phase_and_exit(self):
         """A phase the consumer can name is one that carries the command's exit code when there is
@@ -489,8 +563,10 @@ class EnsureDockerTest(unittest.TestCase):
 
     def test_docker_that_does_not_start_fails_the_pass(self):
         env, _ = self.stubs(orb_starts=False)
-        with env, self.assertRaisesRegex(runner.WorkerError, "docker is not available"):
+        with env, self.assertRaisesRegex(runner.WorkerError, "docker is not available") as raised:
             runner.ensure_docker(wait=0.3, poll=0.05)
+        # The daemon failure carries the preflight code the pause consumer reads as the #193 environment.
+        self.assertEqual(raised.exception.code, runner.NO_DOCKER)
 
 
 if __name__ == "__main__":
