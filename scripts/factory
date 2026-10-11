@@ -528,6 +528,57 @@ def deploy_steps(since, new, restart):
             must("hermes config unset", "hermes", "-p", "day-desk", "config", "unset", include_key)
             print(f"update: removed {include_key} from Day Desk's profile; the agent token lists its "
                   "driving tools (ADR-0048)")
+        # A profile update that leaves Day Desk blind is a failed update (ADR-0049): before the
+        # deploy record advances, the live profile must discover every driving tool the agent
+        # token lists (its discovery is not filtered there), and every tool the shipped
+        # config.yaml includes for the owner's server (its include list is the filter there,
+        # ADR-0041). This reads the profile and factory-mcp; it never writes either, and never
+        # prints a token or a setting, so the model, Telegram and secret settings stay intact.
+        env = service_env()
+        listed = {"factory_drive": mcp_tools(env.get("FACTORY_AGENT_TOKEN", "")),
+                  "factory": mcp_tools(env.get("FACTORY_MCP_TOKEN", ""))}
+        for server, want in (("factory_drive", listed["factory_drive"]),
+                             ("factory", profile_include_tools())):
+            if want is None or listed[server] is None:
+                die(f"update: cannot verify Day Desk's tool discovery: factory-mcp on port "
+                    f"{PORT} lists no tools for the {server} token; the deploy record stays "
+                    f"at {since[:7]} and the next update tries again")
+            discovery = must("the live tool discovery check", "hermes", "-p", "day-desk",
+                             "mcp", "tools", server)
+            try:
+                found = set(json.loads(discovery or "[]"))
+            except ValueError:
+                found = set()
+            missing = sorted(set(want) - found)
+            if missing:
+                die(f"update: Day Desk's profile discovers {len(want) - len(missing)} of the "
+                    f"{len(want)} {server} tools ({', '.join(missing)}) at {new[:7]}; the deploy "
+                    f"record stays at {since[:7]} and the next update tries again")
+
+
+def profile_include_tools():
+    """The owner-token tool names tenant/hermes/config.yaml includes, as its `- factory_*` bullets
+    under mcp_servers.factory.tools.include. The file ships with the checkout."""
+    return [line.split("-", 1)[1].split()[0] for line in
+            (HERE / "tenant" / "hermes" / "config.yaml").read_text().splitlines()
+            if re.match(r"^\s*-\s*factory_\w+\s*$", line)]
+
+
+def mcp_tools(token):
+    """The tool names factory-mcp on this machine lists for `token` (tools/list), or None when the
+    token is unset or factory-mcp does not answer with a tool list. The token goes in one header
+    and is never printed or logged."""
+    if not token:
+        return None
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", PORT, timeout=10)
+        connection.request("POST", "/mcp", json.dumps({"jsonrpc": "2.0", "id": 1,
+                                                        "method": "tools/list", "params": {}}),
+                           {"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+        names = [tool["name"] for tool in json.loads(connection.getresponse().read())["result"]["tools"]]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return sorted(names)
 
 
 def cmd_update(args):
@@ -537,7 +588,8 @@ def cmd_update(args):
     for, so a step that failed runs again on the next update. When the update script itself
     changed, its new steps run through one re-execution (REEXEC_GUARD, UPDATE_SINCE,
     `--deploy-steps`: no fetch, no tests, no restart) after verification, and factory-mcp
-    restarts once they have succeeded, before the deploy record advances."""
+    restarts once they have succeeded, before the deploy record advances. After a profile update
+    the new profile must discover the tools factory-mcp actually lists for each token (ADR-0049)."""
     if args[:1] == ["--deploy-steps"]:  # the re-execution below: only the new script's own steps
         new = subprocess.run(["git", "-C", str(HERE), "rev-parse", "HEAD"],
                              capture_output=True, text=True).stdout.strip()

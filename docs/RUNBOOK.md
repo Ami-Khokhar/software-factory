@@ -319,7 +319,12 @@ the old version running, and the job sends you why. It also rebuilds the worker 
 `worker/Dockerfile` changed, rebuilds Day Desk's sandbox image when `tenant/hermes/sandbox/`
 changed, and runs `hermes profile update day-desk -y` when `tenant/hermes/` changed. A failed
 build or profile update stops the deploy with its message, and the next update runs it again from
-the deploy record, which names the last commit for which every step succeeded. A change to
+the deploy record, which names the last commit for which every step succeeded. After a profile
+update succeeds, the deploy also verifies the live profile's tool discovery: it asks factory-mcp
+what it lists for each token and checks the profile discovers all of them (ADR-0049). A profile
+that leaves Day Desk blind is a failed update: the record stays and the next update runs the steps
+again. The verification only reads the profile and factory-mcp, so your model, Telegram and secret
+settings are untouched, and nothing is printed. A change to
 `scripts/factory` brings its own new deploy logic, so after the tests pass the updated script runs
 its own deploy steps once more (`--deploy-steps`, under a guard so it cannot chain); the record
 advances only after those steps finish, so a step they fail at retries on the next update too, and
