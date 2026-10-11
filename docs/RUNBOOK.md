@@ -322,10 +322,12 @@ build or profile update stops the deploy with its message, and the next update r
 the deploy record, which names the last commit for which every step succeeded. A change to
 `scripts/factory` brings its own new deploy logic, so after the tests pass the updated script runs
 its own deploy steps once more (`--deploy-steps`, under a guard so it cannot chain); the record
-advances only after those steps finish, so a step they fail at retries on the next update too. The first update
+advances only after those steps finish, so a step they fail at retries on the next update too, and
+once they succeed the script restarts factory-mcp onto the new code. The first update
 starts the record at the commit already deployed, so build the images and install the profile from
 the deployed checkout once by hand, as below. A retry restarts factory-mcp only when it rebuilds the
-worker image, which the restart follows. A change to `tenant/hermes/config.yaml` is reported: the
+worker image, which the restart follows; after a script update's re-executed steps, the restart
+always follows once. A change to `tenant/hermes/config.yaml` is reported: the
 live config also holds your model and Telegram settings, so merge the rest by hand. The one
 factory-owned key the update changes by itself is `mcp_servers.factory_drive.tools.include`, which
 it removes when present: the agent token already limits Day Desk's driving tools, and a stale copy

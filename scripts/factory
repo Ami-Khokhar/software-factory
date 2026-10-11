@@ -480,6 +480,9 @@ def branch_merged(branch):
 WORKER_CHECK = "python --version && python3 --version && git --version"
 # Marks a re-executed `update --deploy-steps` child, so it never re-executes in turn.
 REEXEC_GUARD = "FACTORY_UPDATE_REEXEC"
+# Tells the re-executed child which commit the deploy steps start from, instead of its ambient
+# state file (which on another machine names a commit this checkout has never seen).
+UPDATE_SINCE = "FACTORY_UPDATE_SINCE"
 
 
 def changed_between(since, new, path):
@@ -532,15 +535,16 @@ def cmd_update(args):
     and restart factory-mcp only if the tests pass there. A failing test keeps the old commit. The
     images and Day Desk's profile follow what changed since the last commit they were all built
     for, so a step that failed runs again on the next update. When the update script itself
-    changed, its new steps run through one re-execution (REEXEC_GUARD, `--deploy-steps`: no fetch,
-    no tests, no restart) after verification, before the deploy record advances."""
+    changed, its new steps run through one re-execution (REEXEC_GUARD, UPDATE_SINCE,
+    `--deploy-steps`: no fetch, no tests, no restart) after verification, and factory-mcp
+    restarts once they have succeeded, before the deploy record advances."""
     if args[:1] == ["--deploy-steps"]:  # the re-execution below: only the new script's own steps
         new = subprocess.run(["git", "-C", str(HERE), "rev-parse", "HEAD"],
                              capture_output=True, text=True).stdout.strip()
-        try:
-            since = (STATE / "deployed").read_text().strip()
-        except OSError:
-            since = new
+        since = os.environ.get(UPDATE_SINCE)  # the parent's deploy record, never the ambient one
+        if not since:
+            die("update --deploy-steps runs its steps from the record `factory update` passes; "
+                "it is not a command to run by hand")
         deploy_steps(since, new, restart=False)
         return
     def git(*args):
@@ -581,17 +585,17 @@ def cmd_update(args):
     # the previous record kept, so the next update tries again.
     changed = lambda path: changed_between(since, new, path)  # an unknown `since` fails the diff and says yes
     if changed("scripts/factory") and os.environ.get(REEXEC_GUARD) != "1":
-        reexecuted = True
         done = subprocess.run([sys.executable, str(HERE / "scripts" / "factory"), "update", "--deploy-steps"],
-                              env={**os.environ, REEXEC_GUARD: "1"}, capture_output=True, text=True)
+                              env={**os.environ, REEXEC_GUARD: "1", UPDATE_SINCE: since},
+                              capture_output=True, text=True)
         if done.returncode != 0:
             why = "\n".join((done.stdout + done.stderr).strip().splitlines()[-20:])
             die(f"update: the new update script failed at {new[:7]}; factory-mcp stays on {old[:7]}\n{why}")
-    else:
-        reexecuted = False
-        deploy_steps(since, new, restart=new != old or changed("worker/Dockerfile"))
-    if reexecuted and (new != old or changed("worker/Dockerfile")):  # a retry restarted already
+        # The restart follows the re-executed steps: before them it would move behind where a step
+        # that fails can still abort, and the retry of such a step would then skip it again.
         restart_factory_mcp()
+    else:
+        deploy_steps(since, new, restart=new != old or changed("worker/Dockerfile"))
     deployed_file.write_text(new + "\n")
     print(f"update: deployed {new[:7]} (was {since[:7]})")
     if changed("tenant/hermes/config.yaml"):

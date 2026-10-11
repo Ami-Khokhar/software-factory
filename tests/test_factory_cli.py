@@ -93,11 +93,34 @@ class UpdateTest(unittest.TestCase):
                                     r"the new update script failed at [0-9a-f]{7}[\s\S]*the new step failed"):
             self.deploy_with()
         record = (cli.STATE / "deployed").read_text()  # the previous successful baseline is kept
+        self.assertEqual(len(self.restarts), 0)  # factory-mcp runs the old code until the steps succeed
         commands, printed = self.deploy_with()  # the same commit deploys now, without a guard loop
         self.assertIn("update: deployed", printed)
+        self.assertEqual(len(self.restarts), 1)  # and that retry still restarted factory-mcp onto the new code
         self.assertNotEqual((cli.STATE / "deployed").read_text(), record)
         self.assertEqual((self.deploy / "deploy-step.log").read_text(), "step\n")
         self.assertEqual(self.deploy_with(), ([], ""))
+
+    def test_the_reexecuted_script_deploys_from_the_record_its_parent_passes(self):
+        # The child once read the ambient state file, which names a commit this checkout has never
+        # seen and makes every path look changed (the finding #187 r1:630f6b1a058d856b).
+        (cli.STATE / "deployed").parent.mkdir(parents=True, exist_ok=True)
+        (cli.STATE / "deployed").write_text("0" * 40 + "\n")
+        since = self.commit("notes.txt", "x\n")
+        git(self.dev, "push", "-q", "origin", "HEAD:main")
+        new = self.commit("worker/Dockerfile", "FROM scratch\n")
+        git(self.dev, "push", "-q", "origin", "HEAD:main")
+        git(self.deploy, "fetch", "-q", "origin")
+        git(self.deploy, "checkout", "-q", new)
+        with self.assertRaisesRegex(SystemExit, "not a command to run by hand"):
+            cli.cmd_update(["--deploy-steps"])  # no UPDATE_SINCE: nothing to start from
+        with mock.patch.dict(os.environ, {cli.UPDATE_SINCE: since}), \
+                mock.patch.object(cli, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run:
+            cli.cmd_update(["--deploy-steps"])
+        self.assertEqual([call.args for call in run.call_args_list], [
+            ("docker", "build", "-q", "-t", "factory-worker:candidate", str(self.deploy / "worker")),
+            ("docker", "run", "--rm", "factory-worker:candidate", "sh", "-c", cli.WORKER_CHECK),
+            ("docker", "tag", "factory-worker:candidate", "factory-worker:latest")])
 
     def commit(self, name, text, cwd=None, message=None):
         cwd = cwd or self.dev
