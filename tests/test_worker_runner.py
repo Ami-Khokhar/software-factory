@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -19,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "worker"))
 import runner  # noqa: E402
 
 HARNESS = r'''
-import os, stat, subprocess, sys
+import os, stat, subprocess, sys, time
 mode = sys.argv[1]
 def git(*args):
     subprocess.run(["git", *args], check=True, capture_output=True)
@@ -45,6 +46,16 @@ if mode == "plant":  # a filter driver and hooks, which run wherever git touches
 if mode == "fail":
     print("pi could not reach the model", file=sys.stderr)
     sys.exit(17)
+if mode == "timeout":
+    print("step one", flush=True)
+    print("CODEX_KEY: " + os.environ.get("CODEX_KEY", ""), flush=True)
+    # Debugging: every file in every directory the agent logged in with, printed whole.
+    for directory in os.environ.get("CREDENTIAL_DIRS", "").split(":"):
+        if os.path.isdir(directory):
+            for name in sorted(os.listdir(directory)):
+                print(open(os.path.join(directory, name)).read(), flush=True)
+    print(sys.argv[-1], flush=True)
+    time.sleep(30)
 print("DONE")
 '''
 # What the image's system git config and the container boundary give every sandboxed command.
@@ -275,6 +286,131 @@ class RunnerTest(unittest.TestCase):
                          before)
         self.assertEqual(sh(self.checkout, "status", "--porcelain"), "")
 
+    def phases_of(self, result):
+        return {phase["phase"]: phase for phase in result.get("diagnostics", {}).get("phases", [])}
+
+    def test_diagnostics_cover_every_phase_of_a_pass(self):
+        result, order = self.run_order("fix")
+        self.assertEqual(result["status"], "completed", result.get("error"))
+        phases = self.phases_of(result)
+        self.assertEqual(set(phases), {"checkout", "environment setup", "harness execution",
+                                       "patch collection", "verification"})
+        for name, phase in phases.items():
+            self.assertTrue(0 <= phase["elapsedMs"] < 60_000, (name, phase))
+        self.assertEqual(phases["harness execution"]["exitCode"], 0)
+        self.assertEqual(phases["patch collection"]["exitCode"], 0)
+        self.assertEqual(phases["verification"]["exitCode"], 0)
+        self.assertTrue(0 <= result["diagnostics"]["elapsedMs"] < 120_000)
+        self.assertEqual(documents.check_result(result, order), [], result["diagnostics"])
+
+    def test_a_failing_harness_or_verify_names_its_phase_and_exit(self):
+        result, _ = self.run_order("fail")
+        phase = self.phases_of(result)["harness execution"]
+        self.assertEqual((result["status"], phase["exitCode"]), ("failed", 17))
+        self.assertIn("pi could not reach the model", phase["tail"])
+        result, _ = self.run_order("cheat")
+        phase = self.phases_of(result)["verification"]
+        self.assertEqual((result["status"], phase["exitCode"]), ("failed", 1))
+        self.assertIn("python3 check.py", result["evidence"][0]["command"])
+
+    def test_a_failing_patch_collection_names_its_phase_and_exit(self):
+        result, _ = self.run_order("nothing")
+        self.assertEqual((result["status"], result["error"]),
+                         ("failed", "the harness made no change"))
+        phase = self.phases_of(result)["patch collection"]
+        self.assertEqual(("exitCode" in phase, phase.get("exitCode") is None), (False, True))
+        original = runner.Sandbox.run
+
+        def collected(sandbox, argv, seconds, mount, harness=False, env=None):
+            """The agent's own harness, collecting with git: the sandbox's own exit code rides:"""
+            if harness:
+                return original(sandbox, argv, seconds, mount, harness=True, env=env)
+            return 3, "", "not a commit we know"
+
+        with mock.patch.object(runner.Sandbox, "run", collected):
+            result, _ = self.run_order("fix")
+        self.assertEqual((result["status"], self.phases_of(result)["patch collection"]["exitCode"]),
+                         ("failed", 3))
+
+    def test_a_failing_checkout_or_setup_names_its_phase_and_exit(self):
+        """A phase the consumer can name is one that carries the command's exit code when there is
+        one (ADR-0051): a broken checkout still pauses with the repair reason, not a second pass."""
+        real_git = runner.git
+
+        def broken_fetch(cwd, *args, **kwargs):
+            if args[0] == "fetch":
+                raise runner.WorkerError("git fetch failed: fatal: dead remote", 128)
+            return real_git(cwd, *args, **kwargs)
+
+        with mock.patch.object(runner, "git", broken_fetch):
+            result, _ = self.run_order("fix")
+        self.assertEqual((result["status"], result["error"]),
+                         ("failed", "git fetch failed: fatal: dead remote"))
+        self.assertEqual(self.phases_of(result)["checkout"].get("exitCode"), 128)
+        with mock.patch.object(runner, "prepare", side_effect=runner.WorkerError("git fetch failed")):
+            result, _ = self.run_order("fix")
+        self.assertEqual((result["status"], result["error"]), ("failed", "git fetch failed"))
+        self.assertIn("checkout", self.phases_of(result))
+        with mock.patch.object(runner, "ensure_docker", side_effect=runner.WorkerError(
+                "docker is not available: OrbStack did not start", 7)):
+            result, _ = self.run_order("fix")
+        self.assertEqual((result["status"],
+                          self.phases_of(result)["environment setup"].get("exitCode")), ("failed", 7))
+
+    def test_a_harness_timeout_keeps_its_output_and_redacts_secrets(self):
+        """The container's kill returns what it printed before it died (#192): the diagnostics tail
+        holds it with the copied credential's content, the env value and the WorkOrder's command
+        payload removed, along with the phase's timing"""
+        # The multi-line credential is the ordinary case for an INI or pretty-printed auth file:
+        # its content matches the whitespace-collapsed tail only through the collapsed secret the
+        # runner registers, and neither value is credential-shaped enough for the other rules.
+        key = Path(self.tmp.name) / "codex.json"
+        key.write_text("hunter-file9 = opendoor\nsecond = line\n")
+        self.auth.write_text("hunter-agent=opendoor")
+        self.flags = ["--credential", f"{self.auth}:/home/node/.pi/agent",
+                      "--credential", f"{key}:/tmp/factory-home/.codex",
+                      "--env", "CODEX_KEY=sk-hunter2"]
+        sandbox_timeout = []
+
+        def timed_out_run(sandbox, argv, seconds, mount, harness=False, env=None):
+            """Sandbox.run without Docker: the kill is `timeout`, like the image's command, so the
+            exit is 124 with everything the harness printed before it."""
+            if harness:
+                sandbox_timeout.append(seconds)
+                env = dict(sandbox.harness_env, **(env or {}))
+                env.pop("CREDENTIAL_DIRS", None)
+                env["CREDENTIAL_DIRS"] = ":".join(scratch for scratch, _ in sandbox.credentials)
+                argv = ["timeout", "--kill-after=1", "1", *argv]
+            try:
+                done = subprocess.run(argv, cwd=mount, capture_output=True, text=True,
+                                      timeout=60,
+                                      env=dict(os.environ, **SANDBOX_ENV, **(env or {})))
+            except subprocess.TimeoutExpired as exc:
+                return 124, exc.stdout or "", exc.stderr or ""
+            return done.returncode, done.stdout, done.stderr
+
+        with mock.patch.object(runner.Sandbox, "run", timed_out_run):
+            result, order = self.run_order("timeout")
+        self.assertTrue(sandbox_timeout, "the harness ran with a sandbox timeout at all")
+        self.assertEqual((result["status"], result["error"]), ("failed", "the harness timed out"))
+        phase = self.phases_of(result)["harness execution"]
+        self.assertEqual((phase["exitCode"], 0 < phase["elapsedMs"]), (124, True))
+        self.assertEqual(documents.check_result(result, order), [], result["diagnostics"])
+        tail = phase["tail"]
+        self.assertIn("step one", tail)
+        self.assertGreaterEqual(phase["elapsedMs"], 900)
+        # The configured env value: the harness prints CODEX_KEY's value itself.
+        self.assertNotIn("sk-hunter2", tail)
+        self.assertNotIn("hunter2", tail)
+        # The copied credential's content: the harness prints the file itself, so only the
+        # runner's credential-reading loop can keep it out of the tail.
+        self.assertNotIn("hunter-file9", tail)
+        self.assertNotIn("hunter-agent", tail)
+
+        self.assertNotIn("opendoor", tail)
+        self.assertNotIn("factory.workorder/v1", tail)
+        self.assertNotIn("Fix the app", tail)
+
     def test_hooks_and_filters_the_harness_plants_never_run_on_the_host(self):
         result, _ = self.run_order("plant")
         self.assertEqual(result["status"], "completed", result.get("error"))
@@ -284,6 +420,37 @@ class RunnerTest(unittest.TestCase):
 
 class SandboxTest(unittest.TestCase):
     def test_every_sandbox_command_uses_the_host_user_and_writable_home(self):
+        with mock.patch.object(runner.subprocess, "run", return_value=SimpleNamespace(
+                returncode=0, stdout="", stderr="")) as run:
+            sandbox = runner.Sandbox("image", "label", [("/private/credential-0", "/home/node/.pi/agent")],
+                                     {"PI_CODING_AGENT_DIR": "/home/node/.pi/agent"})
+            sandbox.run(["pi"], 10, "/private/work", harness=True)
+            sandbox.run(["sh", "-c", "git diff"], 10, "/private/work")
+        harness, collect = (call.args[0] for call in run.call_args_list)
+        for command in (harness, collect):
+            self.assertIn("--user", command)
+            self.assertIn(f"{os.getuid()}:{os.getgid()}", command)
+            self.assertIn(f"HOME={runner.CONTAINER_HOME}", command)
+        for item in ("/private/credential-0:/home/node/.pi/agent", "PI_CODING_AGENT_DIR=/home/node/.pi/agent"):
+            self.assertIn(item, harness)
+            self.assertNotIn(item, collect)
+
+    def test_the_sandbox_returns_the_output_it_captured_when_the_timeout_fires(self):
+        """A docker CLI that hangs is killed like the harness it started; whatever it had printed
+        by then rides on the TimeoutExpired and becomes the Result's output (#192)."""
+        expired = subprocess.TimeoutExpired(["pi"], 10, output=b"partial print\n", stderr=b"late logging")
+        with mock.patch.object(runner.subprocess, "run",
+                               side_effect=[expired, SimpleNamespace(returncode=0, stdout="", stderr="")]):
+            code, out, err = runner.Sandbox("image", "label").run(["pi", "x"], 10, "/works")
+        self.assertEqual((code, out, err), (124, "partial print\n", "late logging"))
+
+    def test_a_timeout_with_no_captured_output_still_says_so(self):
+        expired = subprocess.TimeoutExpired(["pi"], 10)
+        with mock.patch.object(runner.subprocess, "run",
+                               side_effect=[expired, SimpleNamespace(returncode=0, stdout="", stderr="")]):
+            code, out, err = runner.Sandbox("image", "label").run(["pi", "x"], 10, "/works")
+        self.assertEqual((code, out, err), (124, "", "timed out"))
+
         with mock.patch.object(runner.subprocess, "run", return_value=SimpleNamespace(
                 returncode=0, stdout="", stderr="")) as run:
             sandbox = runner.Sandbox("image", "label", [("/private/credential-0", "/home/node/.pi/agent")],

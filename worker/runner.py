@@ -42,10 +42,16 @@ git diff --binary "$FACTORY_BASE" HEAD
 """
 MAX_PATCH_BYTES = 2_000_000
 CONTAINER_HOME = "/tmp/factory-home"
+DIAGNOSTIC_TAIL = 4000  # the Result schema's cap for a diagnostic tail
 
 
 class WorkerError(Exception):
-    """The WorkOrder cannot be carried out; the message becomes the Result's error."""
+    """The WorkOrder cannot be carried out; the message becomes the Result's error. When the
+    failure is a command's own exit code, that code rides along for the phase diagnostics."""
+
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code
 
 
 def now():
@@ -74,7 +80,8 @@ def git(cwd, *args, timeout=300):
     except subprocess.TimeoutExpired:
         raise WorkerError(f"git {args[0]} timed out after {timeout}s") from None
     if done.returncode != 0:
-        raise WorkerError(f"git {args[0]} failed: {(done.stderr or done.stdout).strip()[-300:]}")
+        raise WorkerError(f"git {args[0]} failed: {(done.stderr or done.stdout).strip()[-300:]}",
+                          done.returncode)
     return done.stdout.strip()
 
 
@@ -87,6 +94,31 @@ def workorder_from(text):
         return json.loads(text[at + len(marker):])
     except ValueError as exc:
         raise WorkerError(f"the WorkOrder is not JSON: {exc}") from None
+
+
+# The shapes the controller's sanitize also looks for (factory_mcp/diagnostics.py): the worker
+# redacts before serializing the Result, and the controller checks behind it (#192).
+_ENV_VALUE = re.compile(r"\b([A-Z][A-Z0-9_]{2,})=\S+")
+_CREDENTIAL = re.compile(
+    r"(?i)\b(access|auth)?[-_ ]?(token|password|passwd|passphrase|secret|bearer|authorization|"
+    r"credential|api[-_ ]?key|private[-_ ]?key)s?(\s*[=:]\s*|\s+)\S+")
+_TOKEN = re.compile(r"(?i)\bgh[pousr]_[A-Za-z0-9]{6,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b"
+                    r"|\bAKIA[0-9A-Z]{16}\b|\bBearer\s+\S+")
+_WORKORDER_PAYLOAD = re.compile(r"(?s)\{.*?factory\.workorder/v1.*?\}")
+
+
+def redact(text, secrets, limit=DIAGNOSTIC_TAIL):
+    """Bounded output for a Result: whitespace collapsed; copied credentials and configured secret
+    values matched whole; environment values, credential-shaped text, known tokens and the
+    WorkOrder's command payload replaced."""
+    line = " ".join((text or "").split())
+    for secret in secrets:
+        if secret:
+            line = line.replace(secret, "<redacted>")
+    line = _WORKORDER_PAYLOAD.sub(" ", line)
+    line = _ENV_VALUE.sub(r"\1=<redacted>", line)
+    line = _CREDENTIAL.sub(r"\g<2>=<redacted>", line)
+    return _TOKEN.sub("<redacted>", line)[:limit]
 
 
 def origin_repo(cwd):
@@ -142,17 +174,18 @@ def verify_command(cwd, base):
     return config.get("verify") if isinstance(config.get("verify"), str) else None
 
 
-def docker_answers():
+def docker_status():
+    """The exit code of `docker info`, or None when it could not run at all."""
     try:
-        return subprocess.run(["docker", "info"], capture_output=True, timeout=30).returncode == 0
+        return subprocess.run(["docker", "info"], capture_output=True, timeout=30).returncode
     except (OSError, subprocess.TimeoutExpired):
-        return False
+        return None
 
 
 def ensure_docker(wait=120, poll=2):
     """Start Docker (OrbStack) when it does not answer, so the first pass after a reboot needs no
     person."""
-    if docker_answers():
+    if docker_status() == 0:
         return
     for cmd in (["orb", "start"], ["open", "-g", "-a", "OrbStack"]):
         try:
@@ -162,10 +195,10 @@ def ensure_docker(wait=120, poll=2):
             continue
     deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
-        if docker_answers():
+        if docker_status() == 0:
             return
         time.sleep(poll)
-    raise WorkerError("docker is not available: OrbStack did not start")
+    raise WorkerError("docker is not available: OrbStack did not start", docker_status())
 
 
 class Sandbox:
@@ -207,9 +240,12 @@ class Sandbox:
         cmd += [self.image, "timeout", "--kill-after=10", str(int(seconds)), *argv]
         try:
             done = subprocess.run(cmd, capture_output=True, text=True, timeout=seconds + 60)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
             subprocess.run(["docker", "kill", name], capture_output=True)
-            return 124, "", "timed out"
+            # Whatever the sandbox printed before the kill rides on the exception (#192);
+            # communicate hands back bytes even in text mode.
+            out = textify(exc.stdout)
+            return 124, out, textify(exc.stderr) or ("" if out else "timed out")
         except OSError as exc:
             raise WorkerError(f"docker is not available: {exc}") from None
         if done.returncode == 125:
@@ -223,14 +259,21 @@ def collect(sandbox, work, base, goal):
     code, diff, err = sandbox.run(["sh", "-c", EXTRACT], 300, work,
                                   env={"FACTORY_BASE": base, "FACTORY_GOAL": goal})
     if code == 3:
-        raise WorkerError("the harness rewrote history below the commit it was given")
+        raise WorkerError("the harness rewrote history below the commit it was given", 3)
     if code != 0:
-        raise WorkerError(f"collecting the work failed ({code}): {' '.join(err.split())[-300:]}")
+        raise WorkerError(f"collecting the work failed ({code}): {' '.join(err.split())[-300:]}", code)
     if not diff.strip():
         raise WorkerError("the harness made no change")
     if len(diff.encode()) > MAX_PATCH_BYTES:
         raise WorkerError(f"the patch is over {MAX_PATCH_BYTES} bytes")
     return diff if diff.endswith("\n") else diff + "\n"
+
+
+def textify(output):
+    """Subprocess output the kill left on a TimeoutExpired: bytes even when text was asked for."""
+    if isinstance(output, bytes):
+        return output.decode("utf-8", "replace")
+    return output or ""
 
 
 def credential_copies(specs, scratch):
@@ -279,6 +322,21 @@ def main(argv=None):
               "evidence": [], "startedAt": now()}
     scratch = tempfile.mkdtemp(prefix="factory-run-")
     work = os.path.join(scratch, "work")
+    started = time.monotonic()
+    phases, secrets, echoed = [], set(), ""
+
+    def record(name, begin, code=None, output=""):
+        """One phase's diagnostics: elapsed milliseconds, the exit code where there is one, and a
+        redacted tail. Failures where no exit code exists still name the phase."""
+        entry = {"phase": name, "elapsedMs": int((time.monotonic() - begin) * 1000)}
+        if code is not None:
+            entry["exitCode"] = code
+        tail = redact(output, secrets)
+        if tail:
+            entry["tail"] = tail
+        phases.append(entry)
+        return entry
+
     try:
         order = workorder_from(text)
         result["workOrderId"] = order["id"]
@@ -286,27 +344,64 @@ def main(argv=None):
         if repo != order["repo"]:
             raise WorkerError(f"the checkout {cwd} is {repo}, not {order['repo']}")
         branch = "factory/" + order["workItemId"].rsplit("#", 1)[1]
-        with checkout_lock(cwd) as waited:
-            base = prepare(cwd, order, branch, work)
-            verify = verify_command(cwd, base)
+        checkout_start = time.monotonic()
+        try:
+            with checkout_lock(cwd) as waited:
+                base = prepare(cwd, order, branch, work)
+                verify = verify_command(cwd, base)
+        except WorkerError as exc:
+            record("checkout", checkout_start, getattr(exc, "code", None))
+            raise
+        record("checkout", checkout_start, 0)
         if not verify and not order.get("remoteVerify"):
             raise WorkerError("the base commit has no .github/pr-gatekeeper.json verify command")
-        credentials = credential_copies(args.credential, scratch)
-        harness_env = env_pairs(args.env)
-        seconds = max(120, order["budget"]["wallMs"] // 1000 - 60 - waited)
-        ensure_docker()
-        sandbox = Sandbox(args.image, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]), credentials, harness_env)
+        setup_start = time.monotonic()
+        try:
+            credentials = credential_copies(args.credential, scratch)
+            harness_env = env_pairs(args.env)
+            seconds = max(120, order["budget"]["wallMs"] // 1000 - 60 - waited)
+            ensure_docker()
+            sandbox = Sandbox(args.image, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]),
+                              credentials, harness_env)
+        except WorkerError as exc:
+            record("environment setup", setup_start, getattr(exc, "code", None))
+            raise
+        record("environment setup", setup_start, 0)
+        secrets = {value for value in harness_env.values() if value}
+        # A copied credential's whole content is a secret, in both the raw and collapsed form:
+        # the tail is whitespace-collapsed before any replace, so a multi-line credential (a
+        # pretty-printed auth JSON, a PEM key) matches only through its collapsed form.
+        for directory, _ in credentials:
+            for name in os.listdir(directory):
+                with open(os.path.join(directory, name)) as handle:
+                    value = handle.read().strip()
+                    if value:
+                        secrets.add(value)
+                        secrets.add(" ".join(value.split()))
+        harness_start = time.monotonic()
         code, out, err = sandbox.run([*harness, text], seconds * 0.7, work, harness=True)
-        print((out + err)[-4000:], flush=True)  # for the relay log; the Result line comes last
+        echoed = out + err
+        record("harness execution", harness_start, code, echoed)
+        # for the relay log; the Result line comes last. Redacted by the same rules as the tail.
+        print(redact(echoed[-4000:], secrets), flush=True)
         if code == 124:
             raise WorkerError("the harness timed out")
         if code != 0:
             detail = " ".join((err or out).split())[-300:]
             raise WorkerError(f"the harness exited {code}" + (f": {detail}" if detail else ""))
-        diff = collect(sandbox, work, base, order["goal"])
+        patch_start = time.monotonic()
+        try:
+            diff = collect(sandbox, work, base, order["goal"])
+        except WorkerError as exc:
+            record("patch collection", patch_start, getattr(exc, "code", None))
+            raise
+        record("patch collection", patch_start, 0)
         if not order.get("remoteVerify"):  # else a GitHub runner runs the verify (ADR-0045)
+            verify_start = time.monotonic()
             code, out, err = sandbox.run(["sh", "-c", verify], seconds * 0.25, work)
             output = out + err
+            echoed += output
+            record("verification", verify_start, code, output)
             tail = output[-2000:].replace("```", "")
             result["evidence"] = [{"kind": "test", "command": verify, "exit": code, "tail": tail}]
             if code != 0:
@@ -318,6 +413,13 @@ def main(argv=None):
         result["error"] = f"runner failed: {type(exc).__name__}: {exc}"
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+    diagnostics = {"elapsedMs": max(0, int((time.monotonic() - started) * 1000))}
+    if phases:
+        diagnostics["phases"] = phases
+    tail = redact(echoed, secrets)
+    if tail:
+        diagnostics["tail"] = tail
+    result["diagnostics"] = diagnostics
     result["finishedAt"] = now()
     print(json.dumps(result), flush=True)
     return 0

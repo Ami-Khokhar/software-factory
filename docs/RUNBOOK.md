@@ -114,7 +114,10 @@ The harness, patch collection, and verification run as the same host UID with a 
 container-only HOME (`/tmp/factory-home`). Build the image with
 `docker build -t factory-worker:latest worker/`; `factory update` rebuilds it when
 `worker/Dockerfile` changes, and tags the new build `latest` only after `python`, `python3` and
-`git` run in it. An agent registered before #98 must add its `--credential` and
+`git` run in it. Hold point (ADR-0052): rebuild it — or enable it at all — only once `factory-mcp`
+with the `Result.diagnostics` consumer (#189–#191) is deployed and running; an old image keeps
+producing legacy Results, and a rebuilt one produces diagnostics only a deployed consumer reads.
+An agent registered before #98 must add its `--credential` and
 `--env` flags: without them the runner mounts no login and the harness fails on its first call.
 Register each worker in `~/.config/agent-relay/agents.json`
 (replace the host paths), list it in `FACTORY_WORKERS` (preferred first, `:local` or `:hosted`),
