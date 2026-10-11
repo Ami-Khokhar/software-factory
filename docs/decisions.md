@@ -1067,6 +1067,34 @@ next update retries the whole set of steps.
 
 ## ADR-0050 — A failed attempt is named only where its evidence names it
 
+## ADR-0051 — A confirmed environment fault pauses instead of a second pass
+
+**Context.** ADR-0050 made the Foreman name a failed attempt's cause from the Result's optional
+diagnostics, including `checkout or setup`. The Foreman still treated every failure the same way:
+back to `ready` and another pass, with routing steering it away from the worker that failed to an
+alternate one — as if the failure belonged to the code. When the failure belongs to the shared
+environment (the checkout a pass runs in), every pass of that attempt meets it again, whatever
+worker takes it, and the only thing a second pass buys is the same failure and one more pass spent.
+
+**Decision.** When the diagnosis names the environment — `checkout or setup`, a setup or checkout
+phase the harness's own diagnostics reported as failed — the Foreman pauses the WorkItem on the
+first failed attempt: `human_waiting`, with a repair reason in `blockedOn` that names
+`factory_resolve_human`, and no dispatch until a person answers. A `failing test` is the work, an
+`empty patch` is the worker's output, and a harness timeout — a phase that only ran out of the
+clock, and a timeout one of the reason strings suggests with no supporting diagnostics stays
+unknown — is not evidence against the environment: those keep the normal recovery. The producer
+side stays untouched: no worker is enabled by #191 either, and a diagnosis still names the
+environment only from a Result's own evidence.
+
+**Consequence.** factory_status shows the WorkItem as `human_waiting` with the repair reason, the
+owner is told on the issue as for any pause, and `factory_resolve_human` with `retry` — a person's
+own, or the owner's, or Day Desk's subject to ADR-0030 and ADR-0035 — starts the next pass once
+the environment is repaired. One confirmed environment failure costs one pass instead of every
+pass the budget had. A failing test or a timeout that would once have been read as an environment
+fault stays code: the pause keys on the named cause alone, not on the reason strings.
+
+## ADR-0050 — A failed attempt is named only where its evidence names it
+
 **Context.** Since #189 a Result may carry optional diagnostics, but the Foreman logged only the
 reason string. Two attempts whose reasons matched a timeout pattern were escalated as "the issue is
 likely too big for one pass", which sends owners to split issues that may have failed for an
@@ -1086,7 +1114,8 @@ Workers gain nothing yet: no producer is enabled by #190.
 
 **Consequence.** factory_status shows, in the one `attempt_failed` audit entry it already returned,
 which of checkout/setup, harness timeout, empty patch or failing test an attempt was, or no cause at
-all when nothing names one; owners (and Day Desk) decide retry versus split from that evidence
+all when nothing names one; owners (and Day Desk) decide retry versus split from that evidence; a cause that names the
+environment pauses the WorkItem instead of a second pass (ADR-0051)
 instead of the old scope guess. Tails the worker did not redact cannot cross into a retry WorkOrder
 or an escalation. An unknown-cause timeout now costs a fresh attempt instead of a split
 recommendation, which is the honest reading of what the factory knows. The diagnosis runs whatever
