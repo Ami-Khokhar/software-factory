@@ -86,6 +86,12 @@ CASES = [
     ("diagnostics with a phase tail that is not text", result(diagnostics={"elapsedMs": 1,
         "phases": [{"phase": "verification", "elapsedMs": 1, "tail": 5}]}), False),
     ("diagnostics that are not an object", result(diagnostics="slow"), False),
+    ("a phase exitCode of 0.0, which JSON counts as an integer", result(diagnostics={
+        "elapsedMs": 1, "phases": [
+            {"phase": "verification", "elapsedMs": 1, "exitCode": 0.0}]}), True),
+    ("a phase exitCode of 1.0, a serialised integer", result(diagnostics={
+        "elapsedMs": 1, "phases": [
+            {"phase": "verification", "elapsedMs": 1, "exitCode": 1.0}]}), True),
 ]
 
 

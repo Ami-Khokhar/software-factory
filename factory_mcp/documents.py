@@ -105,7 +105,7 @@ def _diagnostic_phase_ok(phase):
     return (isinstance(phase, dict) and set(phase) <= {"phase", "elapsedMs", "exitCode", "tail"}
             and phase.get("phase") in PHASES and _integer(phase.get("elapsedMs"))
             and phase["elapsedMs"] >= 0
-            and isinstance(phase.get("exitCode", 0), int) and not isinstance(phase.get("exitCode"), bool)
+            and _integer(phase.get("exitCode", 0))
             and _diag_tail_ok(phase.get("tail", "")))
 
 
