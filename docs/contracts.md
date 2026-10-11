@@ -121,6 +121,19 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   is wired yet. Tails are at most 4000 characters so a diagnostic dump cannot
   leak unbounded output or a secret past the relay. Both the schema and the
   Foreman's Result check (which must stay identical) enforce these bounds.
+  **Consumed for the attempt audit (ADR-0050).** When an attempt fails, the Foreman names a
+  cause only from evidence: a setup or verification phase that failed in the diagnostics, a
+  harness execution phase that failed at most of the WorkOrder's `budget.wallMs`, a missing
+  patch on a completed Result, or a test evidence entry that did not pass. Whatever else the
+  reason strings say — in particular a timeout — is no cause without such evidence, and the
+  cause rides with a sanitized, bounded context (at most 300 characters, credentials, environment
+  values and the WorkOrder command payload redacted at the controller) into the audit
+  `attempt_failed` entry, the escalation, and the next WorkOrder's `previous-attempt`
+  `findingsToAddress` problem text. No schema changes: attempts stay strings and
+  `findingRef` is unchanged. The diagnosis also runs on the Results the Result
+  check rejected, so it names a cause only from the shapes that check would
+  have accepted — it never raises on one — and a test evidence entry without an
+  integer non-zero exit is not a failing test.
   **Deployment prerequisite:** the producer side comes first — do not make the
   field required or start reading `phases` for decisions until a worker harness
   actually emits it.

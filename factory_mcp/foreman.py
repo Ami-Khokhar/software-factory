@@ -6,7 +6,7 @@ import re
 import time
 import uuid
 
-from . import documents, gate_secrets, lessons, patches, repos, routing, workitem
+from . import diagnostics, documents, gate_secrets, lessons, patches, repos, routing, workitem
 from .github import GitHubError
 from .mcp import ToolError
 from .relay import RelayError
@@ -19,9 +19,7 @@ WORKING = ("dispatching", "implementing")
 BOOTSTRAP_PREFIX = "factory-bootstrap/"
 MAX_PLAN_ISSUES = 10  # one approval covers this many issues at most (ADR-0024)
 REGATE_MARKER = re.compile(r"<!-- factory regate (\d+) -->")
-# A pass that ran out of time: worker/runner.py's harness timeout, or the relay's task timeout
 REMOTE_VERIFY_WORKFLOW = ".github/workflows/factory-verify.yml"  # the workflow's name there is `factory-verify`
-OUT_OF_TIME = re.compile(r"the harness timed out|task timed_out")
 
 
 def agent_resolved(history):
@@ -579,6 +577,7 @@ class Foreman:
         errors = documents.check_result(result, order)
         if not errors and result["status"] != "completed":
             errors = [f"worker reported {result['status']}: {result.get('error')}"]
+        diagnosis = diagnostics.diagnose(order, result)
         sha, files, evidence = None, [], (result or {}).get("evidence", [])
         if not errors and order.get("remoteVerify"):
             wi, errors, evidence, waiting = self._remote_verify(wi, order, result["patch"])
@@ -592,7 +591,7 @@ class Foreman:
         if not errors:
             errors, files = self.check_pushed(wi, order, sha)
         if errors:
-            return self.fail(wi, order, f"{task['agentId']}: " + "; ".join(errors))
+            return self.fail(wi, order, f"{task['agentId']}: " + "; ".join(errors), diagnosis=diagnosis)
         self.store.log("result", {"workOrder": order["id"], "commitSha": sha}, wi["id"])
         done = dict(wi, headSha=sha, attempts=[], activeWorkOrderId=None, providerTaskId=None, remoteVerify=None)
         if wi.get("prNumber"):
@@ -694,20 +693,22 @@ class Foreman:
                                        f"{wi['goal']} (#{wi['issueNumber']})",
                                        documents.pr_body(wi, order, files, evidence, worker))
 
-    def fail(self, wi, order, reason):
-        """Record the attempt; two failed attempts block the WorkItem with the evidence. Implement attempts
-        that all ran out of time say the issue is too big for one pass: a retry is likely to run out too."""
-        attempts = list(wi.get("attempts") or []) + [reason]
+    def fail(self, wi, order, reason, diagnosis=None):
+        """Record the attempt; two failed attempts block the WorkItem with the evidence. The
+        diagnosis (diagnostics.diagnose) rides with the reason: an evidence-backed cause with its
+        sanitized bounded context, nothing when a cause stays unknown."""
+        diagnosis = diagnosis or {"cause": None, "context": ""}
+        detail = dict(reason=reason, diagnosis=diagnosis["context"], worker=wi.get("worker"))
+        if diagnosis["cause"]:
+            detail["cause"] = diagnosis["cause"]
+        attempts = list(wi.get("attempts") or []) + [diagnostics.entry(reason, diagnosis)]
         new = dict(wi, attempts=attempts, activeWorkOrderId=None, providerTaskId=None, remoteVerify=None,
                    state="changes_requested" if order["kind"] == "fix" else "ready")
         if len(attempts) >= 2:
-            fix = "Fix the cause named in attempts, then call factory_resolve_human."
-            if order["kind"] == "implement" and all(OUT_OF_TIME.search(a) for a in attempts):
-                fix = ("Each ran out of time, so the issue is likely too big for one pass: split it into "
-                       "smaller issues, then close this one with factory_resolve_human.")
             new.update(state="blocked",
-                       blockedOn=f"{len(attempts)} worker attempts at the {order['kind']} WorkOrder failed. {fix}")
-        return self._write(wi, new, "attempt_failed", reason=reason, worker=wi.get("worker"))
+                       blockedOn=f"{len(attempts)} worker attempts at the {order['kind']} WorkOrder failed. "
+                                 "Fix the cause named in attempts, then call factory_resolve_human.")
+        return self._write(wi, new, "attempt_failed", **detail)
 
     def resolve_human(self, workitem_id, resolution, note, by, agent=False, owner_asked=False):
         """A person's answer to human_waiting, blocked or exhausted (ADR-0006): retry, regate or close.

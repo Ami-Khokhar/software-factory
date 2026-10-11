@@ -1064,3 +1064,32 @@ deploy whose steps must prove the profile works. The tokens stay in the secrets 
 to keep in sync. The check needs an installed `hermes` that can list a profile's discovered
 servers; where it cannot, the update fails with the profile update itself already done, and the
 next update retries the whole set of steps.
+
+## ADR-0050 — A failed attempt is named only where its evidence names it
+
+**Context.** Since #189 a Result may carry optional diagnostics, but the Foreman logged only the
+reason string. Two attempts whose reasons matched a timeout pattern were escalated as "the issue is
+likely too big for one pass", which sends owners to split issues that may have failed for an
+environment reason a retry would fix. Reason strings alone cannot tell that apart, so they must not
+be read as a diagnosis.
+
+**Decision.** A failed attempt gets a cause only from evidence: a completed Result without a patch
+(unknown), a setup or verification phase that failed in the Result's own diagnostics, a failing test
+evidence entry, or a harness execution phase that failed while running at least 90% of the
+WorkOrder's `budget.wallMs` (a timeout). A timeout the reason strings suggest with no such evidence
+stays an unknown cause, and the blocked guidance never says an issue is too big. Whatever text the
+diagnosis carries — into the audit `attempt_failed` entry, escalation, and the next WorkOrder's
+`findingsToAddress` as `previous-attempt` problem text — is sanitized at the controller too: one
+line of at most 300 characters with things that look like credential contents, environment values,
+or the WorkOrder's own command payload redacted, whatever the worker's producer already did.
+Workers gain nothing yet: no producer is enabled by #190.
+
+**Consequence.** factory_status shows, in the one `attempt_failed` audit entry it already returned,
+which of checkout/setup, harness timeout, empty patch or failing test an attempt was, or no cause at
+all when nothing names one; owners (and Day Desk) decide retry versus split from that evidence
+instead of the old scope guess. Tails the worker did not redact cannot cross into a retry WorkOrder
+or an escalation. An unknown-cause timeout now costs a fresh attempt instead of a split
+recommendation, which is the honest reading of what the factory knows. The diagnosis runs whatever
+else the Result carries, including the diagnostics the Result check rejected: malformed shapes and
+evidence with no exit name no cause and cannot raise out of a tick, so a WorkItem is never left
+`implementing` serving a crash on every later tick instead of the check's wording.

@@ -198,8 +198,10 @@ class ActionsTest(unittest.TestCase):
         self.assertIn("no Result JSON line", wi["attempts"][1])
         self.assertIn("Fix the cause named in attempts", wi["blockedOn"])  # one ran out of time, not each
 
-    def test_implement_attempts_that_all_ran_out_of_time_say_to_split_the_issue(self):
-        """The runner's harness timeout, then the relay's task timeout: a retry is likely to run out too."""
+    def test_a_timeout_that_the_diagnostics_do_not_support_stays_unknown(self):
+        """#190: the runner's harness timeout, then the relay's task timeout. A pass that ran out of
+        time is not by itself an issue too big for one pass; the cause is unknown, so the blocked
+        guidance asks what it asks of any two failures."""
         wi, task = self.dispatched()
         self.relay.finish(task["id"], output=json.dumps({
             "schemaVersion": "factory.result/v1", "workOrderId": wi["activeWorkOrderId"], "status": "failed",
@@ -210,7 +212,9 @@ class ActionsTest(unittest.TestCase):
         self.relay.finish(task["id"], status="timed_out", error="timed out")
         wi = self.tick()
         self.assertEqual(wi["state"], "blocked")
-        self.assertIn("too big for one pass: split it into smaller issues", wi["blockedOn"])
+        self.assertNotIn("too big", wi["blockedOn"])
+        self.assertNotIn("split", wi["blockedOn"])
+        self.assertIn("Fix the cause named in attempts", wi["blockedOn"])
 
     def test_lost_relay_task(self):
         wi, task = self.dispatched()
