@@ -4,6 +4,7 @@ A WorkItem is stored as its whole JSON document. `stateVersion` is optimistic co
 must name the version it read, and it stores version + 1. `PRAGMA user_version` counts the migrations
 a store has had.
 """
+import hashlib
 import json
 import sqlite3
 import threading
@@ -36,6 +37,14 @@ CREATE TABLE IF NOT EXISTS workorders (
   workitem_id TEXT NOT NULL,
   doc TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS requests (
+  request_id TEXT PRIMARY KEY,
+  operation TEXT NOT NULL,
+  inputs_fingerprint TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 """
 # Migration 1: WorkItem fields the contract no longer has (#27).
 REMOVED_FIELDS = ("parentGoalId", "baseSha", "provider", "sessionHandle", "sessionNative", "sessionUrl")
@@ -53,7 +62,26 @@ def _migrate_2(wi):
     return wi
 
 
-MIGRATIONS = {1: _migrate_1, 2: _migrate_2}
+# Migration 3: the replacement request journal (#197). It adds only a new table, so no
+# stored WorkItem changes; the version bump marks stores that have the `requests` table.
+def _migrate_3(wi):
+    return wi
+
+
+MIGRATIONS = {1: _migrate_1, 2: _migrate_2, 3: _migrate_3}
+
+
+def canonical_inputs(inputs):
+    """The identity of an approved request's inputs: key order and spacing do not matter."""
+    return json.dumps(inputs, sort_keys=True, separators=(",", ":"))
+
+
+def _fingerprint(inputs):
+    return hashlib.sha256(canonical_inputs(inputs).encode()).hexdigest()
+
+
+# The replacement-recovery phases, in the only order they may be walked (#197).
+REQUEST_PHASES = ("started", "pushing", "done")
 
 
 def now():
@@ -70,6 +98,11 @@ class Store:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self._lock = threading.Lock()
+        # Rollback-journal mode keeps the whole store in the one factory.sqlite3 file: each
+        # committed write leaves the hot journal inside it, so a copy of that file alone is
+        # complete and an interrupted store is recovered on the next open (#197 finding: WAL
+        # spreads commits over -wal/-shm sidecars that survive an unclean stop).
+        self._db.execute("PRAGMA synchronous = FULL")
         self._db.executescript(SCHEMA)
         self._migrate()
 
@@ -161,3 +194,61 @@ class Store:
         with self._lock:
             rows = self._db.execute("SELECT doc FROM workorders ORDER BY seq").fetchall()
         return [json.loads(row[0]) for row in rows]
+
+    def open_request(self, request_id, operation, inputs):
+        """Journal (or resume) a replacement request keyed by its stable request ID.
+
+        The same ID with the same inputs resumes where the journal left off; the same ID
+        with different inputs is a conflicting reuse and fails.
+        """
+        fingerprint = _fingerprint(inputs)
+        with self._lock:
+            row = self._db.execute(
+                "SELECT operation, inputs_fingerprint, phase FROM requests WHERE request_id = ?",
+                (request_id,)).fetchone()
+            if row:
+                if row[0] != operation or row[1] != fingerprint:
+                    raise Conflict(
+                        f"request {request_id} is already journalled as {row[0]} with inputs "
+                        f"{row[1][:12]}…; this call names {operation} with inputs {fingerprint[:12]}…")
+                return {"requestId": request_id, "operation": operation,
+                        "inputsFingerprint": fingerprint, "phase": row[2], "reused": True}
+            at = now()
+            self._db.execute("INSERT INTO requests VALUES (?, ?, ?, ?, ?, ?)",
+                             (request_id, operation, fingerprint, REQUEST_PHASES[0], at, at))
+        return {"requestId": request_id, "operation": operation,
+                "inputsFingerprint": fingerprint, "phase": REQUEST_PHASES[0], "reused": False}
+
+    def advance_request(self, request_id, phase):
+        """Move the request to `phase`; only the next phase in REQUEST_PHASES is accepted."""
+        with self._lock:
+            current = self._db.execute("SELECT phase FROM requests WHERE request_id = ?",
+                                       (request_id,)).fetchone()
+            if not current:
+                raise Conflict(f"request {request_id} is not journalled")
+            try:
+                expected = REQUEST_PHASES[REQUEST_PHASES.index(current[0]) + 1]
+            except (ValueError, IndexError):
+                raise Conflict(f"request {request_id} is at phase {current[0]!r} and cannot "
+                               f"advance to {phase!r}") from None
+            if phase != expected:
+                raise Conflict(f"request {request_id} is at phase {current[0]!r}; the next "
+                               f"phase is {expected!r}, not {phase!r}")
+            self._db.execute("UPDATE requests SET phase = ?, updated_at = ? WHERE request_id = ?",
+                             (phase, now(), request_id))
+
+    def request(self, request_id):
+        with self._lock:
+            row = self._db.execute(
+                "SELECT request_id, operation, inputs_fingerprint, phase FROM requests "
+                "WHERE request_id = ?", (request_id,)).fetchone()
+        return (dict(zip(("requestId", "operation", "inputsFingerprint", "phase"), row))
+                if row else None)
+
+    def requests(self):
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT request_id, operation, inputs_fingerprint, phase FROM requests "
+                "ORDER BY started_at, request_id").fetchall()
+        return [dict(zip(("requestId", "operation", "inputsFingerprint", "phase"), row))
+                for row in rows]
