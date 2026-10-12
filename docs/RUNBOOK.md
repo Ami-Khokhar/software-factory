@@ -300,8 +300,9 @@ nothing from you. `factory start` checks all three.
 
 ### A real-Docker check of the runner's preflight
 
-The unit tests fake the Docker boundary, so once after each `worker/Dockerfile` or preflight
-change, check the preflight against real Docker: with Docker stopped (quit OrbStack), run a
+The unit tests fake the Docker boundary. `python3 scripts/regression_docker.py` (below) runs the
+missing-image (72) and missing-harness (71) preflight codes against real Docker on demand; the
+missing-daemon code itself needs Docker stopped, so: with Docker stopped (quit OrbStack), run a
 hand-made WorkOrder like the rehearsal does. The Result must fail before the harness runs, with
 `diagnostics.phases` naming `environment setup`, exit code `69` and the tail `preflight: the
 Docker daemon is not available`, and WorkItem #n must pause as `human_waiting` for the
@@ -310,6 +311,27 @@ environment (ADR-0051) rather than spend its passes. Rerun once with Docker up a
 
 `factory stop` stops everything now and keeps it stopped. Work in progress is not lost: after
 `factory start`, a cancelled pass counts as one failed attempt and is retried.
+
+### The runner regression harness
+
+Run the runner's behavior against real containers on demand, and after each change to
+`worker/runner.py` or `worker/Dockerfile`:
+
+```bash
+docker build -t factory-worker:latest worker/     # once, when the image changed
+python3 scripts/regression_docker.py
+```
+
+It runs real `docker run` sandboxes through the runner for seven deterministic cases: a
+successful harness whose work comes back as a patch, a failing verify command, a hung harness
+killed at its time limit with its output kept, secret redaction and credential isolation, the
+environment preflight failure codes, an oversized patch refused before any verify runs, and
+cleanup: no container, work or scratch dir survives. It prints a JSON report of the commands
+each case ran and what each showed, and exits 0 only when every case is backed by recorded
+evidence. The cases need no model credential, but a missing Docker daemon or worker image is an
+explicit nonzero failure naming what to do — it never reports a pass it did not run. The unit
+tests fake the Docker boundary (`tests/test_regression_docker.py`); this harness is the
+real-container side of the same checks.
 
 ## Where things are
 
@@ -324,6 +346,7 @@ environment (ADR-0051) rather than spend its passes. Rerun once with Docker up a
 | Worker checkouts | `$FACTORY_CHECKOUT_ROOT/<owner>/<repo>` |
 | Worker definitions | The agents in `FACTORY_WORKERS`, in `~/.config/agent-relay/agents.json` |
 | launchd services | `com.agent-relay`, `com.software-factory.factory-mcp` in `~/Library/LaunchAgents` |
+| The runner regression harness | `scripts/regression_docker.py`: explicitly invoked real `docker run` containers, seven deterministic cases (success, failing verification, timeout, secret redaction and isolation, preflight, size refusal, cleanup); exits nonzero naming what to do when Docker or the worker image is missing |
 
 A merged change deploys itself: the `factory-update` job below runs `factory update` every 10
 minutes (ADR-0031). It fast-forwards the deployed checkout (and moves it to `main` when its branch
