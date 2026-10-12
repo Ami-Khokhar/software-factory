@@ -144,12 +144,40 @@ class ReplaceIssueTest(unittest.TestCase):
             self.replace(numbers=[12])
         self.assertEqual(self.github.writes, [])
 
-    def test_an_original_that_already_had_a_worker_pass_is_refused(self):
+    def test_an_original_with_a_live_worker_still_cannot_be_replaced(self):
+        """A refusal that makes no GitHub call: a worker pass may still be running on the original,
+        so replacing it could change the graph under it."""
         self.wait()
         self.foreman.store.save_workorder({"id": "wo-1", "workItemId": ORIGINAL})
-        with self.assertRaisesRegex(ToolError, "o/r#201 already had a worker pass, so it cannot be replaced"):
-            self.replace()
+        for live in ({"activeWorkOrderId": "wo-1"}, {"providerTaskId": "task-1"}):
+            with self.subTest(live):
+                self.foreman.store.put(dict(self.foreman.store.get(ORIGINAL), **live))
+                with self.assertRaisesRegex(ToolError, "work is still live"):
+                    self.replace()
+                self.foreman.store.put(dict(self.foreman.store.get(ORIGINAL), activeWorkOrderId=None,
+                                            providerTaskId=None))
         self.assertEqual(self.github.writes, [])
+
+    def test_an_original_with_prior_attempts_and_no_live_worker_is_replaced(self):
+        """The owner's case: the original had worker passes that all failed, nothing is live on it,
+        and the replacements are untouched, so the whole replacement runs."""
+        self.wait()
+        self.foreman.store.put(dict(self.foreman.store.get(ORIGINAL),
+                                    attempts=["pass one failed", "pass two failed"]))
+        self.foreman.store.save_workorder({"id": "wo-1", "workItemId": ORIGINAL})
+        self.foreman.store.save_workorder({"id": "wo-2", "workItemId": ORIGINAL})
+        wi = self.replace()
+        self.assertEqual((wi["state"], wi["terminalReason"]), ("cancelled", "replaced by #300, #301"))
+        self.assertEqual(self.github.issues[(REPO, 201)]["state"], "closed")
+        # the plan moved only the original's edges: the dependent keeps its unrelated one
+        self.assertEqual(self.body(202), f"Depends on #{B}\nDepends on #150\n\n{ISSUE_BODY}")
+        self.assertEqual([h["detail"].get("replacements") for h in self.foreman.store.history(ORIGINAL)
+                          if h["action"] == "replaced"], [[A, B]])
+        # the cancelled WorkItem keeps what was tried: the audit trail reads on from it
+        self.assertEqual(wi["attempts"], ["pass one failed", "pass two failed"])
+        self.assertEqual([h["detail"].get("replacements") for h in self.foreman.store.history(ORIGINAL)
+                          if h["action"] == "replaced"], [[A, B]])
+        self.assertEqual(self.foreman.store.request(f"replace/{ORIGINAL}")["phase"], "done")
 
     def test_a_replacement_may_not_wait_for_the_issue_it_replaces(self):
         self.wait()

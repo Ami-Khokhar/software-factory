@@ -205,14 +205,17 @@ def build(store, foreman, agent=False):
              "write", lambda args: {"workItem": foreman.set_dependencies(
                  args["id"], args["dependsOn"], args["by"], agent=agent)}),
         Tool("factory_replace_issue",
-             "Replace a WorkItem that is waiting on recovery (human_waiting or blocked, and no worker "
-             "pass) with ordered replacement issues of the same repo: the first inherits the original's "
+             "Replace a WorkItem that is waiting on recovery (human_waiting or blocked) with ordered "
+             "replacement issues of the same repo: the first inherits the original's "
              "upstream dependencies, each next one waits for the one before it, and every direct "
              "dependent of the original now waits for the last replacement, keeping its other "
              "dependencies. The whole graph is planned and validated before anything is written: a "
-             "replacement or dependent that had a worker pass, or a plan that would make a cycle, "
+             "replacement or dependent that had a worker pass, an original whose work is still live "
+             "(an active WorkOrder or relay task; failed attempts with nothing running on it are fine), "
+             "or a plan that would make a cycle, "
              "refuses with nothing "
-             "changed. Otherwise the changed issues are edited, the original is cancelled and closed, "
+             "changed. Otherwise the changed issues are edited, the original is cancelled and closed "
+             "keeping what it tried, "
              "and the replacement is journalled so a retry resumes where it stopped.",
              {"type": "object", "required": ["id", "replacements", "by"], "additionalProperties": False,
               "properties": {"id": {"type": "string", "description": "owner/repo#issue"},

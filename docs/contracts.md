@@ -221,7 +221,9 @@ must hold before the controller is allowed to write:
    of `factory.sqlite3` alone is the whole store.
 8. **A replacement is planned and validated before it writes.** `factory_replace_issue` (ADR-0059)
    reads the whole dependency graph of the repo's WorkItems and computes every edge change before
-   anything is written: the original must be waiting on recovery with no worker pass, a dependent
+   anything is written: the original must be waiting on recovery with no live worker pass (an
+   active WorkOrder, a live relay task or a state that would dispatch one; failed attempts with
+   nothing running on it are history, not a live worker), a dependent
    that had a pass is refused, a replacement that had a pass is refused, a replacement that waits
    for the original is refused, and the planned graph must be cycle-free. A refusal makes no GitHub call that changes anything. The
    plan itself is a pure function (`workitem.replacement_plan`), not a tool.

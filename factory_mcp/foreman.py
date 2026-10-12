@@ -899,8 +899,10 @@ class Foreman:
             if wi["state"] not in ("human_waiting", "blocked"):
                 raise ToolError(f"{workitem_id} is {wi['state']}; only a WorkItem waiting on recovery "
                                 "is replaced. Answer it with factory_resolve_human instead")
-            if self.store.workorders(workitem_id):
-                raise ToolError(f"{workitem_id} already had a worker pass, so it cannot be replaced")
+            if self.store.workorders(workitem_id) and self._worker_live(wi):
+                raise ToolError(f"{workitem_id} had a worker pass whose work is still live "
+                                "(an active WorkOrder or relay task), so it cannot be replaced. Wait "
+                                "for it to fail or answer it, then replace it")
             repo, mine = wi["repo"], wi["issueNumber"]
             if mine in replacements:
                 raise ToolError(f"#{mine} cannot be replaced by itself")
@@ -949,13 +951,23 @@ class Foreman:
                     self.github.edit_issue(repo, number, updated)
             self.github.close_issue(repo, mine)
             names = ", ".join(f"#{number}" for number in replacements)
+            # what the cancelled WorkItem tried stays on it: the replacement is the recovery
+            # record's continuation, not a wipe of its history
             new = self._write(wi, dict(wi, state="cancelled", terminalReason=f"replaced by {names}",
-                                       blockedOn=None, waitingOn=None, attempts=[]), "replaced",
+                                       blockedOn=None, waitingOn=None), "replaced",
                               replacements=replacements, **({"agent": True} if agent else {}))
             self.store.advance_request(request_id, "done")
             return new
         finally:
             self.store.release(workitem_id, self.holder)
+
+    @staticmethod
+    def _worker_live(wi):
+        """A worker pass may still be running on the WorkItem: an active WorkOrder, a live relay
+        task, or a state whose next step dispatches or polls one. The per-WorkItem lease in
+        replace_issue already excludes a concurrent tick. Past attempts that failed or were
+        exhausted and wrote no live marker are history, not a live worker."""
+        return bool(wi.get("activeWorkOrderId") or wi.get("providerTaskId")) or wi["state"] in WORKING
 
     def _check_dependency(self, wi, number):
         """Refuse a dependency that is this issue, not an issue, ended, or leads back to this issue."""
