@@ -235,6 +235,11 @@ must hold before the controller is allowed to write:
    reached the `done` phase, and a failed or incomplete attempt cannot silently release it. The
    barrier's rows, and the release with its audit row, are written in one SQLite transaction, so
    an interrupted write leaves no partial barrier behind and a corrected retry can finish it.
+   The Foreman enforces the barrier (ADR-0061): a WorkItem named in an active barrier dispatches
+   no worker pass — the dispatch decision refuses, and the check is repeated immediately before
+   the relay call, so a barrier recorded after the decision still holds. Work the barrier does
+   not name dispatches as usual; releasing the barrier lets the held WorkOrder submit on the next
+   tick, with no new pass spent.
 
 ## Versioning
 
