@@ -33,6 +33,7 @@ class FlakyGitHub(FakeGitHub):
     def __init__(self):
         super().__init__()
         self.fail_create = 0
+        self.merges_in_window = set()  # PRs the gate merges in the window after a close call
         self.closes = []  # every (repo, number) close_issue reached GitHub with
         self.fail_close = None
         self.fail_edit = None  # (repo, number) of the dependent rewrite to fail on, once
@@ -64,7 +65,12 @@ class FlakyGitHub(FakeGitHub):
         self.closes.append((repo, number))
         if (repo, number) == self.fail_close:
             raise RuntimeError("github dropped the connection")
-        return super().close_issue(repo, number)
+        result = super().close_issue(repo, number)
+        if (repo, number) in self.merges_in_window:
+            for pr in self.pulls:  # the gate's merge lands between the read and the readback
+                if pr["repo"] == repo and pr["number"] == number:
+                    pr["merged_at"] = "2026-09-24T01:00:00Z"
+        return result
 
 
 class ReplaceCreationTest(unittest.TestCase):
@@ -315,6 +321,21 @@ class ReplaceCreationTest(unittest.TestCase):
         self.assertEqual(self.github.issues[(REPO, number)]["state"], "open")
         self.foreman.tick()  # the barrier, not the missing PR, keeps everything back for the person
         self.assertTrue(self.foreman.store.active_pauses(), "a tick untied the barrier")
+
+    def test_a_pr_merged_in_the_close_window_stops_before_activation(self):
+        """The gate merges the original's PR in the window between the run's read and its readback:
+        a merged PR does read back closed, so the readback must repeat the merge check, or the
+        replacement would run against work GitHub says has landed (ADR-0066)."""
+        self.original_pr()
+        self.github.merges_in_window.add((REPO, 300))
+        with self.assertRaisesRegex(ToolError, "merged after the run read it"):
+            self.replace([spec("Recover this")])
+        self.assertTrue(self.foreman.store.active_pauses(), "a merge in the window released the barrier")
+        self.assertEqual(self.foreman.store.get(ORIGINAL)["state"], "human_waiting")
+        (number,) = self.proposals()
+        self.assertEqual(self.github.issues[(REPO, number)]["state"], "open")
+        self.assertFalse([t for t in self.foreman.relay.tasks.values()
+                          if t.get("issue", {}).get("number") == number])
 
     def test_a_lost_pr_close_replays_and_closes_nothing_twice(self):
         """The connection died after the PR was closed: the barrier held, and the same call's retry

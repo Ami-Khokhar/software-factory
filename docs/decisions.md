@@ -1480,7 +1480,10 @@ the WorkItem's own branch in its own repo is an unverifiable original state, and
 the original already delivered. Each stops the operation with the pause barrier held and the
 journal at `pushing`, so no replacement or dependent can dispatch or intake while a person
 resolves it (resolve the WorkItem, or close the replacement issues, and the same call's takeover
-route releases). An unmerged PR is closed once and the close is verified by readback; the issue
+route releases). An unmerged PR is closed once and the close is verified by readback that repeats the merge
+check: the gate or a person can merge in the window between the run's read and the readback, and
+a merged PR does read back closed, so a readback of state alone could wave the merge through.
+The issue
 close after it is verified the same way. A lost close response refuses, and a replay of the same
 journalled call re-checks what GitHub holds and writes only what still reads open, so closes are
 never doubled and the store's `cancelled` write, the `done` journal and the barrier release

@@ -1164,7 +1164,14 @@ class Foreman:
                             "then resolve this WorkItem instead")
         if pr["state"] != "closed":
             self.github.close_issue(repo, number)
-        if self.github.pull(repo, number).get("state") != "closed":
+        # the readback repeats the merge check: the gate or a person can merge in the window
+        # between the read above and the readback, and a merged PR does read back closed
+        readback = self.github.pull(repo, number)
+        if readback.get("merged_at") or readback.get("merged"):
+            raise ToolError(f"PR #{number} merged after the run read it as unmerged, so "
+                            f"#{wi['issueNumber']} delivered its work and the replacement must not "
+                            "run: close the replacement issues, then resolve this WorkItem instead")
+        if readback.get("state") != "closed":
             raise ToolError(f"#{number}'s close on GitHub does not read back as closed (a lost "
                             "response or a reopened PR), so the recovery stays paused: clear the "
                             "problem, then run the replacement again")
