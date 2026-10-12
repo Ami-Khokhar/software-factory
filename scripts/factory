@@ -23,6 +23,7 @@ Settings: ~/.config/factory-mcp/env. Secrets: ~/.config/factory-mcp/secrets (FAC
 FACTORY_GITHUB_TOKEN comes from `gh auth token` unless the secrets file sets it.
 """
 import calendar
+import fnmatch
 import http.client
 import io
 import json
@@ -544,11 +545,35 @@ def deploy_steps(since, new, restart):
                     f"{PORT} lists no tools for the {server} token; the deploy record stays "
                     f"at {since[:7]} and the next update tries again")
             discovery = must("the live tool discovery check", "hermes", "-p", "day-desk",
-                             "mcp", "tools", server)
-            try:
-                found = set(json.loads(discovery or "[]"))
-            except ValueError:
-                found = set()
+                             "mcp", "test", server)
+            # `mcp test` probes the live profile but lists unfiltered server tools.
+            # Read only its nonsecret tool filters before checking what Day Desk can use.
+            found = set(re.findall(r"^\s+(factory_\w+)\s{2,}\S", discovery, re.M))
+            key = f"mcp_servers.{server}.tools"
+            filters = run("hermes", "-p", "day-desk", "config", "get", key, "--json")
+            if filters.returncode == 1 and filters.stderr.strip() == f"Config key not set: {key}":
+                selected = {}
+            elif filters.returncode == 0:
+                try:
+                    selected = json.loads(filters.stdout)
+                except ValueError:
+                    selected = None
+            else:
+                selected = None
+            if not isinstance(selected, dict):
+                die(f"update: cannot read {server} tool filters; the deploy record stays at {since[:7]}")
+            for key in ("include", "exclude"):
+                if selected.get(key) is None:
+                    selected.pop(key, None)
+                elif isinstance(selected[key], str):
+                    selected[key] = [selected[key]]
+                elif not isinstance(selected[key], list) or not all(isinstance(v, str) for v in selected[key]):
+                    die(f"update: cannot read {server} tool filters; the deploy record stays at {since[:7]}")
+            # Hermes gives include precedence over exclude, including an empty include list.
+            found = {name for name in found
+                     if (any(fnmatch.fnmatchcase(name, pattern) for pattern in selected["include"])
+                         if "include" in selected else
+                         not any(fnmatch.fnmatchcase(name, pattern) for pattern in selected.get("exclude", [])))}
             missing = sorted(set(want) - found)
             if missing:
                 die(f"update: Day Desk's profile discovers {len(want) - len(missing)} of the "

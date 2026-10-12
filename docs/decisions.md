@@ -1215,3 +1215,32 @@ files) do not change in a rollout.
 everywhere. The checkpoint's exact commands and blockers are recorded in
 [`verification-checkpoint-batch-a.md`](verification-checkpoint-batch-a.md); the runbook's worker-image
 hold point carries the pilot rule.
+
+## ADR-0056 — Verify Day Desk with the installed Hermes interface
+
+**Context.** ADR-0049 used `hermes mcp tools`, a command the installed Hermes CLI
+does not implement. Its unit tests invented that interface, so every profile rollout failed.
+
+**Decision.** Use the supported `hermes -p day-desk mcp test <server>` probe and
+read only the live server's `tools` configuration with `config get --json`. The probe
+prints raw server tools, so apply its include/exclude patterns before checking required
+names. Missing names, unreadable output, and unreadable filters keep the deployment
+record unchanged. This supersedes ADR-0049's discovery command.
+
+**Consequence.** Tests use the installed CLI's text output and exercise hidden tools
+as well as failed probes. Connection success alone cannot advance the deploy record.
+
+## ADR-0057 — Day Desk controls Docker through bounded host tools
+
+**Context.** A stopped Docker engine prevents Day Desk's terminal sandbox from
+starting. Giving that sandbox a host socket would grant arbitrary host control.
+
+**Decision.** Add agent-token tools for Docker status and start/stop through
+factory-mcp's host process. Commands are fixed argv calls to Docker and OrbStack.
+Stop refuses queued/running factory work, unreadable container inventory, and any
+running container. Dispatch and control share a process lock. Start verifies readiness.
+
+**Consequence.** Day Desk can recover the engine without a host shell. Stop can be
+refused while its own sandbox or another app is running. A later approved issue
+may start Docker again through the existing worker recovery. Other host users must
+coordinate their container starts with an owner-requested engine shutdown.
