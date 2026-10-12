@@ -3,6 +3,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import jev_rank
 from . import repos as manifest
 
 
@@ -32,6 +33,9 @@ class Config:
     repos_file: str = ""  # repos.json (ADR-0014); empty: FACTORY_REPOS is the whole allowlist
     lessons_file: str = ""  # lessons.json (ADR-0020); empty: the factory keeps no lessons
     agent_token: str = ""  # Day Desk's driving token (ADR-0030); empty: only the owner's token works
+    rank_lessons: bool = False  # Jev ranks the repo's lessons per dispatch (ADR-0058)
+    jev_api_key: str = ""  # TYPESAFE_API_KEY: only jev_rank sends it, in one Authorization header
+    jev_url: str = jev_rank.HOST  # the System One endpoint; tests point it at a local fake
 
     def listed(self, repo):
         """The allowlist's spelling of `repo`, or None. GitHub repo names ignore case."""
@@ -80,6 +84,11 @@ class Config:
         remote_verify_seconds = int(env.get("FACTORY_REMOTE_VERIFY_SECONDS") or defaults.remote_verify_seconds)
         if remote_verify_seconds < 1:
             raise ValueError("FACTORY_REMOTE_VERIFY_SECONDS must be 1 or more")
+        rank_lessons = env.get("FACTORY_JEV_LESSON_RANKING", "") in ("1", "true", "yes")
+        if rank_lessons and not env.get("TYPESAFE_API_KEY", ""):
+            # A flag without a key would rank nothing on every dispatch: say what is missing.
+            raise ValueError("FACTORY_JEV_LESSON_RANKING is on, but TYPESAFE_API_KEY is not set; "
+                             "set the key in the factory service environment, or turn ranking off")
         return cls(
             mcp_token=token,
             repos=repos,
@@ -108,4 +117,6 @@ class Config:
             repos_file=repos_file,
             lessons_file=env.get("FACTORY_LESSONS_FILE", ""),
             agent_token=agent_token,
+            rank_lessons=rank_lessons,
+            jev_api_key=env.get("TYPESAFE_API_KEY", ""),
         )

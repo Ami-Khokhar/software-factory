@@ -7,7 +7,7 @@ import time
 import threading
 import uuid
 
-from . import diagnostics, documents, gate_secrets, lessons, patches, repos, routing, workitem
+from . import diagnostics, documents, gate_secrets, jev_rank, lessons, patches, repos, routing, workitem
 from .github import GitHubError
 from .mcp import ToolError
 from .relay import RelayError
@@ -504,13 +504,16 @@ class Foreman:
     def _order(self, wi):
         return next(o for o in self.store.workorders(wi["id"]) if o["id"] == wi["activeWorkOrderId"])
 
-    def _lessons(self, wi):
+    def _lessons(self, wi, findings=()):
         """The repo's approved lessons for the WorkOrder, newest first, or [] when there are none.
-        documents.workorder caps how many ride along."""
+        documents.workorder caps how many ride along. With lesson ranking enabled and a usable
+        answer from the provider, the winning lesson comes first; otherwise the order is the
+        newest approval first, whatever the ranking may have said (jev_rank, ADR-0058)."""
         if not self.config.lessons_file:
             return []
         try:
-            return lessons.for_repo(lessons.load(self.config.lessons_file), wi["repo"])
+            found = lessons.for_repo(lessons.load(self.config.lessons_file), wi["repo"])
+            return jev_rank.rank(found, wi, list(findings), self.store, self.config) or found
         except (ValueError, OSError) as exc:  # OSError: a file that exists but cannot be read
             self.store.log("lessons_invalid", {"error": str(exc)}, wi["id"])
             return []  # a hand-edited or unreadable file must not stop the line; the audit log says why
@@ -523,6 +526,8 @@ class Foreman:
             return self._dispatch(wi, kind, findings, named)
 
     def _dispatch(self, wi, kind, findings=(), named=()):
+        """Send one WorkOrder. `findings` are this dispatch's findingsToAddress, exactly what the
+        WorkOrder will hold; _lessons passes the same to the ranker, never a reconstruction."""
         # Up to passes_per_repo passes of one repo run at once, and the runner gives them the shared
         # checkout in turns (ADR-0036). The rest wait. Two ticks at once may each start one, so the
         # limit is soft; the runner's lock is what keeps the checkout safe.
@@ -552,7 +557,7 @@ class Foreman:
         attempt = sum(1 for o in orders if o["round"] == wi.get("gateRound", 0) and o["kind"] == kind)
         base = self.github.branch_head(wi["repo"], self._default_branch(wi["repo"]))
         order = documents.workorder(wi, kind, attempt, self.config, base, findings,
-                                    self._lessons(wi))
+                                    self._lessons(wi, findings))
         self.store.save_workorder(order)
         wi = self._write(wi, dict(wi, state="dispatching", activeWorkOrderId=order["id"], worker=worker),
                          "dispatch", workOrder=order["id"], worker=worker)
