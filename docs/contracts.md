@@ -233,6 +233,13 @@ must hold before the controller is allowed to write:
    a replay never opens a duplicate, and an issue whose words no longer match what the request named refuses instead of being
    overwritten. Two issues with the same marker refuse. Nothing labels a created proposal
    `factory:ready`: readiness only comes from factory_approve_issue as usual.
+   Each dependent the plan re-points is written and then verified by exact readback (ADR-0065):
+   the body GitHub holds after the edit must be exactly the body the call computed — the moved
+   edge, the dependent's other `Depends on` lines and its text — or the write was lost or drifted
+   and the call refuses, leaving the barrier and the pushing journal exactly as a mid-run kill
+   leaves them; the replay recomputes the same plan from the paused graph, re-reads each body and
+   sets the whole `Depends on` list again, so a replayed edge is never doubled and an unrelated
+   edge is never lost.
 9. **A pause barrier holds until an explicit release.** A recovery operation may record a
    durable pause barrier in the store: the graph it holds (`original`, `replacement`,
    `dependent` roles, each one WorkItem id or a list of them (so a plan may hold several

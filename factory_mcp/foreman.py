@@ -899,7 +899,8 @@ class Foreman:
         direct dependent of the original moves its edge to the last replacement, keeping its other
         dependencies. A replacement that had a worker pass, a dependent that had a worker pass, or a plan
         that would make a cycle, refuses before any GitHub call. The plan itself is pure (workitem.replacement_plan) and not a tool.
-        The original is journalled, re-pointed on GitHub, then cancelled and closed. A repeat of
+        The original is journalled, re-pointed on GitHub with each rewired body verified by exact
+        readback (ADR-0065), then cancelled and closed. A repeat of
         the same request goes by the journal and the barrier (ADR-0063): a done journal releases
         its active barrier and returns; a partly run journal replays the remaining writes; a
         member a person took over meanwhile ends the run, and the barrier releases so the
@@ -1051,11 +1052,21 @@ class Foreman:
                 return self.store.get(workitem_id)  # the replacement already ran; do not run it again
             if record["phase"] == REQUEST_PHASES[0]:
                 self.store.advance_request(request_id, "pushing")
+            # Every plan edge is written and then verified by exact readback (ADR-0065): a lost
+            # edit response or drifted body cannot be trusted, so it raises while the barrier and
+            # the pushing journal hold, and the same call replays. The write sets the whole
+            # Depends-on list each time, so a replayed edge is never doubled and an unrelated
+            # edge is never lost.
             for number in sorted(plan):
                 body = self.github.issue(repo, number).get("body")
                 updated = workitem.with_dependencies(body, plan[number])
                 if updated != body:
                     self.github.edit_issue(repo, number, updated)
+                if self.github.issue(repo, number).get("body") != updated:
+                    raise ToolError(
+                        f"#{number}'s body on GitHub does not read back as the dependency lines "
+                        "the rewiring wrote (a lost response or a drift), so the recovery stays "
+                        "paused: clear the problem, then run the replacement again")
             self.github.close_issue(repo, mine)
             names = ", ".join(f"#{number}" for number in replacements)
             # what the cancelled WorkItem tried stays on it: the replacement is the recovery

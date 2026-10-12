@@ -1445,3 +1445,23 @@ after it: workers run on them only when a person approves each one (factory_appr
 readiness arrives after the cleanup completes. Disposal: a created proposal that a run never
 reached stays an ordinary factory:proposed issue on GitHub, for the owner to use or close.
 Merge authority, gate secrets, patch limits, the journal and the barrier roles are untouched.
+
+## ADR-0065 — The dependent rewiring is verified by exact readback
+
+**Context.** Round 0 also left the dependent rewrites trusting their edit responses: a lost
+response left forever unknown whether GitHub holds the new edge, a drifted body (GitHub rewrote
+the text, or a person pushed an edit) would stand as if the call had written it, and a retry had
+no way to tell the two apart.
+
+**Decision.** After each plan-edge edit the call reads the issue back and compares the whole body
+with exactly the body it computed (`workitem.with_dependencies` of the pre-edit body and the
+plan's edges). A mismatch refuses while the pause barrier and the `pushing` journal stand, so
+nothing on GitHub beyond that one issue can move during it. A replay of the same journalled call
+recomputes the plan from the paused graph, re-reads each affected body and sets the whole
+`Depends on` list again, so a replay never doubles an edge and never loses an unrelated one.
+
+**Consequence.** An interrupt anywhere between the dependent rewrites, or a response that arrived
+unverifiable, leaves the run exactly where a mid-run kill leaves it, and the same call carries it
+the rest of the way. Recovery of a cancelled original is verified on GitHub before the call
+reports the operation done, and a person whose edit a replay would disturb fixes their words
+before the call runs again.
