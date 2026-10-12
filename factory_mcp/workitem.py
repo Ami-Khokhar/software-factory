@@ -85,6 +85,48 @@ def with_dependencies(body, numbers):
     return "\n".join(lines) + ("\n\n" if lines and rest else "\n" if lines else "") + rest
 
 
+def replacement_plan(graph, original, replacements):
+    """The dependency changes that replace `original` with the ordered `replacements` (ADR-0059): the
+    first replacement inherits the original's upstream dependencies, each next one depends on the one
+    before it, and every direct dependent of the original moves its edge to the last replacement and
+    keeps its other dependencies. Pure: `graph` maps each issue number to the numbers its 'Depends on'
+    lines name; the result maps each issue number to its new list."""
+    plan = {}
+    for index, number in enumerate(replacements):
+        plan[number] = list(graph.get(original) or ()) if index == 0 else [replacements[index - 1]]
+    last = replacements[-1]
+    for number, deps in graph.items():
+        if original in deps:
+            plan[number] = [last if dep == original else dep for dep in deps]
+    return plan
+
+
+def cycle_in(graph):
+    """A cycle in a dependency graph, as the path of issue numbers that closes on itself, or None.
+    Pure: `graph` maps each issue number to the numbers its 'Depends on' lines name."""
+    state = {}  # number -> "open" while its upstream deps are walked, "done" after
+
+    def walk(start, path):
+        state[start] = "open"
+        path.append(start)
+        for dep in graph.get(start) or ():
+            if state.get(dep) == "open":
+                return path[path.index(dep):] + [dep]
+            if dep not in state:
+                cycle = walk(dep, path)
+                if cycle:
+                    return cycle
+        path.pop()
+        state[start] = "done"
+        return None
+
+    for number in graph:
+        cycle = walk(number, [])
+        if cycle:
+            return cycle
+    return None
+
+
 def workers_named(body):
     """The relay agents that `Worker: <id>` lines choose, in order (#100)."""
     return WORKER.findall(body or "")

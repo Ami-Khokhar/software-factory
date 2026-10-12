@@ -1283,3 +1283,29 @@ off until the owner turns it on after judging it on real labeled tasks — the u
 control flow, not Jev's quality — and the two floors (`MIN_PROBABILITY`, the confidence shape
 check) are where that judgment lands. `FACTORY_JEV_URL` is not a setting: tests point a locally
 built Config at a fake endpoint on 127.0.0.1, and the service always calls the documented host.
+
+---
+
+## ADR-0059 — A replacement of a stranded WorkItem is prevalidated against the whole graph
+
+**Context.** ADR-0047 lets a person re-point one WorkItem that a dependency stranded, but when an
+issue itself is beyond recovery the owner must close it, open replacements, and re-point every
+dependent by hand. #197 journalled such a replacement request; running it wrote issue bodies as it
+went, so a refusal discovered halfway left the graph half-changed.
+
+**Decision.** `factory_replace_issue` replaces a WorkItem that is waiting on recovery
+(`human_waiting` or `blocked`) and has no worker pass with ordered replacement issues. It reads the
+dependency graph of the repo's WorkItems and plans every edge change with a pure function
+(`workitem.replacement_plan`, not exposed as a tool) before any write: the first replacement
+inherits the original's upstream dependencies, each next one waits for the one before it, and every
+direct dependent of the original swaps only its edge to the last replacement, keeping its other
+dependencies. A replacement or dependent that already had a worker pass, a replacement that
+waits for the original, and a plan that would make a cycle are refused before any GitHub call
+changes anything. Then the
+changed issues are edited, the original is cancelled and closed, and the run is journalled under its
+request ID (guard 7), so a retry of the same inputs resumes instead of running twice.
+
+**Consequence.** Replacing a stranded issue is one Day Desk call instead of a hand edit per issue,
+and no refusal can leave a half-changed graph. Dependents that are not factory WorkItems are not
+re-pointed, and a replacement may not itself wait on the issue it replaces; both are stated in the
+tool's description.

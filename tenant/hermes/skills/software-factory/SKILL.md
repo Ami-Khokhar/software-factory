@@ -99,6 +99,20 @@ factory_resolve_human retry so it waits on the new plan. The factory refuses a W
 worker pass, a dependency that ended, and a cycle: give the reason word for word. Tell the owner
 which issues now run side by side.
 
+When one issue of the plan is beyond recovery and the owner agrees to replace it, open the
+replacement issues first (factory_propose_issue, or ask the owner to) but do not approve them; then
+call factory_replace_issue with the WorkItem id, the replacement issue numbers in
+the order they run as `replacements`, and the owner's name as `by`. The factory re-points the whole
+dependency graph before it writes: the first replacement waits where the original waited, the rest
+chain onto it, and every dependent of the original now waits for the last one; the original is
+cancelled and closed. It refuses a dependent that had a worker pass, a replacement that had a
+worker pass, a replacement that waits for the original, and a cycle, with nothing changed: give
+the reason word for word. The replacements stay `factory:proposed` until a person approves each
+one. When the call succeeds, approve each replacement with factory_approve_issue, one call per
+issue, in the same order you named them: the factory re-pointed their dependencies when it ran
+the replacement, so nothing approves them before the call. When the call refuses, approve
+nothing: the replacements stay proposed until the owner decides what to do next.
+
 For one issue that the owner wants to read on GitHub before it starts, call factory_propose_issue
 instead. It opens the issue labelled `factory:proposed`; nothing starts until "Start an issue".
 

@@ -11,7 +11,7 @@ from . import diagnostics, documents, gate_secrets, jev_rank, lessons, patches, 
 from .github import GitHubError
 from .mcp import ToolError
 from .relay import RelayError
-from .store import Conflict, now
+from .store import REQUEST_PHASES, Conflict, now
 from .verdict import blocking
 
 # States that need a person. Entering one posts a comment on the issue, so the owner hears of it.
@@ -871,6 +871,89 @@ class Foreman:
             if wi.get("waitingOn") is not None:  # the next tick sets it again if the wait goes on
                 wi = self.store.put(dict(wi, waitingOn=None))
             return wi
+        finally:
+            self.store.release(workitem_id, self.holder)
+
+    def replace_issue(self, workitem_id, replacements, by, agent=False):
+        """Replace a WorkItem waiting on recovery with ordered replacement issues (ADR-0059). The
+        whole graph is planned and validated before anything is written (guard 8): the first
+        replacement inherits the original's upstream dependencies, the rest chain onto it, and each
+        direct dependent of the original moves its edge to the last replacement, keeping its other
+        dependencies. A replacement that had a worker pass, a dependent that had a worker pass, or a plan
+        that would make a cycle, refuses before any GitHub call. The plan itself is pure (workitem.replacement_plan) and not a tool.
+        The original is journalled, re-pointed on GitHub, then cancelled and closed."""
+        if not isinstance(by, str) or not by.strip():
+            raise ToolError("replacing an issue needs the name of the person who asked")
+        if (not isinstance(replacements, list) or not replacements or len(replacements) > MAX_PLAN_ISSUES
+                or any(isinstance(n, bool) or not isinstance(n, int) or n < 1 for n in replacements)):
+            raise ToolError(f"replacements is a non-empty list of at most {MAX_PLAN_ISSUES} issue numbers "
+                            "in the WorkItem's own repo, like [12, 14]")
+        if len(set(replacements)) != len(replacements):
+            raise ToolError("replacements names an issue twice")
+        if not self.store.acquire(workitem_id, self.holder):
+            raise ToolError(f"{workitem_id} is being ticked; try again")
+        try:
+            wi = self.store.get(workitem_id)
+            if wi is None:
+                raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
+            if wi["state"] not in ("human_waiting", "blocked"):
+                raise ToolError(f"{workitem_id} is {wi['state']}; only a WorkItem waiting on recovery "
+                                "is replaced. Answer it with factory_resolve_human instead")
+            if self.store.workorders(workitem_id):
+                raise ToolError(f"{workitem_id} already had a worker pass, so it cannot be replaced")
+            repo, mine = wi["repo"], wi["issueNumber"]
+            if mine in replacements:
+                raise ToolError(f"#{mine} cannot be replaced by itself")
+            # The graph comes from the factory's WorkItems in this repo; bodies are read, never
+            # written, until every check below has passed.
+            graph = {other["issueNumber"]: workitem.depends_on(self.github.issue(repo, other["issueNumber"]).get("body"))
+                     for other in self.store.all() if other["repo"] == repo}
+            for number in replacements:
+                issue = self._issue(repo, number)
+                if "pull_request" in issue:
+                    raise ToolError(f"#{number} is a pull request, not an issue")
+                deps = workitem.depends_on(issue.get("body"))
+                if mine in deps:
+                    raise ToolError(f"#{number} depends on #{mine}; name a fresh issue that waits for "
+                                    "nothing, not one that waits for the issue it replaces")
+                status, how = self._dependency(repo, number)
+                if status == "ended":
+                    raise ToolError(f"#{number} {how}, so nothing could wait for it")
+                replacement_id = workitem.workitem_id(repo, number)
+                if self.store.get(replacement_id) and self.store.workorders(replacement_id):
+                    raise ToolError(f"#{number} already had a worker pass, so it cannot be a replacement; "
+                                    "close it or open a fresh issue instead")
+                graph.setdefault(number, deps)
+            for number, deps in graph.items():
+                if mine in deps:
+                    other = self.store.get(workitem.workitem_id(repo, number))
+                    if other and self.store.workorders(other["id"]):
+                        raise ToolError(f"#{number} already had a worker pass, so its dependency on "
+                                        f"#{mine} stays; close #{mine} instead")
+            plan = workitem.replacement_plan(graph, mine, replacements)
+            cycle = workitem.cycle_in({**graph, **plan})
+            if cycle:
+                named = " depends on ".join(f"#{number}" for number in cycle)
+                raise ToolError(f"replacing #{mine} would make a cycle: {named}")
+            request_id = f"replace/{workitem_id}"
+            record = self.store.open_request(request_id, "replace",
+                                             {"workItemId": workitem_id, "replacements": replacements})
+            if record["reused"] and record["phase"] == "done":
+                return self.store.get(workitem_id)  # the replacement already ran; do not run it again
+            if record["phase"] == REQUEST_PHASES[0]:
+                self.store.advance_request(request_id, "pushing")
+            for number in sorted(plan):
+                body = self.github.issue(repo, number).get("body")
+                updated = workitem.with_dependencies(body, plan[number])
+                if updated != body:
+                    self.github.edit_issue(repo, number, updated)
+            self.github.close_issue(repo, mine)
+            names = ", ".join(f"#{number}" for number in replacements)
+            new = self._write(wi, dict(wi, state="cancelled", terminalReason=f"replaced by {names}",
+                                       blockedOn=None, waitingOn=None, attempts=[]), "replaced",
+                              replacements=replacements, **({"agent": True} if agent else {}))
+            self.store.advance_request(request_id, "done")
+            return new
         finally:
             self.store.release(workitem_id, self.holder)
 

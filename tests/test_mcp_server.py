@@ -64,7 +64,8 @@ class McpServerTest(unittest.TestCase):
                                   "factory_propose_issue", "factory_add_repo", "factory_approve_issue",
                                   "factory_bootstrap_repo", "factory_approve_lesson",
                                   "factory_retire_lesson", "factory_start_plan",
-                                  "factory_set_dependencies", "factory_docker_control"})
+                                  "factory_set_dependencies", "factory_replace_issue",
+                                  "factory_docker_control"})
         self.assertTrue(all(t["inputSchema"]["type"] == "object" for t in tools))
 
     def test_the_agent_token_lists_and_runs_only_the_driving_tools(self):
@@ -73,7 +74,7 @@ class McpServerTest(unittest.TestCase):
         listed = {t["name"] for t in self.rpc("tools/list", token=AGENT)["result"]["tools"]}
         self.assertEqual(listed, {"factory_status", "factory_repo_check", "factory_lessons", "factory_report",
                                   "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
-                                  "factory_set_dependencies", "factory_resolve_human",
+                                  "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
                                   "factory_docker_status", "factory_docker_control"})
         refused = self.rpc("tools/call", {"name": "factory_bootstrap_repo",
                                           "arguments": {"repo": "o/r", "by": "day-desk"}}, token=AGENT)
