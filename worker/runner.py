@@ -33,12 +33,15 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 IMAGE = "factory-worker:latest"
-# Run in the sandbox after the harness: commit what it left, refuse rewritten history, print the diff.
+# Run in the sandbox after the harness: commit what it left, refuse rewritten history, print the
+# diff, and put the whole pull request's size on stderr (it counts every commit on the branch,
+# measured against the default branch, so a fix adds its lines to the attempt it follows).
 EXTRACT = """set -e
 git add -A
 if ! git diff --cached --quiet; then git -c core.hooksPath=/dev/null commit -q -m "$FACTORY_GOAL"; fi
 git merge-base --is-ancestor "$FACTORY_BASE" HEAD || exit 3
 git diff --binary "$FACTORY_BASE" HEAD
+echo "FACTORY_PR_SIZE: $(git diff --shortstat "$(git merge-base "$FACTORY_DEFAULT" HEAD)" HEAD)" >&2
 """
 MAX_PATCH_BYTES = 2_000_000
 CONTAINER_HOME = "/tmp/factory-home"
@@ -167,11 +170,14 @@ def prepare(cwd, order, branch, work):
     if not base:
         raise WorkerError("the WorkOrder names no commit to build on")
     git(cwd, "cat-file", "-e", f"{base}^{{commit}}")
+    # The default branch's head, where the whole pull request's size is read from (ADR-0040).
+    default = git(cwd, "rev-parse", "origin/HEAD")
+    git(cwd, "cat-file", "-e", f"{default}^{{commit}}")
     git(os.path.dirname(work), "clone", "-q", "--no-hardlinks", "--no-checkout", cwd, work)
     git(work, "fetch", "-q", cwd, "+refs/remotes/origin/*:refs/remotes/source/*")
     git(work, "remote", "remove", "origin")
     git(work, "checkout", "-q", "-f", "-B", branch, base)
-    return base
+    return base, default
 
 
 def verify_command(cwd, base):
@@ -291,11 +297,19 @@ def preflight(order, image, harness_argv, credential_specs, env_specs, scratch, 
     return credentials, harness_env
 
 
-def collect(sandbox, work, base, goal):
+PR_SIZE = re.compile(r"(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?")
+
+
+def collect(sandbox, work, base, default, goal, limits):
     """The harness's work as one unified diff against `base`, computed in the sandbox. Uncommitted
-    changes are committed first, so a harness that forgot to commit still hands its work over."""
+    changes are committed first, so a harness that forgot to commit still hands its work over.
+    Refuses the work when the whole pull request — every commit on the branch against the default
+    branch's merge base, so a fix is measured with the attempt it follows (ADR-0040) — is over `limits`:
+    that stands in for an expensive verify, and factory-mcp's own prepush check stays for a base that
+    advanced under the pass."""
     code, diff, err = sandbox.run(["sh", "-c", EXTRACT], 300, work,
-                                  env={"FACTORY_BASE": base, "FACTORY_GOAL": goal})
+                                  env={"FACTORY_BASE": base, "FACTORY_DEFAULT": default,
+                                       "FACTORY_GOAL": goal})
     if code == 3:
         raise WorkerError("the harness rewrote history below the commit it was given", 3)
     if code != 0:
@@ -304,6 +318,15 @@ def collect(sandbox, work, base, goal):
         raise WorkerError("the harness made no change")
     if len(diff.encode()) > MAX_PATCH_BYTES:
         raise WorkerError(f"the patch is over {MAX_PATCH_BYTES} bytes")
+    stat = PR_SIZE.search(err)
+    files, added, deleted = (int(n or 0) for n in (stat.groups() if stat else (None, None, None)))
+    lines = added + deleted
+    max_lines, max_files = limits["maxChangedLines"], limits["maxChangedFiles"]
+    if lines > max_lines or files > max_files:
+        raise WorkerError(
+            f"the proposed pull request is {lines} lines in {files} files; the WorkOrder allows "
+            f"{max_lines} lines and {max_files} files, which leaves {max_lines - lines} lines "
+            f"and {max_files - files} files")
     return diff if diff.endswith("\n") else diff + "\n"
 
 
@@ -390,7 +413,7 @@ def main(argv=None):
         checkout_start = time.monotonic()
         try:
             with checkout_lock(cwd) as waited:
-                base = prepare(cwd, order, branch, work)
+                base, default = prepare(cwd, order, branch, work)
                 verify = verify_command(cwd, base)
         except WorkerError as exc:
             record("checkout", checkout_start, getattr(exc, "code", None))
@@ -432,9 +455,9 @@ def main(argv=None):
             raise WorkerError(f"the harness exited {code}" + (f": {detail}" if detail else ""))
         patch_start = time.monotonic()
         try:
-            diff = collect(sandbox, work, base, order["goal"])
+            diff = collect(sandbox, work, base, default, order["goal"], order["constraints"])
         except WorkerError as exc:
-            record("patch collection", patch_start, getattr(exc, "code", None))
+            record("patch collection", patch_start, getattr(exc, "code", None), str(exc))
             raise
         record("patch collection", patch_start, 0)
         if not order.get("remoteVerify"):  # else a GitHub runner runs the verify (ADR-0045)

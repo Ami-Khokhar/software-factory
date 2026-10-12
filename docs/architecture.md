@@ -171,8 +171,10 @@ The states are the enum in `schemas/workitem.schema.json`.
 - The harness runs in the `factory-worker` container with that copy and a copy of its model key,
   and no GitHub credential. It commits locally. Host git never runs in a tree the harness wrote,
   so a planted hook or filter cannot run on the host.
-- The runner turns the commits into a unified patch, runs the gate's `verify` command from the
-  base commit in the same sandbox, and prints the Result as its last line.
+- The runner turns the commits into a unified patch, measures the whole pull request — the branch's
+  diff against its merge base with the default branch, so a fix is counted with the implementation it
+  follows — and refuses an oversized one before the gate's `verify` command from the base commit runs
+  in the same sandbox. It then prints the Result as its last line.
 - For a repo in `FACTORY_REMOTE_VERIFY_REPOS` the WorkOrder has `remoteVerify: true` and the runner
   skips that verify step: the Linux container cannot run it. factory-mcp pushes the patch to
   `factory-verify/<issue>-<n>`, where the repo's `factory-verify` workflow runs the same verify
@@ -194,7 +196,7 @@ The states are the enum in `schemas/workitem.schema.json`.
 | A Result meets its contract | `documents.check_result` | `test_schemas`: `test_check_result_accepts_what_the_result_schema_accepts` |
 | Only factory-mcp pushes, and only a patch (ADR-0017) | `Foreman.push_patch`, `patches.apply` | `test_actions`: `test_ready_to_pr_open`; `test_gate_loop`: `test_changes_fix_merge_closed`; `test_workers`: `test_unified_and_mbox_patches_push_the_workers_change` |
 | Changed paths come from GitHub, protected paths refused | `Foreman.check_pushed`, `patches.apply` | `test_actions`: `test_renaming_a_protected_path_fails_the_result`; `test_workers`: `test_a_patch_to_a_protected_path_is_never_pushed` |
-| One PR's size: 600 lines, 20 files, refused before the push (ADR-0040) | `Foreman.check_pushed`, `patches.apply` | `test_actions`: `test_a_change_must_fit_one_pr`; `test_workers`: `test_a_patch_that_takes_the_branch_over_its_limits_is_never_pushed` |
+| One PR's size: 600 lines, 20 files, refused before the push (ADR-0040) | `worker/runner.py` `collect` (whole PR, before the verify), `Foreman.check_pushed`, `patches.apply` (the push's own check, for a base that advanced) | `test_worker_runner`: `test_a_whole_pull_request_over_its_limits_fails_before_the_verify`; `test_actions`: `test_a_change_must_fit_one_pr`; `test_workers`: `test_a_patch_that_takes_the_branch_over_its_limits_is_never_pushed` |
 | GitHub holds the pushed commit | `Foreman.check_pushed` | `test_actions`: `test_bad_results_fail_attempts_then_block` |
 | One PR per WorkItem | `Foreman.open_pr` | `test_actions`: `test_a_result_for_a_branch_with_an_open_pr_joins_that_pr`, `test_open_pr_adopts_a_pr_opened_after_the_reconcile` |
 | A stale verdict is ignored | `workitem.current_verdict` | `test_actions`: `test_stale_verdict_ignored`; `test_reconcile`: `test_old_round_is_stale` |

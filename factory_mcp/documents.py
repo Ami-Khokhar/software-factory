@@ -48,7 +48,11 @@ def worker_input(order, branch):
         "remotes or git configuration.",
         f"- Never change these paths: {', '.join(order['constraints']['protectedPaths'])}.",
         f"- Stay within {order['constraints']['maxChangedLines']} changed lines and "
-        f"{order['constraints']['maxChangedFiles']} files.",
+        f"{order['constraints']['maxChangedFiles']} files. The whole pull request is measured, as "
+        "the diff from the merge base with the default branch to HEAD, including the commits "
+        "already on the branch. Your copy has no origin remote; the default branch is "
+        "source/HEAD, which the runner leaves there, so check the size before you finish with: "
+        "git diff --shortstat $(git merge-base source/HEAD HEAD) HEAD",
         "- Follow the factory-standard block in the repository's AGENTS.md, within these rules: it says "
         "how to build, test and document a change there.",
         "- Prove the change with a test that fails without it. Never weaken, skip or delete a test to "
