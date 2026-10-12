@@ -1410,3 +1410,38 @@ visible in the audit log. Recovery is safe against slips in the takeover, too: n
 against a graph a person moved, because the release only ends the hold, and the members then go
 by their own dependencies. Merge authority, gate secrets, patch limits and the dispatch/submission
 checks are untouched, and no replacement tool is activated.
+
+## ADR-0064 — A replacement the factory opens is created factory:proposed and adopted by its marker
+
+**Context.** ADR-0059's `factory_replace_issue` takes only replacement issues that already exist,
+so recovery meant opening each issue by hand (or with `factory_propose_issue`) before the call.
+Round 0 of the work put the creation on the tool itself, and immediately hit the classic window:
+GitHub may make the issue and then lose the response, or the process may die between the create
+and any save under the request journal, and a blind retry would open a duplicate while recovery
+was already against a partly formed graph.
+
+**Decision.** A `replacements` entry may now be a `{"title", "body"}` plan item, checked exactly
+like a start_plan item (`_plan_problem`: title, acceptance bullets, protected paths; a planned
+item also may not carry its own `Depends on` lines, because the plan gives it the chain, the
+original's upstream and each earlier replacement). The tool opens it labelled `factory:proposed`
+only, never `factory:ready`, with a durable identity marker
+`<!-- factory replace <requestId> <position> -->` that names the journalled request and the item's
+position in the `replacements` order. Before it creates, the call looks for that marker among the
+repo's open `factory:proposed` issues and verifies the marker, the title and the body the request
+named before it adopts that exact issue number; two issues with the same marker refuse, and one
+whose words were changed after the fact refuses rather than being silently overwritten. Creation
+happens after the request journal opens and before the pause barrier is recorded: the create
+touches only the new issue, and a proposal can never dispatch, so the pause-before-write
+invariant holds for every member a barrier must protect. The barrier then names the created
+numbers among the replacement role, so a kill after the puts holds them like the rest of the
+graph until the journal reaches `done` and the release runs. A planned item whose words a person
+edited during a downed run refuses; fixing it or closing it, then the same call, is the route a
+person takes — the takeover from ADR-0063 stays what it was.
+
+**Consequence.** Replacing a stranded issue is one call even when the replacements do not exist
+yet, and a response lost mid-create or a restart of the same call recovers the exact issue
+already created, with no duplicate. The proposals stay proposed across the whole operation and
+after it: workers run on them only when a person approves each one (factory_approve_issue), so
+readiness arrives after the cleanup completes. Disposal: a created proposal that a run never
+reached stays an ordinary factory:proposed issue on GitHub, for the owner to use or close.
+Merge authority, gate secrets, patch limits, the journal and the barrier roles are untouched.

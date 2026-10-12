@@ -226,7 +226,13 @@ must hold before the controller is allowed to write:
    nothing running on it are history, not a live worker), a dependent
    that had a pass is refused, a replacement that had a pass is refused, a replacement that waits
    for the original is refused, and the planned graph must be cycle-free. A refusal makes no GitHub call that changes anything. The
-   plan itself is a pure function (`workitem.replacement_plan`), not a tool.
+   plan itself is a pure function (`workitem.replacement_plan`), not a tool. A replacement may also be a title-and-body plan item the
+   tool opens itself, as a `factory:proposed` issue that carries the durable marker
+   `<!-- factory replace <requestId> <position> -->` (ADR-0064): before it creates, the call verifies that marker, the title and the
+   wording against the journalled request and adopts the exact issue an earlier attempt or a lost create response already opened, so
+   a replay never opens a duplicate, and an issue whose words no longer match what the request named refuses instead of being
+   overwritten. Two issues with the same marker refuse. Nothing labels a created proposal
+   `factory:ready`: readiness only comes from factory_approve_issue as usual.
 9. **A pause barrier holds until an explicit release.** A recovery operation may record a
    durable pause barrier in the store: the graph it holds (`original`, `replacement`,
    `dependent` roles, each one WorkItem id or a list of them (so a plan may hold several
@@ -242,7 +248,9 @@ must hold before the controller is allowed to write:
    tick, with no new pass spent. A replacement operation records its barrier before any GitHub
    write, over the original, the replacements and the dependents its plan re-points, so a tick,
    a rebuild or a restart during the operation takes the ready-labelled graph members in without
-   dispatching them; and a call that finds its journal at the done phase with the barrier still
+   dispatching them (it also holds the numbers a planned replacement was created under, whose
+   creation is safe before the barrier because a proposal can never dispatch, ADR-0064); and a
+   call that finds its journal at the done phase with the barrier still
    active completes the release, so a kill between the two writes leaves nothing held. A repeat of
    the same replace call is the way out of any other interrupted run too: a partly run journal is
    replayed, or — when a person moved a member meanwhile — ends the operation where it stands and

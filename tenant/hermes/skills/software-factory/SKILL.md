@@ -99,10 +99,12 @@ factory_resolve_human retry so it waits on the new plan. The factory refuses a W
 worker pass, a dependency that ended, and a cycle: give the reason word for word. Tell the owner
 which issues now run side by side.
 
-When one issue of the plan is beyond recovery and the owner agrees to replace it, open the
-replacement issues first (factory_propose_issue, or ask the owner to) but do not approve them; then
-call factory_replace_issue with the WorkItem id, the replacement issue numbers in
-the order they run as `replacements`, and the owner's name as `by`. The original may have had past
+When one issue of the plan is beyond recovery and the owner agrees to replace it, call
+factory_replace_issue with the WorkItem id and the replacement issue numbers in the order they
+run as `replacements`; a replacement that does not exist yet is a `{'title': ..., 'body': ...}`
+plan item instead, which the factory opens itself as a `factory:proposed` issue under a marker
+you do not touch. A repeat of the same call finds that marker, checks the wording it wrote, and
+picks up the exact issue it already made, so a call that was interrupted never opens a duplicate. The original may have had past
 attempts that all failed, as long as nothing is live on it (no active WorkOrder or relay task on
 it). The factory re-points the whole
 dependency graph before it writes: the first replacement waits where the original waited, the rest

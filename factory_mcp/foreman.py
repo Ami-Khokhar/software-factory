@@ -20,6 +20,8 @@ WORKING = ("dispatching", "implementing")
 BOOTSTRAP_PREFIX = "factory-bootstrap/"
 MAX_PLAN_ISSUES = 10  # one approval covers this many issues at most (ADR-0024)
 REGATE_MARKER = re.compile(r"<!-- factory regate (\d+) -->")
+# the identity marker a replacement the factory opens carries: this request, at this position
+REPLACEMENT_MARKER = re.compile(r"<!-- factory replace (\S+) (\d+) -->")
 REMOTE_VERIFY_WORKFLOW = ".github/workflows/factory-verify.yml"  # the workflow's name there is `factory-verify`
 
 
@@ -905,10 +907,20 @@ class Foreman:
         if not isinstance(by, str) or not by.strip():
             raise ToolError("replacing an issue needs the name of the person who asked")
         if (not isinstance(replacements, list) or not replacements or len(replacements) > MAX_PLAN_ISSUES
-                or any(isinstance(n, bool) or not isinstance(n, int) or n < 1 for n in replacements)):
+                or any(isinstance(n, bool) or not isinstance(n, (int, dict))
+                       or (isinstance(n, int) and n < 1)
+                       or (isinstance(n, dict) and not isinstance(n.get("title"), str)
+                           and not isinstance(n.get("body"), str)) for n in replacements)):
             raise ToolError(f"replacements is a non-empty list of at most {MAX_PLAN_ISSUES} issue numbers "
-                            "in the WorkItem's own repo, like [12, 14]")
-        if len(set(replacements)) != len(replacements):
+                            "in the WorkItem's own repo, like [12, 14]; an issue the factory opens itself "
+                            "is a title-and-body item instead")
+        seen, twice = [], False  # a planned item is unhashable, so name the entries one by one
+        for entry in replacements:
+            key = entry if isinstance(entry, int) else f"{entry.get('title')}\n{entry.get('body')}"
+            if key in seen:
+                twice = True
+            seen.append(key)
+        if twice:
             raise ToolError("replacements names an issue twice")
         if not self.store.acquire(workitem_id, self.holder):
             raise ToolError(f"{workitem_id} is being ticked; try again")
@@ -950,7 +962,21 @@ class Foreman:
             graph = {other["issueNumber"]: workitem.depends_on(self.github.issue(repo, other["issueNumber"]).get("body"))
                      for other in self.store.all() if other["repo"] == repo}
             ended = None  # a member a person closed while the run was down (#235)
-            for number in replacements:
+            for position, entry in enumerate(replacements, 1):
+                if not isinstance(entry, (int, dict)) or isinstance(entry, bool):
+                    raise ToolError("each replacement is an issue number, or a title-and-body plan "
+                                    "item the factory opens itself, like start_plan's")
+                if isinstance(entry, dict):
+                    problem = self._plan_problem(entry)
+                    if problem:
+                        raise ToolError(f"the planned replacement at position {position} {problem}. "
+                                        "No issue was opened")
+                    if workitem.depends_on(entry["body"]):
+                        raise ToolError(f"the planned replacement at position {position} carries its "
+                                        "own 'Depends on' lines; the factory gives it the chain: the "
+                                        "original's upstream, then each earlier replacement")
+                    continue
+                number = entry
                 issue = self._issue(repo, number)
                 if "pull_request" in issue:
                     raise ToolError(f"#{number} is a pull request, not an issue")
@@ -976,7 +1002,11 @@ class Foreman:
                     if other and self.store.workorders(other["id"]):
                         raise ToolError(f"#{number} already had a worker pass, so its dependency on "
                                         f"#{mine} stays; close #{mine} instead")
-            plan = workitem.replacement_plan(graph, mine, replacements)
+            # the cycle read is pre-write even for the planned items: each is a symbol until the
+            # run opens it, at a position the plan can name without ever colliding with a number
+            symbols = [entry if isinstance(entry, int) else -(10 ** 6 + position)
+                       for position, entry in enumerate(replacements, 1)]
+            plan = workitem.replacement_plan(graph, mine, symbols)
             cycle = workitem.cycle_in({**graph, **plan})
             if cycle:
                 named = " depends on ".join(f"#{number}" for number in cycle)
@@ -992,10 +1022,16 @@ class Foreman:
                 self.store.log("replace_abandoned", {"replacements": replacements}, workitem_id)
                 self.store.release_pause(request_id)
                 return self.store.get(workitem_id)
+            # A planned replacement becomes a factory:proposed issue now, or the issue a lost
+            # create response already opened is adopted by its marker. Creating touches only the
+            # new issue, and a proposal is never factory:ready, so nothing can dispatch while the
+            # barrier being recorded next is still absent.
+            numbers = self._resolve_replacements(repo, request_id, mine, graph, replacements)
+            plan = workitem.replacement_plan(graph, mine, numbers)
             barrier = {"original": [workitem_id],
-                       "replacement": [workitem.workitem_id(repo, n) for n in replacements],
+                       "replacement": [workitem.workitem_id(repo, n) for n in numbers],
                        "dependent": [workitem.workitem_id(repo, n) for n in plan
-                                     if n not in replacements]}
+                                     if n not in numbers]}
             active = [row["requestId"] for row in self.store.active_pauses()]
             if request_id in active:
                 # the run is resumed: it keeps the barrier its first attempt recorded, whose graph
@@ -1032,6 +1068,50 @@ class Foreman:
             return new
         finally:
             self.store.release(workitem_id, self.holder)
+
+    def _resolve_replacements(self, repo, request_id, mine, graph, replacements):
+        """Every replacement as an issue number. A title-and-body item is a replacement the factory
+        opens itself: a factory:proposed issue, never factory:ready. The first one waits where the
+        original waited, each later one on the replacement before it, the same chain the plan
+        writes (ADR-0059)."""
+        numbers = []
+        for position, entry in enumerate(replacements, 1):
+            if not isinstance(entry, dict):
+                numbers.append(entry)
+                continue
+            deps = list(graph.get(mine) or ()) if len(numbers) == 0 else [numbers[-1]]
+            numbers.append(self._open_replacement(repo, request_id, position, entry, deps))
+        return numbers
+
+    def _open_replacement(self, repo, request_id, position, item, deps):
+        """Open one planned replacement at `position` as a factory:proposed issue, or adopt the one
+        already there. The issue body carries a durable identity marker naming this request and
+        position. Before it creates, the call looks for the marker among the repo's
+        factory:proposed issues and verifies the marker, the title and the body the request named
+        before it adopts that exact issue; so an ambiguous create response, or a restart of the
+        same journalled call, picks up the issue GitHub already holds instead of opening a
+        duplicate. An issue the marker names whose words were changed after the fact also refuses,
+        so a person's edit can never be silently overwritten."""
+        marker = f"<!-- factory replace {request_id} {position} -->"
+        body = workitem.with_dependencies(item["body"], deps).rstrip() + "\n\n" + marker
+        matches = [issue for issue in self.github.labelled_issues(repo, workitem.PROPOSED)
+                   if any(found == (request_id, str(position))
+                          for found in REPLACEMENT_MARKER.findall(issue.get("body") or ""))]
+        if len(matches) > 1:
+            raise ToolError(f"the marker this request writes appears on "
+                            f"{', '.join('#' + str(issue['number']) for issue in matches)}; close the "
+                            "extra ones, then try the replacement again")
+        if matches:
+            match = matches[0]
+            if match["title"] != item["title"] or match.get("body") != body:
+                raise ToolError(f"#{match['number']} carries this request's marker but its title or body "
+                                "is no longer what the request named; close it or put the words back, "
+                                "then try the replacement again")
+            return match["number"]
+        issue = self.github.create_issue(repo, item["title"], body, [workitem.PROPOSED])
+        self.store.log("proposed", {"title": item["title"]},
+                       workitem.workitem_id(repo, issue["number"]))
+        return issue["number"]
 
     @staticmethod
     def _worker_live(wi):
