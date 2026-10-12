@@ -13,11 +13,13 @@ from factory_mcp.mcp import ToolError
 from factory_mcp.store import REQUEST_PHASES, Store
 from tests.fakes import ISSUE_BODY, FakeGit, FakeGitHub, FakeRelay
 from tests.test_dependencies import THIRD
-from tests.test_plan import REPO, SECOND, plan
+from tests.test_plan import FIRST, REPO, SECOND, plan
 
 ORIGINAL = SECOND  # 201, waiting on 200 (FIRST) after start_plan One, Two, Three
 REQUEST = f"replace/{ORIGINAL}"
 LAST = 202  # the direct dependent that must re-point to the last replacement
+MY_NUMBER = int(SECOND.split("#")[1])  # 201, the original's issue number
+UNRELATED = MY_NUMBER - 1  # 200, an open issue 201 waits on that 202 must keep  # an unrelated open issue 202 also waits on, kept by the rewiring
 
 
 def spec(title):
@@ -32,6 +34,21 @@ class FlakyGitHub(FakeGitHub):
         super().__init__()
         self.fail_create = 0
         self.fail_close = None
+        self.fail_edit = None  # (repo, number) of the dependent rewrite to fail on, once
+        self.edit_mode = "stored"  # "stored": GitHub keeps the body but the response is lost;
+                                   # "drifted": GitHub stores a drifted body and answers calmly;
+                                   # "dropped": the connection dies before the body is stored
+
+    def edit_issue(self, repo, number, body):
+        if (repo, number) == self.fail_edit:
+            self.fail_edit = None
+            if self.edit_mode == "dropped":
+                raise RuntimeError("github dropped the connection before the rewrite was stored")
+            if self.edit_mode == "stored":
+                super().edit_issue(repo, number, body)
+                raise RuntimeError("github stored the rewrite and dropped the connection")
+            return super().edit_issue(repo, number, body + "\nA line GitHub wrote on its own")
+        return super().edit_issue(repo, number, body)
 
     def create_issue(self, repo, title, body, labels):
         lost = self.fail_create > 0
@@ -169,6 +186,77 @@ class ReplaceCreationTest(unittest.TestCase):
                                   if h["action"] in ("dispatch", "submit", "submitted")])
             self.assertEqual([t for t in self.foreman.relay.tasks.values()
                               if t.get("issue", {}).get("number") == n], [])  # an intake happened; dispatching did not
+
+    def test_the_rewiring_reads_back_exactly_and_keeps_the_unrelated_edges(self):
+        """Each rewired body is verified against what GitHub holds after the edit: the moved edge
+        is exact, and the dependent's other Depends-on lines and text stand untouched."""
+        self.foreman.set_dependencies(THIRD, [MY_NUMBER, UNRELATED], "amteshwar")  # 202 waits on 201, 200
+        self.replace([spec("Recover this")])
+        (replacement,) = self.proposals()
+        self.assertEqual(self.github.issues[(REPO, LAST)]["body"],
+                         f"Depends on #{replacement}\nDepends on #{UNRELATED}\n\n{ISSUE_BODY}")
+        self.assertEqual(self.github.issues[(REPO, UNRELATED)]["body"], ISSUE_BODY)  # untouched
+        self.assertEqual(self.github.issues[(REPO, MY_NUMBER)]["state"], "closed")
+
+    def test_a_drifted_edit_refuses_and_the_journalled_retry_replays_it(self):
+        """GitHub stores something other than the written edge and answers calmly: the exact
+        readback refuses, so the edge is never silently wrong. The barrier and the pushing journal
+        hold, and the next run of the same call replays the write with the edges exact."""
+        self.foreman.set_dependencies(THIRD, [MY_NUMBER, UNRELATED], "amteshwar")
+        self.github.edit_mode = "drifted"
+        self.github.fail_edit = (REPO, LAST)
+        with self.assertRaisesRegex(ToolError, "does not read back"):
+            self.replace([spec("Recover this")])
+        self.assertEqual(self.foreman.store.get(ORIGINAL)["state"], "human_waiting")
+        self.assertTrue(self.foreman.store.active_pauses(), "the drift cleared the barrier")
+        self.assertEqual(self.foreman.store.request(REQUEST)["phase"], REQUEST_PHASES[1])
+        self.replace([spec("Recover this")])  # the same journalled call replays the rewiring
+        (replacement,) = self.proposals()
+        self.assertEqual(self.github.issues[(REPO, LAST)]["body"],
+                         f"Depends on #{replacement}\nDepends on #{UNRELATED}\n\n{ISSUE_BODY}\n"
+                         "A line GitHub wrote on its own")
+        self.assertEqual((self.foreman.store.get(ORIGINAL)["state"],
+                          self.foreman.store.active_pauses()), ("cancelled", []))
+
+    def test_a_lost_edit_response_replays_without_duplicate_or_lost_edges(self):
+        """GitHub stored the rewired body and then lost the response: the run stops with the
+        barrier held, and the retry reads the exact body back, rewrites nothing a second time,
+        and lands on the same edges with no doubling and nothing dropped."""
+        self.foreman.set_dependencies(THIRD, [MY_NUMBER, UNRELATED], "amteshwar")
+        self.github.fail_edit = (REPO, LAST)  # "stored": applied, then the response was lost
+        with self.assertRaisesRegex(RuntimeError, "dropped the connection"):
+            self.replace([spec("Recover this")])
+        (replacement,) = self.proposals()
+        self.assertEqual(self.github.issues[(REPO, LAST)]["body"],
+                         f"Depends on #{replacement}\nDepends on #{UNRELATED}\n\n{ISSUE_BODY}")
+        self.assertEqual(self.foreman.store.request(REQUEST)["phase"], REQUEST_PHASES[1])
+        before = self.github.issues[(REPO, LAST)]["body"]
+        self.replace([spec("Recover this")])
+        self.assertEqual(self.github.issues[(REPO, LAST)]["body"], before)
+        self.assertEqual(self.foreman.store.request(REQUEST)["phase"], REQUEST_PHASES[2])
+
+    def test_a_kill_between_rewirings_replays_the_remaining_edges(self):
+        """The connection dies part-way through the dependent rewrites, before the body was
+        stored: the journal is at pushing with the barrier held, and the resume finishes the
+        remaining edges with no duplicate and nothing lost."""
+        self.foreman.set_dependencies(THIRD, [MY_NUMBER, UNRELATED], "amteshwar")
+        self.github.edit_mode = "dropped"
+        self.github.fail_edit = (REPO, LAST)
+        with self.assertRaisesRegex(RuntimeError, "dropped the connection"):
+            self.replace([spec("Recover this")])
+        created = self.proposals()
+        self.assertEqual(len(created), 1)
+        self.assertEqual(self.github.issues[(REPO, LAST)]["body"],
+                         f"Depends on #{MY_NUMBER}\nDepends on #{UNRELATED}\n\n{ISSUE_BODY}")
+        self.restart()
+        self.assertTrue(self.foreman.store.active_pauses(), "the kill did not keep the barrier")
+        self.replace([spec("Recover this")])  # the resume adopts the proposal and finishes
+        (replacement,) = created
+        self.assertEqual(self.proposals(), created)  # the resume adopted, it opened nothing again
+        self.assertEqual(self.github.issues[(REPO, LAST)]["body"],
+                         f"Depends on #{replacement}\nDepends on #{UNRELATED}\n\n{ISSUE_BODY}")
+        self.assertEqual((self.foreman.store.request(REQUEST)["phase"],
+                          self.foreman.store.active_pauses()), (REQUEST_PHASES[2], []))
 
     def test_mismatched_words_refuse(self):
         """An issue this request's marker names whose wording was changed after the fact refuses the
