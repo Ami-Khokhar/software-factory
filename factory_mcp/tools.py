@@ -214,14 +214,25 @@ def build(store, foreman, agent=False):
              "(an active WorkOrder or relay task; failed attempts with nothing running on it are fine), "
              "or a plan that would make a cycle, "
              "refuses with nothing "
-             "changed. Otherwise the changed issues are edited, the original is cancelled and closed "
+             "changed. A planned replacement is one the factory opens itself: a factory:proposed issue "
+             "(never factory:ready), carrying its own identity marker; a repeat of the same call "
+             "verifies the marker and the wording and adopts the issue already created, so an "
+             "interrupted create never opens a duplicate. Otherwise the changed issues are edited, "
+             "the original is cancelled and closed "
              "keeping what it tried, "
              "and the replacement is journalled so a retry resumes where it stopped.",
              {"type": "object", "required": ["id", "replacements", "by"], "additionalProperties": False,
               "properties": {"id": {"type": "string", "description": "owner/repo#issue"},
                              "replacements": {"type": "array", "minItems": 1, "maxItems": MAX_PLAN_ISSUES,
-                                              "description": "issue numbers in the same repo, in the order they run",
-                                              "items": {"type": "integer", "minimum": 1}},
+                                              "description": "issue numbers in the same repo, in the order they "
+                                                             "run, or title-and-body plan items the factory opens "
+                                                             "as factory:proposed",
+                                              "items": {"anyOf": [
+                                                  {"type": "integer", "minimum": 1},
+                                                  {"type": "object", "required": ["title", "body"],
+                                                   "additionalProperties": False,
+                                                   "properties": {"title": {"type": "string", "minLength": 1},
+                                                                  "body": {"type": "string", "minLength": 1}}}]}},
                              "by": {"type": "string", "minLength": 1, "description": "who asked"}}},
              "write", lambda args: {"workItem": foreman.replace_issue(
                  args["id"], args["replacements"], args["by"], agent=agent)}),
