@@ -9,7 +9,7 @@ from .mcp import Tool, ToolError
 # a repo, its gate secrets, and the lessons workers read stay with the owner's token.
 AGENT_TOOLS = frozenset({"factory_status", "factory_repo_check", "factory_lessons", "factory_report",
                          "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
-                         "factory_set_dependencies", "factory_resolve_human",
+                         "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
                          "factory_docker_status", "factory_docker_control"})
 WAITING = ("human_waiting", "blocked")
 
@@ -204,6 +204,24 @@ def build(store, foreman, agent=False):
                              "by": {"type": "string", "minLength": 1, "description": "who asked"}}},
              "write", lambda args: {"workItem": foreman.set_dependencies(
                  args["id"], args["dependsOn"], args["by"], agent=agent)}),
+        Tool("factory_replace_issue",
+             "Replace a WorkItem that is waiting on recovery (human_waiting or blocked, and no worker "
+             "pass) with ordered replacement issues of the same repo: the first inherits the original's "
+             "upstream dependencies, each next one waits for the one before it, and every direct "
+             "dependent of the original now waits for the last replacement, keeping its other "
+             "dependencies. The whole graph is planned and validated before anything is written: a "
+             "replacement or dependent that had a worker pass, or a plan that would make a cycle, "
+             "refuses with nothing "
+             "changed. Otherwise the changed issues are edited, the original is cancelled and closed, "
+             "and the replacement is journalled so a retry resumes where it stopped.",
+             {"type": "object", "required": ["id", "replacements", "by"], "additionalProperties": False,
+              "properties": {"id": {"type": "string", "description": "owner/repo#issue"},
+                             "replacements": {"type": "array", "minItems": 1, "maxItems": MAX_PLAN_ISSUES,
+                                              "description": "issue numbers in the same repo, in the order they run",
+                                              "items": {"type": "integer", "minimum": 1}},
+                             "by": {"type": "string", "minLength": 1, "description": "who asked"}}},
+             "write", lambda args: {"workItem": foreman.replace_issue(
+                 args["id"], args["replacements"], args["by"], agent=agent)}),
         Tool("factory_lessons",
              "Show what the factory learned about one repo: the blocking gate findings that "
              "recurred on two or more WorkItems (candidates), and the lessons the owner approved "

@@ -219,6 +219,12 @@ must hold before the controller is allowed to write:
    forward, one at a time, and the store commits each with `synchronous = FULL` in
    rollback-journal mode, so a restart after an interruption finds the last phase and a copy
    of `factory.sqlite3` alone is the whole store.
+8. **A replacement is planned and validated before it writes.** `factory_replace_issue` (ADR-0059)
+   reads the whole dependency graph of the repo's WorkItems and computes every edge change before
+   anything is written: the original must be waiting on recovery with no worker pass, a dependent
+   that had a pass is refused, a replacement that had a pass is refused, a replacement that waits
+   for the original is refused, and the planned graph must be cycle-free. A refusal makes no GitHub call that changes anything. The
+   plan itself is a pure function (`workitem.replacement_plan`), not a tool.
 
 ## Versioning
 

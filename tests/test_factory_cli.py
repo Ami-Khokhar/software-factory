@@ -398,7 +398,7 @@ class UpdateTest(unittest.TestCase):
         self.assertNotIn("update: deployed", (cli.STATE / "deployed").read_text())
 
     def test_a_discovery_answer_the_update_cannot_read_fails_the_deploy_too(self):
-        with self.assertRaisesRegex(SystemExit, r"discovers 0 of the 11 factory_drive tools"):
+        with self.assertRaisesRegex(SystemExit, r"discovers 0 of the 12 factory_drive tools"):
             self.deploy_with("tenant/hermes/SOUL.md", "soul\n", results={
                 "hermes -p day-desk mcp test":
                     subprocess.CompletedProcess([], 0, "Profile: day-desk\nnot json\n", "")})
