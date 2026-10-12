@@ -912,6 +912,12 @@ class Foreman:
             wi = self.store.get(workitem_id)
             if wi is None:
                 raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
+            request_id = f"replace/{workitem_id}"
+            done = (self.store.request(request_id) or {}).get("phase") == REQUEST_PHASES[-1]
+            if done and request_id in {row["requestId"] for row in self.store.active_pauses()}:
+                # the run completed; only its release was killed. The journal says done, so the
+                # barrier gives way even though the WorkItem it names may now be refused (#235)
+                self.store.release_pause(request_id)
             if wi["state"] not in ("human_waiting", "blocked"):
                 raise ToolError(f"{workitem_id} is {wi['state']}; only a WorkItem waiting on recovery "
                                 "is replaced. Answer it with factory_resolve_human instead")
@@ -953,9 +959,22 @@ class Foreman:
             if cycle:
                 named = " depends on ".join(f"#{number}" for number in cycle)
                 raise ToolError(f"replacing #{mine} would make a cycle: {named}")
-            request_id = f"replace/{workitem_id}"
             record = self.store.open_request(request_id, "replace",
                                              {"workItemId": workitem_id, "replacements": replacements})
+            barrier = {"original": [workitem_id],
+                       "replacement": [workitem.workitem_id(repo, n) for n in replacements],
+                       "dependent": [workitem.workitem_id(repo, n) for n in plan
+                                     if n not in replacements]}
+            active = [row["requestId"] for row in self.store.active_pauses()]
+            if request_id in active:
+                # the run is resumed: it keeps the barrier its first attempt recorded, whose graph
+                # was read before any write and cannot be derived again after the edits
+                if record["phase"] == REQUEST_PHASES[-1]:  # done, but a kill before the release
+                    self.store.release_pause(request_id)
+            else:
+                # recorded before any GitHub write, so no tick takes the ready-labelled graph
+                # members during the operation, on this process or after a restart (#233, #235)
+                self.store.pause(request_id, "replace", barrier)
             if record["reused"] and record["phase"] == "done":
                 return self.store.get(workitem_id)  # the replacement already ran; do not run it again
             if record["phase"] == REQUEST_PHASES[0]:
@@ -973,6 +992,7 @@ class Foreman:
                                        blockedOn=None, waitingOn=None), "replaced",
                               replacements=replacements, **({"agent": True} if agent else {}))
             self.store.advance_request(request_id, "done")
+            self.store.release_pause(request_id)  # the operation completed: the graph runs again
             return new
         finally:
             self.store.release(workitem_id, self.holder)

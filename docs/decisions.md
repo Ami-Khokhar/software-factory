@@ -1353,3 +1353,26 @@ spent. No tool writes barriers yet, so only a recovery operation can trip the gu
 **Consequence.** Fail-closed only for the work the barrier names: unrelated WorkItems dispatch as
 usual while recovery is incomplete, and a held WorkItem needs no person to resume after release.
 The checks run without a store write, so they cost nothing when no barrier exists.
+
+## ADR-0062 — A replacement operation holds its graph from journal to done, not just at the dispatch point
+
+**Context.** ADR-0061 made the Foreman refuse a dispatch decision and a relay submit for work an
+active pause barrier names, but nothing recorded a barrier: a replacement operation that is
+interrupted or cut mid-run left its replacements ready-labelled and, once the original's
+successors had nothing left to wait for, dispatchable — recovery was bargaining against ticks that
+amend nothing.
+
+**Decision.** `factory_replace_issue` records its durable barrier now: its journalling call also
+writes, in the same exchange, a barrier over the original, every replacement and every work its
+plan re-points, before any GitHub write. A resume keeps the barrier its first attempt recorded
+(the graph was read before the edits and cannot be derived again) and the explicit release comes
+after the journal reaches `done`, so a failed or killed attempt holds the graph until its journal
+says otherwise. A call that finds the journal `done` with the barrier still active releases it,
+even if it otherwise refuses a cancelled original — a kill between the journal advance and the
+release leaves nothing held. `store.pause` takes a role that holds one WorkItem or many.
+
+**Consequence.** After a restart, rebuild and discovery take the ready-labelled members in but
+dispatch none until the operation completes and releases, while work the barrier does not name
+runs as usual. The dispatch and submission checks stay where ADR-0061 put them: no new guard was
+needed on the tick paths, only barriers for them to read. Merge authority, gate secrets and patch
+limits are untouched, and no new tool is exposed.
