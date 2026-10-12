@@ -1294,7 +1294,8 @@ dependent by hand. #197 journalled such a replacement request; running it wrote 
 went, so a refusal discovered halfway left the graph half-changed.
 
 **Decision.** `factory_replace_issue` replaces a WorkItem that is waiting on recovery
-(`human_waiting` or `blocked`) and has no worker pass with ordered replacement issues. It reads the
+(`human_waiting` or `blocked`) and has no worker pass with ordered replacement issues
+(extended by ADR-0060 for an original whose past attempts all failed). It reads the
 dependency graph of the repo's WorkItems and plans every edge change with a pure function
 (`workitem.replacement_plan`, not exposed as a tool) before any write: the first replacement
 inherits the original's upstream dependencies, each next one waits for the one before it, and every
@@ -1309,3 +1310,27 @@ request ID (guard 7), so a retry of the same inputs resumes instead of running t
 and no refusal can leave a half-changed graph. Dependents that are not factory WorkItems are not
 re-pointed, and a replacement may not itself wait on the issue it replaces; both are stated in the
 tool's description.
+
+---
+
+## ADR-0060 — A failed original with prior attempts may be replaced when nothing is live on it
+
+**Context.** ADR-0059 refused any original with a worker pass, because a pass meant work was or had
+been running. On 12 October 2026 the owner asked to replace an original whose passes had all failed
+(#199), while the replacement plan (#233–#235) sat unused because the tool's own guard refused it.
+A refusal intended to protect a running worker was blocking recovery of a WorkItem with no worker
+running on it at all.
+
+**Decision.** The refusal now names a **live** worker, not any worker pass: a stored active
+WorkOrder (`activeWorkOrderId`), a stored live relay task (`providerTaskId`), or a state whose next
+step dispatches or polls one (`dispatching`, `implementing`). A per-WorkItem lease held elsewhere is
+refused by the existing lease check, so a concurrent tick cannot race the replacement.
+The failed passes stay on the cancelled WorkItem: the replacement no longer wipes `attempts`, so the
+history reads on through the recovery. The untouched-replacement, untouched-dependent and
+cycle checks, the lease, and the request journal are unchanged.
+
+**Consequence.** An original that failed with former attempts and no worker running is replacable in
+one call; and an owner may only react to a live retry after it has stopped. Deployment: the owner
+confirms which factory-mcp version is running (the guard is in the running server, not the merged
+file) and reads the tool description back before applying the existing #233–#235 plan. Merged code
+is not live proof.
