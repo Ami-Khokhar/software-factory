@@ -263,6 +263,78 @@ class ReplaceCreationTest(unittest.TestCase):
         self.assertEqual((self.foreman.store.request(REQUEST)["phase"],
                           self.foreman.store.active_pauses()), (REQUEST_PHASES[2], []))
 
+    def original_pr(self, merged=False, absent=False):
+        """The original's WorkItem records its own recovery PR as the real run intake would."""
+        wi = self.foreman.store.get(ORIGINAL)
+        self.foreman.store.put(dict(wi, prNumber=300, branch=f"factory/{MY_NUMBER}"))
+        if not absent:
+            self.github.add_pr(REPO, 300, f"factory/{MY_NUMBER}", "sha0", merged=merged)
+
+    def test_the_original_pr_is_closed_before_the_issue_and_is_never_merged(self):
+        """Cleanup precedes activation: the original's unmerged PR is closed, not merged, before the
+        original issue and the WorkItem at last let the replacement run, with no merge call made."""
+        self.original_pr()
+        self.replace([spec("Recover this")])
+        (replacement,) = self.proposals()
+        self.assertEqual(self.github.pull(REPO, 300)["state"], "closed")
+        self.assertIsNone(self.github.pull(REPO, 300)["merged_at"])
+        self.assertEqual(self.github.issues[(REPO, MY_NUMBER)]["state"], "closed")
+        # the PR retires before the issue and anything releases the barrier: cleanup precedes
+        # activation (ADR-0066), and the gate's merge authority is untouched throughout
+        self.assertEqual(self.github.closes.index((REPO, 300)), 0)
+        self.assertLess(self.github.closes.index((REPO, 300)), self.github.closes.index((REPO, MY_NUMBER)))
+        self.assertEqual((self.foreman.store.request(REQUEST)["phase"],
+                          self.foreman.store.active_pauses()), (REQUEST_PHASES[2], []))
+
+    def test_a_merged_original_pr_stops_before_anything_can_run(self):
+        """The original delivered its work: the run stops with the barrier held, so no replacement
+        or dependent can dispatch, and a repeat stops the same way instead of acting on GitHub."""
+        self.original_pr(merged=True)
+        with self.assertRaisesRegex(ToolError, "already merged"):
+            self.replace([spec("Recover this")])
+        self.assertTrue(self.foreman.store.active_pauses(), "a merged PR released the barrier")
+        self.assertEqual(self.foreman.store.get(ORIGINAL)["state"], "human_waiting")
+        created = self.proposals()
+        (number,) = created  # the proposed replacement stands, but nothing may act on it
+        self.assertEqual(self.github.issues[(REPO, number)]["state"], "open")
+        self.assertFalse([t for t in self.foreman.relay.tasks.values()
+                          if t.get("issue", {}).get("number") == number])
+        with self.assertRaisesRegex(ToolError, "already merged"):  # the same call stops safely again
+            self.replace([spec("Recover this")])
+        self.assertEqual(self.github.posted, [])  # no comment and no GitHub write on either try
+
+    def test_an_unverifiable_original_pr_stops_before_activation(self):
+        """The store names a PR GitHub does not hold as this branch's open thing: the state cannot
+        be verified, so the run stops with the barrier held and nothing on GitHub changes."""
+        self.original_pr(absent=True)
+        with self.assertRaisesRegex(ToolError, "unverifiable"):
+            self.replace([spec("Recover this")])
+        self.assertTrue(self.foreman.store.active_pauses(), "a missing PR released the barrier")
+        self.assertEqual(self.foreman.store.get(ORIGINAL)["state"], "human_waiting")
+        (number,) = self.proposals()
+        self.assertEqual(self.github.issues[(REPO, number)]["state"], "open")
+        self.foreman.tick()  # the barrier, not the missing PR, keeps everything back for the person
+        self.assertTrue(self.foreman.store.active_pauses(), "a tick untied the barrier")
+
+    def test_a_lost_pr_close_replays_and_closes_nothing_twice(self):
+        """The connection died after the PR was closed: the barrier held, and the same call's retry
+        replays the remaining writes with no second close and no duplicate issue (ADR-0066)."""
+        self.original_pr()
+        self.github.fail_close = (REPO, 300)
+        with self.assertRaisesRegex(RuntimeError, "dropped the connection"):
+            self.replace([spec("Recover this")])
+        self.assertEqual(self.github.pull(REPO, 300)["state"], "open")  # the response was lost
+        self.github.fail_close = None
+        self.restart()
+        self.assertTrue(self.foreman.store.active_pauses(), "the lost close released the barrier")
+        created = self.proposals()
+        self.replace([spec("Recover this")])  # the same call carries the cleanup the rest of the way
+        self.assertEqual(self.github.pull(REPO, 300)["state"], "closed")
+        self.assertEqual(self.proposals(), created)  # the replay adopted; it opened nothing twice
+        self.assertEqual(self.github.issues[(REPO, MY_NUMBER)]["state"], "closed")
+        self.assertEqual((self.foreman.store.request(REQUEST)["phase"],
+                          self.foreman.store.active_pauses()), (REQUEST_PHASES[2], []))
+
     def test_mismatched_words_refuse(self):
         """An issue this request's marker names whose wording was changed after the fact refuses the
         call, and the call changes nothing on GitHub."""

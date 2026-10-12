@@ -1465,3 +1465,31 @@ unverifiable, leaves the run exactly where a mid-run kill leaves it, and the sam
 the rest of the way. Recovery of a cancelled original is verified on GitHub before the call
 reports the operation done, and a person whose edit a replay would disturb fixes their words
 before the call runs again.
+
+## ADR-0066 — The original retires before the replacement can run, and only an unmerged PR is ever closed
+
+**Context.** ADR-0065 left the operation trusting GitHub for the rewiring but acting on the
+original blind: it closed the issue and let the release run without first reading what its own
+PR, when a worker opened one, was doing. A PR that a person or the gate had already merged was
+no obstacle, so the replacement could run against work GitHub said had landed, and an original
+PR could never be retired at all.
+
+**Decision.** Cleanup precedes activation. After the verified rewiring, the call reads the
+original's PR (`wi.prNumber`) back from GitHub before any cleanup write: a PR whose head is not
+the WorkItem's own branch in its own repo is an unverifiable original state, and a merged PR is
+the original already delivered. Each stops the operation with the pause barrier held and the
+journal at `pushing`, so no replacement or dependent can dispatch or intake while a person
+resolves it (resolve the WorkItem, or close the replacement issues, and the same call's takeover
+route releases). An unmerged PR is closed once and the close is verified by readback; the issue
+close after it is verified the same way. A lost close response refuses, and a replay of the same
+journalled call re-checks what GitHub holds and writes only what still reads open, so closes are
+never doubled and the store's `cancelled` write, the `done` journal and the barrier release
+follow only after every cleanup readback agrees. The store's record never pre-serves the
+activation and is checkpointed into it after it agrees.
+
+**Consequence.** The original can never leave a merged work history behind a running
+replacement, and a person who already delivered the original stops the operation for good
+instead of a fresh worker redoing it. Merge authority and the gate's tools stay untouched: the
+replacement tool only ever closes, never merges a PR, and only the PR the WorkItem itself
+records. The already-journalled replay machinery carries any interrupt inside the cleanup, so
+the boundary between cleanup and activation is restart-safe without a new journal field.

@@ -900,7 +900,9 @@ class Foreman:
         dependencies. A replacement that had a worker pass, a dependent that had a worker pass, or a plan
         that would make a cycle, refuses before any GitHub call. The plan itself is pure (workitem.replacement_plan) and not a tool.
         The original is journalled, re-pointed on GitHub with each rewired body verified by exact
-        readback (ADR-0065), then cancelled and closed. A repeat of
+        readback (ADR-0065), then retired: its own PR, if one is open and unmerged, is closed and
+        verified by readback, and only then is the WorkItem cancelled, closed and the graph
+        released (ADR-0066). A repeat of
         the same request goes by the journal and the barrier (ADR-0063): a done journal releases
         its active barrier and returns; a partly run journal replays the remaining writes; a
         member a person took over meanwhile ends the run, and the barrier releases so the
@@ -1067,7 +1069,17 @@ class Foreman:
                         f"#{number}'s body on GitHub does not read back as the dependency lines "
                         "the rewiring wrote (a lost response or a drift), so the recovery stays "
                         "paused: clear the problem, then run the replacement again")
+            # Cleanup precedes activation (ADR-0066): close the original's unmerged PR and retire
+            # the original issue first, both verified by readback, before the store write, the
+            # done journal and the barrier release can let a replacement run. A merged or
+            # unverifiable original PR stops the run here with the barrier held, so nothing past
+            # the replacement can dispatch while a person resolves it.
+            self._retire_original(repo, wi)
             self.github.close_issue(repo, mine)
+            if self.github.issue(repo, mine).get("state") != "closed":
+                raise ToolError(f"#{mine}'s close on GitHub does not read back as closed (a lost "
+                                "response or a reopened issue), so the recovery stays paused: clear "
+                                "the problem, then run the replacement again")
             names = ", ".join(f"#{number}" for number in replacements)
             # what the cancelled WorkItem tried stays on it: the replacement is the recovery
             # record's continuation, not a wipe of its history
@@ -1123,6 +1135,39 @@ class Foreman:
         self.store.log("proposed", {"title": item["title"]},
                        workitem.workitem_id(repo, issue["number"]))
         return issue["number"]
+
+    def _retire_original(self, repo, wi):
+        """Close the original's own PR, when the WorkItem opened one (ADR-0066). The merge state is
+        read from GitHub before any write: a merged PR is the original already delivered, so the
+        replacement must never run against the work and the run stops with the barrier held for a
+        person to resolve (resolve or close the replacements, then the retry's takeover route
+        releases). A PR the store names that GitHub does not hold as this repo's own branch's PR is
+        a state no cleanup could act on, and stops the same way. Closing repeats stand idempotently
+        against a replay: one that read back closed is left closed, as no new write."""
+        number = wi.get("prNumber")
+        if number is None:
+            return
+        try:
+            pr = self.github.pull(repo, number)
+        except GitHubError as exc:
+            if exc.status != 404:
+                raise
+            pr = None
+        head = (pr or {}).get("head") or {}
+        if not pr or head.get("ref") != wi.get("branch") or (head.get("repo") or {}).get("full_name") != repo:
+            raise ToolError(f"PR #{number}, the one the store names for #{wi['issueNumber']}, is not "
+                            f"{wi.get('branch')} in {repo} on GitHub, so the original's state is "
+                            "unverifiable: put the number back or fix the branch, then try again")
+        if pr.get("merged_at") or pr.get("merged"):
+            raise ToolError(f"PR #{number} is already merged, so #{wi['issueNumber']} delivered its "
+                            "work and the replacement must not run: close the replacement issues, "
+                            "then resolve this WorkItem instead")
+        if pr["state"] != "closed":
+            self.github.close_issue(repo, number)
+        if self.github.pull(repo, number).get("state") != "closed":
+            raise ToolError(f"#{number}'s close on GitHub does not read back as closed (a lost "
+                            "response or a reopened PR), so the recovery stays paused: clear the "
+                            "problem, then run the replacement again")
 
     @staticmethod
     def _worker_live(wi):
