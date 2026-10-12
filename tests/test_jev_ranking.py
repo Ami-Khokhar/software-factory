@@ -26,17 +26,12 @@ NEW_TEXT = "Retire a flag the same week it dies."
 
 
 class Endpoint(BaseHTTPRequestHandler):
-    """A test sets `answer` (a dict for 200, bytes verbatim, an int for that status with a
-    JSON error body) and `delay` seconds, then reads `requests` (path, Authorization,
-    body)."""
+    """A test sets `answer` (dict for 200, bytes verbatim, int for that status) and `delay`."""
 
     answer, delay, requests = {}, 0.0, []
 
     def log_message(self, *args):
         pass
-
-    def handle_error(self, request, client_address):
-        pass  # a client that timed out and left: the test asserts the client side, not ours
 
     def do_POST(self):
         body = self.rfile.read(int(self.headers["content-length"]))
@@ -62,9 +57,14 @@ def choice(fingerprint, probabilities, confidence=0.9):
         "confidence": confidence}}}
 
 
+class Server(ThreadingHTTPServer):
+    """Socketserver reports handler crashes (a client that timed out and left): quiet."""
+    def handle_error(self, request, client_address):
+        pass
+
+
 def fallbacks(from_, wi=f"{REPO}#7"):
-    """How the ranking fell back on the WorkItem, in order: one fixed category per stop.
-    `from_` is a Foreman (reads its store) or a Store direct."""
+    """The ranking's fallback categories in order, from a Foreman's store or a Store direct."""
     store = from_.store if hasattr(from_, "store") else from_
     return [h["detail"]["category"] for h in store.history(wi)
             if h["action"] == "lesson_rank_fallback"]
@@ -77,8 +77,9 @@ def valid_two(old_p=0.7, new_p=0.29):
 
 
 def endpoint(test):
-    """A fake endpoint on 127.0.0.1 for `test`, with its requests cleared."""
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Endpoint)
+    """A fake endpoint on 127.0.0.1 for `test`, its fixture cleared: one slow reply stays one."""
+    Endpoint.requests, Endpoint.delay = [], 0.0
+    server = Server(("127.0.0.1", 0), Endpoint)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     test.addCleanup(server.shutdown)
     test.addCleanup(server.server_close)
@@ -106,8 +107,7 @@ class OnTest(unittest.TestCase):
                         lambda r: [{"fingerprint": fingerprint, "workItems": 2}], at=at)
 
     def dispatch(self, answer=None, findings=()):
-        """One fresh factory run: intake, then the tick that dispatches. A WorkItem dispatches
-        once, so each case here starts a new store and proves its own dispatch."""
+        """One fresh factory run: a WorkItem dispatches once, so each case starts a new store."""
         Endpoint.answer = valid_two() if answer is None else answer
         self.foreman = Foreman(Store(":memory:"), self.github, self.config, self.relay)
         self.foreman.intake(REPO, 7)
@@ -180,9 +180,10 @@ class OnTest(unittest.TestCase):
             (choice(OLD, {OLD: 0.2, NEW: 0.2, jev_rank.ABSTAIN[0]: 0.3,
                           jev_rank.ABSTAIN[1]: 0.3}), "low-confidence"),
             (choice(OLD, {OLD: 0.9, NEW: "high"}), "bad-response"),  # a probability not a number
-            ({"model": jev_rank.MODEL, "answers": {"relevant": {
-                "type": "choice", "choice": OLD, "probabilities": {OLD: 0.9}}}},
-             "bad-response"),  # the confidence is missing
+            ({"model": jev_rank.MODEL, "answers": {"relevant": {"type": "choice",
+                "choice": OLD, "probabilities": {OLD: 0.9}}}}, "bad-response"),  # no confidence
+            (choice([OLD], {OLD: 0.9}), "bad-response"),  # a choice a request never named
+            (choice({"fp": OLD}, {OLD: 0.9}), "bad-response"),
             ({"model": "jev-latest", "answers": {}}, "bad-response"),
             (b"<html>not json, and it names " + KEY.encode() + b"</html>", "bad-response"),
             (500, "http-500"),
@@ -209,7 +210,7 @@ class OnTest(unittest.TestCase):
         self.approve()
         self.config = Config(mcp_token="t", repos=frozenset({REPO}), lessons_file=self.path,
                              rank_lessons=True, jev_api_key=KEY, jev_url="http://127.0.0.1:1")
-        wi, order, _ = self.dispatch()  # intake again on the fresh foreman ticks the dead host
+        wi, order, _ = self.dispatch()
         self.assertEqual(wi["state"], "implementing")
         self.assertEqual([l["fingerprint"] for l in order["lessons"]], [NEW])
         self.assertEqual(self.fallbacks(), ["unreachable"])
@@ -302,7 +303,7 @@ class QuietTest(unittest.TestCase):
         self.foreman.tick(f"{REPO}#7")
         order = self.foreman.store.workorders(f"{REPO}#7")[-1]
         self.assertEqual([l["fingerprint"] for l in order["lessons"]],
-                         [f"fp-{n}" for n in range(11, 1, -1)])  # the newest ten
+                         [f"fp-{n}" for n in range(11, 1, -1)])
         self.assertEqual(Endpoint.requests, [])
         self.assertEqual(fallbacks(self.foreman), self.fallback)
 
@@ -355,7 +356,7 @@ class UnitTest(unittest.TestCase):
 
 
 class ConfigTest(unittest.TestCase):
-    """The service environment's say: the flag and the key are read once, at start."""
+    """The environment's say: the flag and the key are read once, at start."""
 
     ENV = {"FACTORY_MCP_TOKEN": "t", "FACTORY_REPOS": REPO}
 

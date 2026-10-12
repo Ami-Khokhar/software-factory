@@ -9,8 +9,8 @@ below `MIN_PROBABILITY` — returns None: rank nothing, and the caller keeps the
 newest-first selection. Every stop logs a fixed non-secret category on the WorkItem. A
 good answer only reorders the lessons: the same entries come back, the winning lesson
 first (eligibility and the cap stay code-owned, ADR-0020, ADR-0007). The confidence is
-validated where it comes back, but the gate is the winner's probability: for a Choice of
-n options confidence is (p_max - 1/n)/(1 - 1/n), so the 0.5 floor already implies one
+validated where it comes back, but the gate is the winner's probability: a Choice of n
+options returns confidence (p_max - 1/n)/(1 - 1/n), so the 0.5 floor already implies one
 near 0.25 at every option count this repo can produce.
 """
 import json
@@ -69,11 +69,10 @@ def _fallback(store, wi, category):
 def rank(lessons, wi, findings, store, config):
     """The eligible lessons ranked by relevance, or None: keep newest first.
 
-    `lessons` are one repo's eligible entries from `lessons.for_repo`, newest first
-    (ADR-0020: eligibility never depends on the answer); `findings` are the exact
-    `findingsToAddress` of the WorkOrder being built. Returns the same entries, the winning
-    lesson first, or None. Never raises; never logs request or response text, the key, or a
-    provider error body.
+    `lessons` are one repo's eligible entries from `lessons.for_repo`, newest first (ADR-0020:
+    eligibility never depends on the answer); `findings` are the exact `findingsToAddress` of
+    the WorkOrder built. Returns the same entries, the winning lesson first, or None. Never
+    raises; never logs request or response text, the key, or a provider error body.
     """
     if not config.rank_lessons or not lessons:
         return None
@@ -81,8 +80,7 @@ def rank(lessons, wi, findings, store, config):
         return _fallback(store, wi, "no-key")
     if len(lessons) > MAX_OPTIONS - len(ABSTAIN):  # no silent cut: rank nothing at all
         return _fallback(store, wi, "too-many-lessons")
-    # One Choice over every eligible lesson plus the two abstentions: complete coverage. Each
-    # lesson's criterion is its full text; the abstain names say what they mean on their own.
+    # One Choice: every eligible lesson an option (its criterion is its full text), two abstentions.
     question = {"type": "choice", "instructions": INSTRUCTIONS,
                 "criteria": {**{e["fingerprint"]: e["text"] for e in lessons},
                              **dict.fromkeys(ABSTAIN, None)}}
@@ -113,12 +111,13 @@ def rank(lessons, wi, findings, store, config):
     chosen = answer.get("choice")
     probabilities = answer.get("probabilities")
     confidence = answer.get("confidence")
+    if not isinstance(chosen, str):  # the answer names a string; a list or object is malformed
+        return _fallback(store, wi, "bad-response")
     if chosen in ABSTAIN:  # the model's own two ways of saying it cannot rank
         return _fallback(store, wi, "abstain")
     if chosen not in {e["fingerprint"] for e in lessons}:  # not a lesson this request named
         return _fallback(store, wi, "invalid-answer")
-    # The answer's own shape: every probability a number in range, the confidence too (live API
-    # docs, Choice answer). The floor itself is MIN_PROBABILITY on the winner's share.
+    # The answer's own shape: every probability a number in range, the confidence too (API docs).
     if not isinstance(probabilities, dict) or not isinstance(confidence, (int, float)) \
             or not 0 <= confidence <= 1 \
             or any(not isinstance(p, (int, float)) or not 0 <= p <= 1
@@ -127,7 +126,6 @@ def rank(lessons, wi, findings, store, config):
     if probabilities.get(chosen, 0) < MIN_PROBABILITY:
         return _fallback(store, wi, "low-confidence")
     order = list(enumerate(lessons))
-    # A lesson the answer leaves out reads as probability 0, and the newest-first order breaks
-    # every tie: one answer, no silent cut, the cap and the worker contract unchanged.
+    # A lesson the answer leaves out reads as 0; the newest-first order breaks every tie.
     return [e for _, e in sorted(order, key=lambda pair:
             (-probabilities.get(pair[1]["fingerprint"], 0.0), pair[0]))]
