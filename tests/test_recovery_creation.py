@@ -33,6 +33,7 @@ class FlakyGitHub(FakeGitHub):
     def __init__(self):
         super().__init__()
         self.fail_create = 0
+        self.closes = []  # every (repo, number) close_issue reached GitHub with
         self.fail_close = None
         self.fail_edit = None  # (repo, number) of the dependent rewrite to fail on, once
         self.edit_mode = "stored"  # "stored": GitHub keeps the body but the response is lost;
@@ -60,6 +61,7 @@ class FlakyGitHub(FakeGitHub):
         return issue
 
     def close_issue(self, repo, number):
+        self.closes.append((repo, number))
         if (repo, number) == self.fail_close:
             raise RuntimeError("github dropped the connection")
         return super().close_issue(repo, number)
@@ -197,6 +199,9 @@ class ReplaceCreationTest(unittest.TestCase):
                          f"Depends on #{replacement}\nDepends on #{UNRELATED}\n\n{ISSUE_BODY}")
         self.assertEqual(self.github.issues[(REPO, UNRELATED)]["body"], ISSUE_BODY)  # untouched
         self.assertEqual(self.github.issues[(REPO, MY_NUMBER)]["state"], "closed")
+        # the original closes once: a duplicate write would leave a second failure point
+        # after GitHub already closed it and before the journal reached done (ADR-0065)
+        self.assertEqual(self.github.closes.count((REPO, MY_NUMBER)), 1)
 
     def test_a_drifted_edit_refuses_and_the_journalled_retry_replays_it(self):
         """GitHub stores something other than the written edge and answers calmly: the exact

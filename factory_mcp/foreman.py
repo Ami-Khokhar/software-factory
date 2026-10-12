@@ -1068,7 +1068,6 @@ class Foreman:
                         "the rewiring wrote (a lost response or a drift), so the recovery stays "
                         "paused: clear the problem, then run the replacement again")
             self.github.close_issue(repo, mine)
-            self.github.close_issue(repo, mine)
             names = ", ".join(f"#{number}" for number in replacements)
             # what the cancelled WorkItem tried stays on it: the replacement is the recovery
             # record's continuation, not a wipe of its history
