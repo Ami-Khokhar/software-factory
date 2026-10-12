@@ -9,6 +9,29 @@ from factory_mcp.store import SCHEMA, Conflict, Store
 from tests.fakes import workitem
 
 
+class Killed:
+    """A proxy of the SQLite connection that dies on a chosen statement, as if the process was
+    killed there: the write never finishes, and what the store committed before is on disk."""
+
+    def __init__(self, db, die_on, at):
+        self._db, self._die_on, self._at, self._count = db, die_on, at, 0
+
+    def execute(self, sql, args=()):
+        if sql.startswith(self._die_on):
+            self._count += 1
+            if self._count >= self._at:
+                raise sqlite3.OperationalError("process was killed")
+        return self._db.execute(sql, args)
+
+    def executemany(self, sql, rows):
+        # Autocommit mode runs the statements one by one; the proxy sees each one.
+        for row in rows:
+            self.execute(sql, row)
+
+    def close(self):
+        self._db.close()
+
+
 class StoreTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -244,6 +267,56 @@ class StoreTest(unittest.TestCase):
             store.release_pause("req-2")
         self.assertEqual(len(store.active_pauses()), 3)
         store.close()
+
+    def test_a_member_the_schema_would_reject_fails_loudly_and_writes_nothing(self):
+        """#233 finding: a member that is not a WorkItem id was passed to the driver and half
+        the barrier was written with a contextless IntegrityError. It is refused at the door,
+        naming the role, and the caller can fix the call and retry."""
+        store = Store(self.path)
+        store.open_request("req-1", "replace", {"workItemId": "o/r#1"})
+        with self.assertRaisesRegex(Conflict, "dependent.*a WorkItem id string"):
+            store.pause("req-1", "replace", {"original": "o/r#1", "replacement": "o/r#2",
+                                             "dependent": None})
+        self.assertEqual(store.active_pauses(), [], "part of the bad barrier was written")
+        store.pause("req-1", "replace", {"original": "o/r#1", "replacement": "o/r#2",
+                                         "dependent": "o/r#3"})
+        self.assertEqual(len(store.active_pauses()), 3, "the fixed retry could not take its barrier")
+        store.close()
+
+    def test_a_write_killed_mid_barrier_leaves_no_partial_pause(self):
+        """#233 finding: each barrier row was written alone, so a stop mid-write committed part
+        of the barrier, which the retry could then never finish ('already pauses...'). The
+        barrier's rows land together, or not at all."""
+        store = Store(self.path)
+        store.open_request("req-1", "replace", {"workItemId": "o/r#1"})
+        store._db = Killed(store._db, "INSERT INTO pauses", at=2)
+        with self.assertRaises(sqlite3.OperationalError):
+            store.pause("req-1", "replace", {"original": "o/r#1", "replacement": "o/r#2",
+                                             "dependent": "o/r#3"})
+        store._db._db.close()  # as if the process died there: no clean shutdown
+        reopened = Store(self.path)
+        self.assertEqual(reopened.active_pauses(), [], "a partial barrier survived the kill "
+                                                       "and would block the retry")
+        reopened.pause("req-1", "replace", {"original": "o/r#1", "replacement": "o/r#2",
+                                            "dependent": "o/r#3"})
+        self.assertEqual(len(reopened.active_pauses()), 3)
+        reopened.close()
+
+    def test_a_release_killed_before_its_audit_row_releases_nothing(self):
+        """#233 finding: the release wrote its two statements one after the other; a kill in the
+        window released the barrier without its audit row. They land in one transaction."""
+        store = Store(self.path)
+        self.paused(store)
+        store.advance_request("req-1", "pushing")
+        store.advance_request("req-1", "done")
+        store._db = Killed(store._db, "INSERT INTO audit", at=1)
+        with self.assertRaises(sqlite3.OperationalError):
+            store.release_pause("req-1")
+        store._db._db.close()
+        reopened = Store(self.path)
+        self.assertEqual(len(reopened.active_pauses()), 3,
+                         "the release committed without its audit row")
+        reopened.close()
 
     def test_unknown_request_reads_as_none(self):
         store = Store(self.path)

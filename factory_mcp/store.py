@@ -9,6 +9,7 @@ import json
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -271,18 +272,40 @@ class Store:
         return [dict(zip(("requestId", "operation", "inputsFingerprint", "phase"), row))
                 for row in rows]
 
+    @contextmanager
+    def _transaction(self):
+        """One committed write (#233 finding): the rows land together or not at all.
+
+        The connection runs in autocommit mode (isolation_level=None), so each statement
+        commits alone; a mid-write crash or a rejected row would leave part of the pause
+        barrier behind that the retry can never finish.
+        """
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            self._db.execute("ROLLBACK")
+            raise
+        else:
+            self._db.execute("COMMIT")
+
     def pause(self, request_id, operation, members):
         """Record a durable pause barrier for a journalled recovery operation (#233).
 
-        `members` maps PAUSE_ROLES to the WorkItems the operation holds on the graph. The
+        `members` maps PAUSE_ROLES to the WorkItems the operation holds on the graph, and
+        each member must name a WorkItem. The
         barrier is tied to the request journal: it can only name an operation that is
         journalled with the same operation, and pausing again with the same membership
         replays the one barrier while different membership is a conflicting reuse.
         """
         if set(members) != set(PAUSE_ROLES):
             raise Conflict(f"a pause barrier names exactly the roles {PAUSE_ROLES}, not {sorted(members)}")
+        for role, workitem_id in members.items():
+            if not isinstance(workitem_id, str) or not workitem_id:
+                raise Conflict(f"the {role} member is {workitem_id!r}; a barrier member names a "
+                               f"WorkItem id string")
         membership = [(role, members[role]) for role in PAUSE_ROLES]
-        with self._lock:
+        with self._lock, self._transaction():
             row = self._db.execute("SELECT operation FROM requests WHERE request_id = ?",
                                    (request_id,)).fetchone()
             if not row:
@@ -327,7 +350,7 @@ class Store:
         The journal decides what completed means: while the operation has not reached the done
         phase, the pause stays, so a failed or interrupted attempt cannot silently release it.
         """
-        with self._lock:
+        with self._lock, self._transaction():
             row = self._db.execute("SELECT phase FROM requests WHERE request_id = ?",
                                    (request_id,)).fetchone()
             if not row:

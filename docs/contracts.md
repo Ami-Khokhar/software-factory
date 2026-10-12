@@ -229,9 +229,12 @@ must hold before the controller is allowed to write:
    plan itself is a pure function (`workitem.replacement_plan`), not a tool.
 9. **A pause barrier holds until an explicit release.** A recovery operation may record a
    durable pause barrier in the store: the graph it holds (`original`, `replacement`,
-   `dependent` WorkItems) tied to its journalled request. The barrier survives a restart and
+   `dependent` WorkItems, each a non-empty id string) tied to its journalled request. The
+   barrier survives a restart and
    the journal decides whether it can clear: releasing it only succeeds once the operation has
-   reached the `done` phase, and a failed or incomplete attempt cannot silently release it.
+   reached the `done` phase, and a failed or incomplete attempt cannot silently release it. The
+   barrier's rows, and the release with its audit row, are written in one SQLite transaction, so
+   an interrupted write leaves no partial barrier behind and a corrected retry can finish it.
 
 ## Versioning
 
