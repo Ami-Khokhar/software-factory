@@ -1,4 +1,5 @@
 """Shared test doubles and builders."""
+from factory_mcp.github import GitHubError
 
 
 def workitem(**fields):
@@ -78,7 +79,10 @@ class FakeGitHub:
         return [p for p in self.pulls if p["repo"] == repo and p["head"]["ref"] == branch]
 
     def pull(self, repo, number):
-        return next(p for p in self.pulls if p["repo"] == repo and p["number"] == number)
+        try:
+            return next(p for p in self.pulls if p["repo"] == repo and p["number"] == number)
+        except StopIteration:
+            raise GitHubError(404, f"{number} is not a pull request on {repo}") from None
 
     def commit(self, repo, sha):
         return self.commits.get((repo, sha)) or {"sha": sha, "author": None, "committer": None, "parents": [],
@@ -149,7 +153,15 @@ class FakeGitHub:
         return {"id": len(self.posted), "body": body}
 
     def close_issue(self, repo, number):
-        self.issues[(repo, number)]["state"] = "closed"
+        # a PR on GitHub closes through the issue endpoint too and reads back through /pulls
+        for pr in self.pulls:
+            if pr["repo"] == repo and pr["number"] == number and pr["state"] == "open":
+                pr["state"] = "closed"
+                pr["mergeable"] = None
+        issue = self.issues.setdefault((repo, number), {"number": number, "title": f"Goal {number}",
+                                                        "body": "", "state": "closed",
+                                                        "labels": [], "user": {"login": "o"}})
+        issue["state"] = "closed"
 
     def reopen_issue(self, repo, number):
         self.issues[(repo, number)]["state"] = "open"
