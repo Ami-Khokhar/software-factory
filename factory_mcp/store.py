@@ -292,19 +292,24 @@ class Store:
     def pause(self, request_id, operation, members):
         """Record a durable pause barrier for a journalled recovery operation (#233).
 
-        `members` maps PAUSE_ROLES to the WorkItems the operation holds on the graph, and
-        each member must name a WorkItem. The
-        barrier is tied to the request journal: it can only name an operation that is
-        journalled with the same operation, and pausing again with the same membership
-        replays the one barrier while different membership is a conflicting reuse.
+        `members` maps PAUSE_ROLES to the WorkItems the operation holds on the graph: a role's
+        value is one WorkItem id string, or a list of them (empty when the operation names no
+        WorkItem for the role; a replacement plan may hold several, #235). Each member must
+        name a WorkItem. The barrier is tied to the request journal: it can only name an
+        operation that is journalled with the same operation, and pausing again with the same
+        membership replays the one barrier while different membership is a conflicting reuse.
         """
         if set(members) != set(PAUSE_ROLES):
             raise Conflict(f"a pause barrier names exactly the roles {PAUSE_ROLES}, not {sorted(members)}")
-        for role, workitem_id in members.items():
-            if not isinstance(workitem_id, str) or not workitem_id:
-                raise Conflict(f"the {role} member is {workitem_id!r}; a barrier member names a "
+        for role, held in members.items():
+            ids = held if isinstance(held, list) else [held]
+            if any(not isinstance(workitem_id, str) or not workitem_id for workitem_id in ids):
+                raise Conflict(f"the {role} member is {held!r}; a barrier member names a "
                                f"WorkItem id string")
-        membership = [(role, members[role]) for role in PAUSE_ROLES]
+        membership = [(role, workitem_id)
+                      for role in PAUSE_ROLES
+                      for workitem_id in (members[role] if isinstance(members[role], list)
+                                          else [members[role]])]
         with self._lock, self._transaction():
             row = self._db.execute("SELECT operation FROM requests WHERE request_id = ?",
                                    (request_id,)).fetchone()

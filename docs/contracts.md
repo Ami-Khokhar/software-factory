@@ -229,8 +229,8 @@ must hold before the controller is allowed to write:
    plan itself is a pure function (`workitem.replacement_plan`), not a tool.
 9. **A pause barrier holds until an explicit release.** A recovery operation may record a
    durable pause barrier in the store: the graph it holds (`original`, `replacement`,
-   `dependent` WorkItems, each a non-empty id string) tied to its journalled request. The
-   barrier survives a restart and
+   `dependent` roles, each one WorkItem id or a list of them (so a plan may hold several
+   replacements or dependents) tied to its journalled request. The barrier survives a restart and
    the journal decides whether it can clear: releasing it only succeeds once the operation has
    reached the `done` phase, and a failed or incomplete attempt cannot silently release it. The
    barrier's rows, and the release with its audit row, are written in one SQLite transaction, so
@@ -239,7 +239,14 @@ must hold before the controller is allowed to write:
    no worker pass — the dispatch decision refuses, and the check is repeated immediately before
    the relay call, so a barrier recorded after the decision still holds. Work the barrier does
    not name dispatches as usual; releasing the barrier lets the held WorkOrder submit on the next
-   tick, with no new pass spent.
+   tick, with no new pass spent. A replacement operation records its barrier before any GitHub
+   write, over the original, the replacements and the dependents its plan re-points, so a tick,
+   a rebuild or a restart during the operation takes the ready-labelled graph members in without
+   dispatching them; and a call that finds its journal at the done phase with the barrier still
+   active completes the release, so a kill between the two writes leaves nothing held. A repeat of
+   the same replace call is the way out of any other interrupted run too: a partly run journal is
+   replayed, or — when a person moved a member meanwhile — ends the operation where it stands and
+   releases what it held (ADR-0063).
 
 ## Versioning
 

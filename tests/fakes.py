@@ -151,6 +151,9 @@ class FakeGitHub:
     def close_issue(self, repo, number):
         self.issues[(repo, number)]["state"] = "closed"
 
+    def reopen_issue(self, repo, number):
+        self.issues[(repo, number)]["state"] = "open"
+
     def edit_issue(self, repo, number, body):
         self.issues[(repo, number)]["body"] = body
         return self.issues[(repo, number)]
