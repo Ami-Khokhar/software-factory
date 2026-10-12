@@ -79,6 +79,71 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(store.get("o/r#1"),
                          dict(workitem(state="cancelled", blockedOn="stale wait"), stateVersion=3))
         store.close()
+    def test_request_journal_survives_restart(self):
+        """A replacement request recorded before a restart is journalled durably."""
+        store = Store(self.path)
+        opened = store.open_request("req-1", "recover", {"workItemId": "o/r#1"})
+        self.assertEqual(opened["phase"], "started")
+        store.advance_request("req-1", "pushing")
+        store.log("recover", {"requestId": "req-1"})
+        store.close()
+
+        reopened = Store(self.path)
+        self.assertEqual(reopened.request("req-1"),
+                         {"requestId": "req-1", "operation": "recover", "phase": "pushing",
+                          "inputsFingerprint": opened["inputsFingerprint"]})
+        reopened.close()
+
+    def test_identical_request_resumes_same_operation(self):
+        store = Store(self.path)
+        first = store.open_request("req-1", "recover", {"workItemId": "o/r#1"})
+        store.advance_request("req-1", "pushing")
+        store.close()
+
+        reopened = Store(self.path)
+        resumed = reopened.open_request("req-1", "recover", {"workItemId": "o/r#1"})
+        self.assertEqual(resumed, dict(first, reused=True, phase="pushing"))
+        reopened.close()
+
+    def test_same_request_id_with_different_inputs_fails(self):
+        store = Store(self.path)
+        store.open_request("req-1", "recover", {"workItemId": "o/r#1"})
+        with self.assertRaises(Conflict):
+            store.open_request("req-1", "recover", {"workItemId": "o/r#2"})
+        with self.assertRaises(Conflict):
+            store.open_request("req-1", "replace", {"workItemId": "o/r#1"})
+        # The journal still holds the first request untouched.
+        self.assertEqual(store.request("req-1")["operation"], "recover")
+        store.close()
+
+    def test_non_identical_inputs_have_distinct_fingerprints(self):
+        store = Store(self.path)
+        one = store.open_request("req-1", "recover", {"workItemId": "o/r#1"})
+        other = store.open_request("req-2", "recover", {"workItemId": "o/r#2"})
+        self.assertNotEqual(one["inputsFingerprint"], other["inputsFingerprint"])
+        # Key order and whitespace do not change the identity of the inputs.
+        reordered = store.open_request("req-3", "recover", {"workItemId": "o/r#1"})
+        self.assertEqual(one["inputsFingerprint"], reordered["inputsFingerprint"])
+        store.close()
+
+    def test_phases_only_move_forward_and_reject_unknown_ones(self):
+        store = Store(self.path)
+        store.open_request("req-1", "recover", {"workItemId": "o/r#1"})
+        with self.assertRaises(Conflict):
+            store.advance_request("req-1", "done")  # not the next phase
+        store.advance_request("req-1", "pushing")  # the next phase
+        with self.assertRaises(Conflict):
+            store.advance_request("req-1", "started")  # backwards
+        with self.assertRaises(Conflict):
+            store.advance_request("req-1", "made-up-phase")
+        self.assertEqual(store.request("req-1")["phase"], "pushing")
+        store.close()
+
+    def test_unknown_request_reads_as_none(self):
+        store = Store(self.path)
+        self.assertIsNone(store.request("req-nope"))
+        self.assertEqual(store.requests(), [])
+        store.close()
 
 
 if __name__ == "__main__":
