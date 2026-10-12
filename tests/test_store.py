@@ -79,6 +79,22 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(store.get("o/r#1"),
                          dict(workitem(state="cancelled", blockedOn="stale wait"), stateVersion=3))
         store.close()
+    def test_journal_survives_interruption_without_sidecar_files(self):
+        """A store left un-closed (server SIGTERM) keeps committed data, and nothing lives outside
+        factory.sqlite3: a copy of that file alone is the whole store (#197: no WAL sidecars)."""
+        store = Store(self.path)
+        self.assertNotEqual(store._db.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+        store.open_request("req-crash", "recover", {"workItemId": "o/r#1"})
+        store.advance_request("req-crash", "pushing")
+        # No close: as if the process were killed. The committed phase must still be there.
+        store._db.close()
+
+        sidecars = [p.name for p in Path(self.path).parent.iterdir() if p.name != Path(self.path).name]
+        self.assertEqual(sidecars, [], f"the store leaves sidecar files: {sidecars}")
+        reopened = Store(self.path)
+        self.assertEqual(reopened.request("req-crash")["phase"], "pushing")
+        reopened.close()
+
     def test_request_journal_survives_restart(self):
         """A replacement request recorded before a restart is journalled durably."""
         store = Store(self.path)

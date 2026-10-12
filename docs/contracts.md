@@ -216,8 +216,9 @@ must hold before the controller is allowed to write:
    it again with the same inputs resumes the journalled operation at its last phase; the
    same ID with different inputs is a conflicting reuse and fails, so a retry can never
    masquerade as a different operation. Its phases (`started`, `pushing`, `done`) only move
-   forward, one at a time, and the store commits each with `synchronous = FULL`, so a
-   restart after an interruption finds the last phase.
+   forward, one at a time, and the store commits each with `synchronous = FULL` in
+   rollback-journal mode, so a restart after an interruption finds the last phase and a copy
+   of `factory.sqlite3` alone is the whole store.
 
 ## Versioning
 

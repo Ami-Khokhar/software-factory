@@ -98,9 +98,10 @@ class Store:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self._lock = threading.Lock()
-        # WAL + FULL make every journalled request hit the disk with its commit, so a
-        # restart after an interruption still finds the last phase (crash-safe writes).
-        self._db.execute("PRAGMA journal_mode = WAL")
+        # Rollback-journal mode keeps the whole store in the one factory.sqlite3 file: each
+        # committed write leaves the hot journal inside it, so a copy of that file alone is
+        # complete and an interrupted store is recovered on the next open (#197 finding: WAL
+        # spreads commits over -wal/-shm sidecars that survive an unclean stop).
         self._db.execute("PRAGMA synchronous = FULL")
         self._db.executescript(SCHEMA)
         self._migrate()
