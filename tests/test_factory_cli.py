@@ -33,13 +33,20 @@ PASS = "import unittest\n\n\nclass T(unittest.TestCase):\n    def test(self):\n 
 
 
 class McpEndpoint(ThreadingHTTPServer):
-    """A controlled factory-mcp endpoint: tools/list answers what a token's listing names."""
+    """A controlled factory-mcp endpoint: tools/list answers what a token's listing names.
+
+    The request history is per instance: a test's server makes it fresh and only own requests
+    appear on it, so one test's endpoint cannot be tainted by another test's.
+    """
 
     daemon_threads = True
-    asked = ()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.asked = ()
 
     def answer(self, request):
-        McpEndpoint.asked = self.asked = (*self.asked, request.headers.get("Authorization", ""))
+        self.asked = (*self.asked, request.headers.get("Authorization", ""))
         names = self.listings.get(request.headers.get("Authorization", ""), None)
         body = ({"jsonrpc": "2.0", "id": 1, "result": {"tools": [{"name": name} for name in names]}}
                 if names is not None else {"error": "unauthorized"})
@@ -101,11 +108,18 @@ class UpdateTest(unittest.TestCase):
         # A config dir with no secrets file, so `service_env` builds the deploy environment from
         # the patched SETTINGS alone and never the real ~/.config/factory-mcp (finding 1ff5bc93).
         config = root / "config"
+        self.config = config
         self.mcp = McpEndpoint(("127.0.0.1", 0), McpRequest)
         self.mcp.listings = {"Bearer owner-token": self.include(),
                              "Bearer agent-token": sorted(AGENT_TOOLS)}
         threading.Thread(target=self.mcp.serve_forever, daemon=True).start()
         self.addCleanup(self.mcp.shutdown)
+        # The host may set credential-bearing variables in its own environment; `service_env`
+        # reads `os.environ` first, so strip them (and restore them afterward) to keep what the
+        # tests exercise dummy-only: a real or inherited token must never reach the endpoint.
+        stripped = {key: os.environ.pop(key) for key in ("FACTORY_MCP_TOKEN", "FACTORY_AGENT_TOKEN")
+                    if key in os.environ}
+        self.addCleanup(os.environ.update, stripped)
         port = self.mcp.server_address[1]
         self.restarts = []
         for p in (mock.patch.object(cli, "HERE", self.deploy), mock.patch.object(cli, "STATE", root / "state"),
@@ -380,13 +394,40 @@ class UpdateTest(unittest.TestCase):
                 "hermes -p day-desk mcp tools":
                     subprocess.CompletedProcess([], 0, "Profile: day-desk\nnot json\n", "")})
 
-    def test_an_unset_token_cannot_be_verified_so_the_deploy_does_not_record_success(self):
+    def test_the_endpoint_keeps_its_request_history_to_itself(self):
+        """Each endpoint instance records only its own requests: the missing-token deploy above
+        sent its owner request on self.mcp, and a fresh endpoint sees none of it (class-level
+        `asked` leaked one server's history into the next server's, which made a later deploy
+        report requests it had never made)."""
+        settings = dict(cli.SETTINGS)
+        settings.pop("FACTORY_AGENT_TOKEN")  # the missing-token case: agent never authenticates
+        with mock.patch.object(cli, "SETTINGS", settings), self.assertRaisesRegex(
+                SystemExit, "lists no tools for the factory_drive token"):
+            self.deploy_with("tenant/hermes/SOUL.md", "soul\n")
+        second = McpEndpoint(("127.0.0.1", 0), McpRequest)
+        second.listings = self.mcp.listings
+        threading.Thread(target=second.serve_forever, daemon=True).start()
+        self.addCleanup(second.shutdown)
+        self.assertEqual(second.asked, ())  # the first server's requests stay with it
+
+    def test_service_env_still_takes_the_environment_then_the_settings_then_the_secrets(self):
+        self.config.mkdir(parents=True, exist_ok=True)
+        (self.config / "secrets").write_text("FACTORY_AGENT_TOKEN=secrets-dummy\n")
+        env = {"FACTORY_MCP_TOKEN": "env-dummy", "FACTORY_AGENT_TOKEN": "env-agent-dummy"}
+        with mock.patch.dict(os.environ, env), mock.patch.object(
+                cli, "SETTINGS", {"FACTORY_MCP_TOKEN": "settings-dummy"}):
+            merged = cli.service_env()
+        self.assertEqual((merged["FACTORY_MCP_TOKEN"], merged["FACTORY_AGENT_TOKEN"]),
+                         ("settings-dummy", "secrets-dummy"))  # env < settings < secrets
+
+    def test_an_unset_token_cannot_be_verified_and_its_endpoint_records_nothing(self):
         settings = dict(cli.SETTINGS)  # the one with both tokens, from setUp's patches
         settings.pop("FACTORY_AGENT_TOKEN")
         with mock.patch.object(cli, "SETTINGS", settings), self.assertRaisesRegex(
                 SystemExit, "lists no tools for the factory_drive token"):
             self.deploy_with("tenant/hermes/SOUL.md", "soul\n")
         self.assertNotIn("update: deployed", (cli.STATE / "deployed").read_text())
+        self.assertNotIn("Bearer agent-token", self.mcp.asked)  # no agent request; the owner check runs first
 
     def test_mcp_tools_answers_the_names_a_token_lists_and_none_when_it_cannot(self):
         self.assertEqual(cli.mcp_tools("agent-token"), sorted(AGENT_TOOLS))
