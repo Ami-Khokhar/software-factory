@@ -1244,3 +1244,42 @@ running container. Dispatch and control share a process lock. Start verifies rea
 refused while its own sandbox or another app is running. A later approved issue
 may start Docker again through the existing worker recovery. Other host users must
 coordinate their container starts with an owner-requested engine shutdown.
+
+
+---
+
+## ADR-0058 — Jev may order the lessons; code still owns who rides
+
+**Context.** A WorkOrder carries the repo's approved lessons newest-first (ADR-0020), capped at
+ten. Recency is the only order code can compute, but a lesson approved months ago can matter more
+for today's task than one approved yesterday: judging which past mistake could recur in a task is
+a semantic call. TypeSafe's Jev returns a Choice — one option picked from a named set, with a
+probability each — which fits "which lesson matters here".
+
+**Decision.** With `FACTORY_JEV_LESSON_RANKING` on and `TYPESAFE_API_KEY` set (config reads both
+from the service environment once, and refuses to start with the flag on and the key missing),
+each dispatch makes one standard-library HTTPS call to TypeSafe's System One endpoint
+(`factory_mcp/jev_rank.py`): one Choice question whose options are the repo's eligible lessons
+each described by its full text, plus two abstentions ("none of the lessons applies to this
+work", "uncertain"). The state is only the current task — the WorkItem's goal and acceptance
+bullets, and this dispatch's exact `findingsToAddress` when it has any. The rubric stays in code.
+When the answer names a lesson with probability ≥ 0.5 and a well-formed distribution and
+confidence, the lessons ride in the answer's probability order, the newest-first order breaking
+ties; `documents.workorder` still caps at ten after ranking. Everything else keeps the
+deterministic selection: ranking off, a missing key, more eligible lessons than the endpoint's
+option limit (253 after the abstentions), a request over 60 KB, a timeout, a non-2xx, an
+unparseable or malformed answer, an unknown option, either abstention, or a top probability under
+0.5. Each stop logs `lesson_rank_fallback` with one fixed non-secret category on the WorkItem —
+never request or response text, the key, or a provider error body — and no fallback spends a
+worker pass or fails an attempt. One call per dispatch, no retry loop in the tick. Jev sees no
+other repo's lessons, no issue comments, no command output, no diffs, and no secret; its answer
+can only reorder lessons code already chose.
+
+**Consequence.** An older lesson the model ranks relevant rides above a newer irrelevant one,
+which the newest-first order could never do. Nothing else moves: eligibility (ADR-0020), the cap,
+the WorkOrder schema, the worker rules, retries, gate decisions and merge authority are
+untouched, and a hostile or broken answer can at worst reproduce the old order. The ranking is
+off until the owner turns it on after judging it on real labeled tasks — the unit tests prove
+control flow, not Jev's quality — and the two floors (`MIN_PROBABILITY`, the confidence shape
+check) are where that judgment lands. `FACTORY_JEV_URL` is not a setting: tests point a locally
+built Config at a fake endpoint on 127.0.0.1, and the service always calls the documented host.

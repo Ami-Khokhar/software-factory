@@ -294,6 +294,27 @@ cannot choose the runner: the gate's verify of an iOS repo fails on Linux until 
 input for it (say `gates_runs_on`, default `ubuntu-latest`) and the repo's caller workflow passes
 `macos-latest`. That is a change in pr-gatekeeper, not in this repo, and it is not made yet.
 
+### Lesson ranking: opt-in, off by default (ADR-0058)
+
+By default a WorkOrder carries the repo's approved lessons newest-first. Optionally, each dispatch
+asks TypeSafe's Jev which lesson matters most for this task and sends the lessons in that order.
+To turn it on:
+
+1. Judge it first on real tasks of yours (the unit tests prove control flow, not Jev's quality).
+2. Put the key in factory-mcp's secrets: `printf 'TYPESAFE_API_KEY=%s\n' "<key>" \
+   >> ~/.config/factory-mcp/secrets`. The key goes to TypeSafe only, in one Authorization header;
+   it is never logged or stored.
+3. Add `FACTORY_JEV_LESSON_RANKING=1` to `~/.config/factory-mcp/env`, then `factory update`.
+   With the flag on and the key missing, factory-mcp refuses to start and says so.
+
+What crosses to TypeSafe: the task's goal, acceptance bullets and current `findingsToAddress`,
+and this repo's approved lesson texts — nothing else (no other repo's lessons, issue comments,
+command output, diffs or secrets). One call per dispatch, five-second timeout, no retries. Any
+stop — an abstention, a malformed or unsure answer, an endpoint error — keeps the newest-first
+order and logs `lesson_rank_fallback` with a fixed category on the WorkItem (`factory status`
+and the audit log show it); the line never stops and no worker pass is spent. Ranking may only
+reorder the lessons the code already chose; eligibility and the ten-lesson cap are code's.
+
 ## Starting, stopping, rebooting
 
 The relay and factory-mcp are launchd services: they start at login and restart when they
