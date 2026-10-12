@@ -114,9 +114,11 @@ The harness, patch collection, and verification run as the same host UID with a 
 container-only HOME (`/tmp/factory-home`). Build the image with
 `docker build -t factory-worker:latest worker/`; `factory update` rebuilds it when
 `worker/Dockerfile` changes, and tags the new build `latest` only after `python`, `python3` and
-`git` run in it. Hold point (ADR-0052): rebuild it — or enable it at all — only once `factory-mcp`
-with the `Result.diagnostics` consumer (#189–#191) is deployed and running; an old image keeps
-producing legacy Results, and a rebuilt one produces diagnostics only a deployed consumer reads.
+`git` run in it. Hold point (ADR-0052, amended by ADR-0055): rebuild it — or enable it at all —
+only once `factory-mcp` with the `Result.diagnostics` consumer (#189–#191) is deployed and running;
+an old image keeps producing legacy Results, and a rebuilt one produces diagnostics only a deployed
+consumer reads. Roll out one change at a time, consumers before their producers, and pilot each
+producer change on one owner-approved live issue before a broader rollout.
 An agent registered before #98 must add its `--credential` and
 `--env` flags: without them the runner mounts no login and the harness fails on its first call.
 Register each worker in `~/.config/agent-relay/agents.json`
@@ -353,7 +355,10 @@ minutes (ADR-0031). It fast-forwards the deployed checkout (and moves it to `mai
 is merged), runs the tests there, and restarts factory-mcp only if they pass. A failing test keeps
 the old version running, and the job sends you why. It also rebuilds the worker image when
 `worker/Dockerfile` changed, rebuilds Day Desk's sandbox image when `tenant/hermes/sandbox/`
-changed, and runs `hermes profile update day-desk -y` when `tenant/hermes/` changed. A failed
+changed, and runs `hermes profile update day-desk -y` when `tenant/hermes/` changed. Roll out one deploy at
+a time (ADR-0055): verify the deployed factory-mcp accepts what each producer change emits — the
+worker image especially — pilot it on one owner-approved live issue, and only then let the next
+change follow. A failed
 build or profile update stops the deploy with its message, and the next update runs it again from
 the deploy record, which names the last commit for which every step succeeded. After a profile
 update succeeds, the deploy also verifies the live profile's tool discovery: it asks factory-mcp
