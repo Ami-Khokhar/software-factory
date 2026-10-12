@@ -1399,7 +1399,9 @@ logs `replace_abandoned` on the WorkItem, releases the barrier and returns the W
 The person's route then stands and the barrier holds nothing; the members go by their own
 dependencies, a dependency that ended and does not block. A journal at `started` follows the same
 rule, since the run there has written nothing yet anyway. Inputs still fingerprint into the
-journal: only the same call resumes; a different one conflicts (guard 6), as before.
+journal: only the same call resumes; a different one conflicts (guard 6), as before. A call whose
+journal is already `done` ends there too: it returns the WorkItem it found and records no new
+barrier, so a graph can never be held over an operation that will not run again.
 
 **Consequence.** A barrier is never unreleasable: its operation's journal advances or the same
 call's repeat clears it within one retry, without hand-editing the store. No new tool, no schema

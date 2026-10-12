@@ -1002,6 +1002,11 @@ class Foreman:
                 # was read before any write and cannot be derived again after the edits
                 if record["phase"] == REQUEST_PHASES[-1]:  # done, but a kill before the release
                     self.store.release_pause(request_id)
+            elif record["reused"] and record["phase"] == REQUEST_PHASES[-1]:
+                # the journal says this run already ended (a takeover, or nothing left to run):
+                # return what it found without holding the graph again, or no retry could ever
+                # free a barrier recorded over a done journal (ADR-0063, #235)
+                return self.store.get(workitem_id)
             else:
                 # recorded before any GitHub write, so no tick takes the ready-labelled graph
                 # members during the operation, on this process or after a restart (#233, #235)

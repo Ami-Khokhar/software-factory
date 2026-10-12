@@ -228,6 +228,22 @@ class BarrierTest(unittest.TestCase):
         self.assertFalse(any(h["action"] == "dispatch_paused"
                              for h in self.foreman.store.history(f"o/r#{A}")))
 
+    def test_a_repeat_of_a_taken_over_run_records_no_barrier_over_the_graph(self):
+        """A call whose journal is already done (the person's takeover ended the run) never holds
+        the graph again: the repeat returns the WorkItem it found without recording a barrier, so
+        no pause is left that only a store edit could clear (ADR-0063)."""
+        self.interrupted_replace()
+        self.github.close_issue(REPO, A)  # the person closes the first replacement
+        self.foreman.tick()  # the close is a fact the store takes in
+        self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar")  # the retry: takeover, done
+        self.github.reopen_issue(REPO, A)  # the replacement is ready again on GitHub
+        self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar")  # the same call again
+        self.assertEqual(self.foreman.store.active_pauses(), [],
+                         "a done journal recorded a barrier it never released")
+        self.foreman.tick()
+        self.assertFalse(any(h["action"] == "dispatch_paused"
+                             for h in self.foreman.store.history(f"o/r#{A}")))
+
     def test_a_person_who_closes_a_replacement_during_the_operation_does_not_freeze_the_graph(self):
         """A replacement the person closed cannot run again; the retry ends the operation and frees
         the rest of the barrier's graph, which its own now-ended dependency holds back."""
