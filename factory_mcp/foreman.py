@@ -897,7 +897,11 @@ class Foreman:
         direct dependent of the original moves its edge to the last replacement, keeping its other
         dependencies. A replacement that had a worker pass, a dependent that had a worker pass, or a plan
         that would make a cycle, refuses before any GitHub call. The plan itself is pure (workitem.replacement_plan) and not a tool.
-        The original is journalled, re-pointed on GitHub, then cancelled and closed."""
+        The original is journalled, re-pointed on GitHub, then cancelled and closed. A repeat of
+        the same request goes by the journal and the barrier (ADR-0063): a done journal releases
+        its active barrier and returns; a partly run journal replays the remaining writes; a
+        member a person took over meanwhile ends the run, and the barrier releases so the
+        person's route stands."""
         if not isinstance(by, str) or not by.strip():
             raise ToolError("replacing an issue needs the name of the person who asked")
         if (not isinstance(replacements, list) or not replacements or len(replacements) > MAX_PLAN_ISSUES
@@ -913,14 +917,27 @@ class Foreman:
             if wi is None:
                 raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
             request_id = f"replace/{workitem_id}"
-            done = (self.store.request(request_id) or {}).get("phase") == REQUEST_PHASES[-1]
-            if done and request_id in {row["requestId"] for row in self.store.active_pauses()}:
+            record = self.store.request(request_id)
+            active = {row["requestId"] for row in self.store.active_pauses()}
+            if record and record["phase"] == REQUEST_PHASES[-1] and request_id in active:
                 # the run completed; only its release was killed. The journal says done, so the
                 # barrier gives way even though the WorkItem it names may now be refused (#235)
                 self.store.release_pause(request_id)
-            if wi["state"] not in ("human_waiting", "blocked"):
-                raise ToolError(f"{workitem_id} is {wi['state']}; only a WorkItem waiting on recovery "
-                                "is replaced. Answer it with factory_resolve_human instead")
+            # A kill between the journal's advance to pushing and the release leaves the writes
+            # partly done and the barrier held. A resume replays the remaining writes; a member a
+            # person moved in the meantime is a takeover: the run ends without further writes, so
+            # the barrier holds nothing the person's route now owns (ADR-0063).
+            resuming = bool(record) and record["phase"] in REQUEST_PHASES[:2] and request_id in active
+            takeover = None
+            if resuming:
+                ours = (wi["state"] == "cancelled"
+                        and (wi.get("terminalReason") or "").startswith("replaced by"))
+                if wi["state"] not in ("human_waiting", "blocked") and not ours:
+                    takeover = record["phase"]  # a person moved the original while the run was down
+            else:
+                if wi["state"] not in ("human_waiting", "blocked"):
+                    raise ToolError(f"{workitem_id} is {wi['state']}; only a WorkItem waiting on recovery "
+                                    "is replaced. Answer it with factory_resolve_human instead")
             if self.store.workorders(workitem_id) and self._worker_live(wi):
                 raise ToolError(f"{workitem_id} had a worker pass whose work is still live "
                                 "(an active WorkOrder or relay task), so it cannot be replaced. Wait "
@@ -932,6 +949,7 @@ class Foreman:
             # written, until every check below has passed.
             graph = {other["issueNumber"]: workitem.depends_on(self.github.issue(repo, other["issueNumber"]).get("body"))
                      for other in self.store.all() if other["repo"] == repo}
+            ended = None  # a member a person closed while the run was down (#235)
             for number in replacements:
                 issue = self._issue(repo, number)
                 if "pull_request" in issue:
@@ -940,14 +958,18 @@ class Foreman:
                 if mine in deps:
                     raise ToolError(f"#{number} depends on #{mine}; name a fresh issue that waits for "
                                     "nothing, not one that waits for the issue it replaces")
-                status, how = self._dependency(repo, number)
-                if status == "ended":
-                    raise ToolError(f"#{number} {how}, so nothing could wait for it")
                 replacement_id = workitem.workitem_id(repo, number)
-                if self.store.get(replacement_id) and self.store.workorders(replacement_id):
+                status, how = self._dependency(repo, number)
+                if resuming and (status == "ended"
+                                 or (self.store.get(replacement_id) and self.store.workorders(replacement_id))):
+                    ended = number
+                elif status == "ended":
+                    raise ToolError(f"#{number} {how}, so nothing could wait for it")
+                elif self.store.get(replacement_id) and self.store.workorders(replacement_id):
                     raise ToolError(f"#{number} already had a worker pass, so it cannot be a replacement; "
                                     "close it or open a fresh issue instead")
-                graph.setdefault(number, deps)
+                if not resuming or not ended:
+                    graph.setdefault(number, deps)
             for number, deps in graph.items():
                 if mine in deps:
                     other = self.store.get(workitem.workitem_id(repo, number))
@@ -961,6 +983,15 @@ class Foreman:
                 raise ToolError(f"replacing #{mine} would make a cycle: {named}")
             record = self.store.open_request(request_id, "replace",
                                              {"workItemId": workitem_id, "replacements": replacements})
+            if resuming and (takeover is not None or ended is not None):
+                # a person's takeover closes the run: take the journal to done and release the
+                # barrier it holds, so the person's route is the one that runs (ADR-0063)
+                if record["phase"] == REQUEST_PHASES[0]:
+                    self.store.advance_request(request_id, REQUEST_PHASES[1])
+                self.store.advance_request(request_id, REQUEST_PHASES[-1])
+                self.store.log("replace_abandoned", {"replacements": replacements}, workitem_id)
+                self.store.release_pause(request_id)
+                return self.store.get(workitem_id)
             barrier = {"original": [workitem_id],
                        "replacement": [workitem.workitem_id(repo, n) for n in replacements],
                        "dependent": [workitem.workitem_id(repo, n) for n in plan

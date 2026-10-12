@@ -243,7 +243,10 @@ must hold before the controller is allowed to write:
    write, over the original, the replacements and the dependents its plan re-points, so a tick,
    a rebuild or a restart during the operation takes the ready-labelled graph members in without
    dispatching them; and a call that finds its journal at the done phase with the barrier still
-   active completes the release, so a kill between the two writes leaves nothing held.
+   active completes the release, so a kill between the two writes leaves nothing held. A repeat of
+   the same replace call is the way out of any other interrupted run too: a partly run journal is
+   replayed, or — when a person moved a member meanwhile — ends the operation where it stands and
+   releases what it held (ADR-0063).
 
 ## Versioning
 

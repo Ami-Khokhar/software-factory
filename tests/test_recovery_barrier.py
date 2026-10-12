@@ -178,3 +178,67 @@ class BarrierTest(unittest.TestCase):
         self.assertEqual(foreman.store.get(f"o/r#{A}")["state"], "implementing")
         self.assertEqual(len(foreman.store.all_workorders()), orders,
                          "the release submitted the saved WorkOrder with no new pass")
+
+    def test_a_kill_after_the_originals_close_does_not_freeze_the_graph(self):
+        """A kill (or a store error) between the original's close and the journal's advance leaves
+        the writes partly done; the tick reconciles the closed original to cancelled, and the retry
+        with the same inputs ends the run's journal and releases the barrier, so the held members
+        run again instead of dispatching never (ADR-0063)."""
+        class DyingForeman(Foreman):
+            """A replace that dies after the close, before the WorkItem write and the advance."""
+
+            def _write(self_, old, new, action, **detail):
+                if action == "replaced" and not getattr(self_, "died", False):
+                    self_.died = True
+                    raise RuntimeError("the process died after the close")
+                return Foreman._write(self_, old, new, action, **detail)
+
+        request = f"replace/{ORIGINAL}"
+        dying = DyingForeman(self.foreman.store, self.github, self.foreman.config, self.foreman.relay)
+        with self.assertRaisesRegex(RuntimeError, "died after the close"):
+            dying.replace_issue(ORIGINAL, [A, B], "amteshwar")
+        self.assertEqual((self.foreman.store.request(request)["phase"],
+                          bool(self.foreman.store.active_pauses())), (REQUEST_PHASES[1], True))
+        self.foreman.tick_one(ORIGINAL)  # a tick takes the close in: the original reconciles
+        self.assertEqual(self.foreman.store.get(ORIGINAL)["state"], "cancelled")
+        self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar")  # the retry with the same inputs
+        self.assertEqual((self.foreman.store.request(request)["phase"],
+                          self.foreman.store.active_pauses()), (REQUEST_PHASES[-1], []))
+        self.assertTrue(any(h["action"] == "replace_abandoned"
+                            for h in self.foreman.store.history(ORIGINAL)))
+        # the release leaves the replacement standing on its own facts: discovery after the
+        # release finds nothing holding it, and its dependent stays behind it
+        self.foreman.tick()
+        self.assertFalse(any(h["action"] == "dispatch_paused"
+                             for h in self.foreman.store.history(f"o/r#{A}")))
+        self.assertNotIn(self.foreman.store.get("o/r#202")["state"], ("dispatching", "implementing"),
+                         "a dependent ran past the replacement that now stands before it")
+
+    def test_a_person_who_closes_the_original_during_the_operation_does_not_freeze_the_graph(self):
+        """The person's resolve on the original is the owner's recovery; the retry with the same
+        inputs records the takeover, advances the journal to done and releases the barrier."""
+        self.interrupted_replace()
+        self.foreman.resolve_human(ORIGINAL, "close", "taking the issue myself", "owner")
+        self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar")
+        self.assertEqual((self.foreman.store.request(f"replace/{ORIGINAL}")["phase"],
+                          self.foreman.store.active_pauses()), (REQUEST_PHASES[-1], []))
+        # the release leaves the replacement dispatchable again: on its own facts now, not on the
+        # barrier's, while its dependent still stands behind it
+        self.foreman.tick()  # discovery and a tick decide every WorkItem on its own facts
+        self.assertFalse(any(h["action"] == "dispatch_paused"
+                             for h in self.foreman.store.history(f"o/r#{A}")))
+
+    def test_a_person_who_closes_a_replacement_during_the_operation_does_not_freeze_the_graph(self):
+        """A replacement the person closed cannot run again; the retry ends the operation and frees
+        the rest of the barrier's graph, which its own now-ended dependency holds back."""
+        self.interrupted_replace()
+        self.github.close_issue(REPO, A)  # the person closes the first replacement
+        self.foreman.tick()  # the close is a fact the store takes in
+        self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar")
+        self.assertEqual((self.foreman.store.request(f"replace/{ORIGINAL}")["phase"],
+                          self.foreman.store.active_pauses()), (REQUEST_PHASES[-1], []))
+        self.foreman.tick()
+        for wid in (f"o/r#{B}", "o/r#202"):  # 300 was never a WorkItem the store took in
+            self.assertFalse(self.foreman.store.workorders(wid),
+                             f"a worker ran against {wid}, whose graph the person moved")
+            self.assertNotIn(self.foreman.store.get(wid)["state"], ("dispatching", "implementing"))

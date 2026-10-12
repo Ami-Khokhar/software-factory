@@ -1376,3 +1376,35 @@ dispatch none until the operation completes and releases, while work the barrier
 runs as usual. The dispatch and submission checks stay where ADR-0061 put them: no new guard was
 needed on the tick paths, only barriers for them to read. Merge authority, gate secrets and patch
 limits are untouched, and no new tool is exposed.
+
+## ADR-0063 — A repeat of the same replace call is the way out of an interrupted run
+
+**Context.** ADR-0062 released a barrier whose journal was already `done` (the kill between the
+journal advance and the release), but an earlier window stayed: a kill — or a store error on the
+cancel write — between the original's close and the journal's advance left the journal at
+`pushing`. The next tick reconciled the closed original to `cancelled`, the retry refused it for
+good, and every member the barrier named stayed paused with no tool to release it. The same
+deadlock reached a person's route: closing the original or a replacement during the run refused
+the retry on the state and the ended checks, while a different request conflicted with the
+journal (guard 6, ADR-0059).
+
+**Decision.** `factory_replace_issue` re-reads its request journal where it re-reads the WorkItem.
+A journal at `pushing` with an active barrier is a resume in two forms: when the original is still
+the one the first attempt left (waiting, or cancelled with its own `replaced by` reason), the call
+replays the remaining writes — each edit and the close is the same call again, so it is a no-op
+once it has happened — and finishes as the first attempt meant to. When instead a person moved a
+member in the meantime (the original by a resolve or the tick's reconcile, or a replacement
+closed, or one that a worker pass ran on), the call is a takeover: it takes the journal to `done`,
+logs `replace_abandoned` on the WorkItem, releases the barrier and returns the WorkItem it found.
+The person's route then stands and the barrier holds nothing; the members go by their own
+dependencies, a dependency that ended and does not block. A journal at `started` follows the same
+rule, since the run there has written nothing yet anyway. Inputs still fingerprint into the
+journal: only the same call resumes; a different one conflicts (guard 6), as before.
+
+**Consequence.** A barrier is never unreleasable: its operation's journal advances or the same
+call's repeat clears it within one retry, without hand-editing the store. No new tool, no schema
+change: the journal, barrier and release stay what ADR-0062 made them, and the takeover is
+visible in the audit log. Recovery is safe against slips in the takeover, too: no worker runs
+against a graph a person moved, because the release only ends the hold, and the members then go
+by their own dependencies. Merge authority, gate secrets, patch limits and the dispatch/submission
+checks are untouched, and no replacement tool is activated.
