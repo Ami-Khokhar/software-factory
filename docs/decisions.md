@@ -1192,3 +1192,26 @@ skips a case and never reports a pass it did not run. The unittest gate stays bo
 without making the gate slower or secret-dependent; the harness's honesty rules (no unrecorded
 passes, no silent skips) keep its green from being an empty one. It is on demand rather than a
 hook, so a forgetful deploy can still ship an unrun check — the runbook says when to run it.
+
+## ADR-0055 — A producer change is piloted on one owner-approved live issue first
+
+**Context.** Batch A's checkpoint (#196) integrated the merged deployment, diagnostics, environment
+and size work. The recorded blocker was exact — no Docker daemon and no agent-relay checkout reach a
+worker sandbox, so the rehearsal (normal and `--lose-store`), the real-Docker regression harness and
+the bare-repo deployment case could not run here — and ADR-0052's hold point leaves a wider gap: it
+gates one producer on its own consumer, but nothing stops several producer–consumer pairs from
+deploying interleaved, or a producer from shipping to every issue at once. The previous attempt's
+finding (`pi-glm-factory: unknown field diagnostics`) is what it costs when the rollout order breaks.
+
+**Decision.** Roll out one change at a time, consumers before their producers (ADR-0052 stood).
+A producer change goes live on one owner-approved representative issue first; broader rollout only
+after that issue merges with a clean live run behind it. A verification checkpoint never claims
+macOS or Hermes live discovery from mocks: implementation merged, runtime verified and host deployed
+are named separately, and what a sandbox could not reach is reported with its exact blocker, as
+unfinished — not as a pass. Authority, the protected paths and the patch limits (600 lines, 20
+files) do not change in a rollout.
+
+**Consequence.** A rollout problem meets one issue, not every WorkItem, and is seen before it is
+everywhere. The checkpoint's exact commands and blockers are recorded in
+[`verification-checkpoint-batch-a.md`](verification-checkpoint-batch-a.md); the runbook's worker-image
+hold point carries the pilot rule.
