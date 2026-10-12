@@ -1170,3 +1170,25 @@ the pass pauses instead of a second pass, and a code fault on the harness keeps 
 **Consequence.** An unavailable environment costs one pass and pauses for repair on the first
 attempt; a healthy environment runs the harness exactly as before. A missing preflight check is
 still a lost pass, which a rehearsal against real Docker (the runbook's preflight check) covers.
+
+## ADR-0054 — The runner's real-container regression runs on demand and fails loudly
+
+**Context.** The runner's unit tests fake the Docker boundary (tests/fakes.py, the sandbox and
+its mounts), so a change to `worker/runner.py` or `worker/Dockerfile` could pass the gate while
+breaking a behavior only a real container shows: the timeout kill, a credential mount, the
+`collect` git flow, the preflight's probe. The gate's verify runs with no secrets and must stay
+fast and deterministic, so real containers cannot be part of it.
+
+**Decision.** `scripts/regression_docker.py`, invoked explicitly on demand, exercises the runner
+against real `docker run` sandboxes through the same `Sandbox` class the runner uses: success,
+failing verification, timeout, secret redaction and credential isolation, the preflight failure
+codes, the early size rejection and cleanup. It needs no model credential; every case's
+observations are recorded in a JSON report, and a case that recorded nothing counts as failed.
+A missing Docker daemon or worker image is an explicit nonzero failure naming the fix — it never
+skips a case and never reports a pass it did not run. The unittest gate stays boundary-faked
+(`tests/test_regression_docker.py` covers the harness's honesty and its explicit-failure paths).
+
+**Consequence.** A runner or image change is checked against real containers before deploy
+without making the gate slower or secret-dependent; the harness's honesty rules (no unrecorded
+passes, no silent skips) keep its green from being an empty one. It is on demand rather than a
+hook, so a forgetful deploy can still ship an unrun check — the runbook says when to run it.

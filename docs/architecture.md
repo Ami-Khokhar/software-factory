@@ -88,6 +88,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `scripts/factory` | The owner's CLI: `new`, `add-repo`, `status`, `watch`, `report`, `retry`/`regate`/`close`, `start`/`stop`, `update`, `serve` |
 | `scripts/install-services.sh` | The launchd services for agent-relay and factory-mcp |
 | `scripts/rehearsal.py` | One issue end to end, with the real agent-relay and a stand-in GitHub. Its scripted worker hands back a patch, as `worker/runner.py` does, and factory-mcp pushes it |
+| `scripts/regression_docker.py` | The runner's real-container regression harness: real `docker run` sandboxes for runner success, failing verification, timeout, secret redaction and isolation, preflight failure codes, early size rejection and cleanup. Explicitly invoked; a missing Docker daemon or worker image fails loudly instead of passing |
 
 ## One tick
 
