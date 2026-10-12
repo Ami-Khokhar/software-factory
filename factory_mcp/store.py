@@ -9,6 +9,7 @@ import json
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -45,6 +46,15 @@ CREATE TABLE IF NOT EXISTS requests (
   started_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pauses (
+  request_id TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  role TEXT NOT NULL,
+  workitem_id TEXT NOT NULL,
+  paused_at TEXT NOT NULL,
+  released_at TEXT
+);
+CREATE INDEX IF NOT EXISTS pauses_workitem ON pauses (workitem_id, released_at);
 """
 # Migration 1: WorkItem fields the contract no longer has (#27).
 REMOVED_FIELDS = ("parentGoalId", "baseSha", "provider", "sessionHandle", "sessionNative", "sessionUrl")
@@ -68,7 +78,13 @@ def _migrate_3(wi):
     return wi
 
 
-MIGRATIONS = {1: _migrate_1, 2: _migrate_2, 3: _migrate_3}
+# Migration 4: the pause barrier (#233). It adds only a new table, so no
+# stored WorkItem changes; the version bump marks stores that have the `pauses` table.
+def _migrate_4(wi):
+    return wi
+
+
+MIGRATIONS = {1: _migrate_1, 2: _migrate_2, 3: _migrate_3, 4: _migrate_4}
 
 
 def canonical_inputs(inputs):
@@ -82,6 +98,9 @@ def _fingerprint(inputs):
 
 # The replacement-recovery phases, in the only order they may be walked (#197).
 REQUEST_PHASES = ("started", "pushing", "done")
+
+# The pause-barrier roles: what a recovery operation holds on the graph (#233).
+PAUSE_ROLES = ("original", "replacement", "dependent")
 
 
 def now():
@@ -252,3 +271,97 @@ class Store:
                 "ORDER BY started_at, request_id").fetchall()
         return [dict(zip(("requestId", "operation", "inputsFingerprint", "phase"), row))
                 for row in rows]
+
+    @contextmanager
+    def _transaction(self):
+        """One committed write (#233 finding): the rows land together or not at all.
+
+        The connection runs in autocommit mode (isolation_level=None), so each statement
+        commits alone; a mid-write crash or a rejected row would leave part of the pause
+        barrier behind that the retry can never finish.
+        """
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            self._db.execute("ROLLBACK")
+            raise
+        else:
+            self._db.execute("COMMIT")
+
+    def pause(self, request_id, operation, members):
+        """Record a durable pause barrier for a journalled recovery operation (#233).
+
+        `members` maps PAUSE_ROLES to the WorkItems the operation holds on the graph, and
+        each member must name a WorkItem. The
+        barrier is tied to the request journal: it can only name an operation that is
+        journalled with the same operation, and pausing again with the same membership
+        replays the one barrier while different membership is a conflicting reuse.
+        """
+        if set(members) != set(PAUSE_ROLES):
+            raise Conflict(f"a pause barrier names exactly the roles {PAUSE_ROLES}, not {sorted(members)}")
+        for role, workitem_id in members.items():
+            if not isinstance(workitem_id, str) or not workitem_id:
+                raise Conflict(f"the {role} member is {workitem_id!r}; a barrier member names a "
+                               f"WorkItem id string")
+        membership = [(role, members[role]) for role in PAUSE_ROLES]
+        with self._lock, self._transaction():
+            row = self._db.execute("SELECT operation FROM requests WHERE request_id = ?",
+                                   (request_id,)).fetchone()
+            if not row:
+                raise Conflict(f"request {request_id} is not journalled; a pause barrier names "
+                               f"a journalled operation")
+            if row[0] != operation:
+                raise Conflict(f"request {request_id} is journalled as {row[0]!r}, not {operation!r}")
+            stored = self._active_members(request_id)
+            if stored:
+                if sorted(stored) != sorted(membership):
+                    raise Conflict(f"request {request_id} already pauses "
+                                   f"{sorted(stored)}; this call names {sorted(membership)}")
+                return
+            at = now()
+            self._db.executemany("INSERT INTO pauses (request_id, operation, role, workitem_id, "
+                                 "paused_at, released_at) VALUES (?, ?, ?, ?, ?, NULL)",
+                                 [(request_id, operation, role, workitem_id, at)
+                                  for role, workitem_id in membership])
+
+    def _active_members(self, request_id):
+        """The active barrier's (role, workitem_id) pairs, or [] when none is active."""
+        rows = self._db.execute(
+            "SELECT role, workitem_id FROM pauses WHERE request_id = ? AND released_at IS NULL",
+            (request_id,)).fetchall()
+        return [tuple(row) for row in rows]
+
+    def active_pauses(self, workitem_id=None):
+        """Every unreleased pause barrier, or those holding one WorkItem."""
+        with self._lock:
+            query = ("SELECT request_id, operation, role, workitem_id FROM pauses "
+                     "WHERE released_at IS NULL")
+            args = ()
+            if workitem_id is not None:
+                query += " AND workitem_id = ?"
+                args = (workitem_id,)
+            rows = self._db.execute(query + " ORDER BY paused_at, workitem_id, role", args).fetchall()
+        return [dict(zip(("requestId", "operation", "role", "workItemId"), row)) for row in rows]
+
+    def release_pause(self, request_id):
+        """Clear the operation's pause barrier. Explicit, and only after the operation completed.
+
+        The journal decides what completed means: while the operation has not reached the done
+        phase, the pause stays, so a failed or interrupted attempt cannot silently release it.
+        """
+        with self._lock, self._transaction():
+            row = self._db.execute("SELECT phase FROM requests WHERE request_id = ?",
+                                   (request_id,)).fetchone()
+            if not row:
+                raise Conflict(f"request {request_id} has no active pause; it is not journalled")
+            if row[0] != REQUEST_PHASES[-1]:
+                raise Conflict(f"request {request_id} has not completed; it is at phase {row[0]!r}, "
+                               f"so its pause holds until the operation reaches "
+                               f"{REQUEST_PHASES[-1]!r}")
+            if not self._active_members(request_id):
+                raise Conflict(f"request {request_id} has no active pause")
+            self._db.execute("UPDATE pauses SET released_at = ? WHERE request_id = ? "
+                             "AND released_at IS NULL", (now(), request_id))
+            self._db.execute("INSERT INTO audit (at, workitem_id, action, detail) VALUES (?, NULL, ?, ?)",
+                             (now(), "pause_released", json.dumps({"requestId": request_id}, sort_keys=True)))
