@@ -1,7 +1,7 @@
 """The factory tools that Day Desk (Hermes) and the factory CLI call. Each one declares its effect."""
 from datetime import datetime, timezone
 
-from . import lessons, metrics, repos
+from . import docker, lessons, metrics, repos
 from .foreman import MAX_PLAN_ISSUES, Foreman, agent_resolved
 from .mcp import Tool, ToolError
 
@@ -9,7 +9,8 @@ from .mcp import Tool, ToolError
 # a repo, its gate secrets, and the lessons workers read stay with the owner's token.
 AGENT_TOOLS = frozenset({"factory_status", "factory_repo_check", "factory_lessons", "factory_report",
                          "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
-                         "factory_set_dependencies", "factory_resolve_human"})
+                         "factory_set_dependencies", "factory_resolve_human",
+                         "factory_docker_status", "factory_docker_control"})
 WAITING = ("human_waiting", "blocked")
 
 
@@ -76,6 +77,14 @@ def build(store, foreman, agent=False):
                               datetime.now(timezone.utc))
 
     tools = [
+        Tool("factory_docker_status", "Check whether the host Docker engine is running.",
+             {"type": "object", "additionalProperties": False}, "read", lambda args: docker.status()),
+        Tool("factory_docker_control",
+             "Start host Docker (OrbStack) and verify readiness, or stop it only when no factory work "
+             "is queued/running and no containers are running. Does not retry issues.",
+             {"type": "object", "required": ["action"], "additionalProperties": False,
+              "properties": {"action": {"type": "string", "enum": ["start", "stop"]}}}, "write",
+             lambda args: docker.control(args["action"], store, foreman.runtime_lock)),
         Tool("factory_status",
              "Show one WorkItem with its history, or, when no id is given, a summary of all "
              "WorkItems and the repos the factory works on.",

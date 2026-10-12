@@ -4,6 +4,7 @@ import dataclasses
 import os
 import re
 import time
+import threading
 import uuid
 
 from . import diagnostics, documents, gate_secrets, lessons, patches, repos, routing, workitem
@@ -38,6 +39,7 @@ class Foreman:
         self.github = github
         self.config = config
         self.relay = relay
+        self.runtime_lock = threading.RLock()
         self.holder = uuid.uuid4().hex
         self._skipped = set()  # rebuild refusals already logged by this process
 
@@ -517,6 +519,10 @@ class Foreman:
         return self.github.repository(repo)["default_branch"]
 
     def dispatch(self, wi, kind, findings=(), named=()):
+        with self.runtime_lock:
+            return self._dispatch(wi, kind, findings, named)
+
+    def _dispatch(self, wi, kind, findings=(), named=()):
         # Up to passes_per_repo passes of one repo run at once, and the runner gives them the shared
         # checkout in turns (ADR-0036). The rest wait. Two ticks at once may each start one, so the
         # limit is soft; the runner's lock is what keeps the checkout safe.

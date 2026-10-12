@@ -559,3 +559,17 @@ After setting it up, check in Telegram that Day Desk:
 6. relays a factory-watch message, and your reply to it resolves the WorkItem once you approve;
 7. turns a goal of two issues into one `factory_start_plan` call that you approve once, and then
    answers "what needs me?" with the second issue waiting for the first.
+
+The profile deployment check uses `hermes -p day-desk mcp test factory_drive` and
+`hermes -p day-desk mcp test factory`. It checks discovered tool names against the
+live include/exclude filters from `hermes -p day-desk config get
+mcp_servers.<server>.tools --json`. An unsupported command or hidden required tool
+keeps the successful deployment record unchanged. Repair the check or filter and
+run `factory update` again before retrying blocked work.
+
+Day Desk can call `factory_docker_status` and `factory_docker_control` with
+`{"action":"start"}` to recover OrbStack without its terminal. The control verifies
+readiness and never retries an issue. `{"action":"stop"}` refuses queued/running
+factory work and any running container. Ask to stop Docker explicitly. Stop other
+apps and finish Day Desk's terminal session first. The host process needs `docker`
+and `orb` on PATH. No Docker socket is mounted into the sandbox.

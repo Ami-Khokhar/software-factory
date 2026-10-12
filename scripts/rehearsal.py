@@ -55,6 +55,7 @@ print(json.dumps({"schemaVersion": "factory.result/v1", "workOrderId": order["id
     "patch": {"format": "unified", "diff": git("diff", "--binary", base, "HEAD"), "baseSha": base},
     "evidence": [{"kind": "test", "command": "python3 -m unittest test_app", "exit": tests.returncode,
                   "tail": tests.stderr[-200:]}],
+    "diagnostics": {"elapsedMs": 1, "phases": [{"phase": "verification", "elapsedMs": 1, "exitCode": tests.returncode}]},
     "startedAt": started, "finishedAt": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")}))
 '''
 

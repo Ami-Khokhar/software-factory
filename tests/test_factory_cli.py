@@ -29,6 +29,11 @@ LOADER.exec_module(cli)
 ENV = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
            GIT_COMMITTER_EMAIL="t@t")
 AGENT_TOOLS = factory_mcp.tools.AGENT_TOOLS
+def probe_output(names):
+    return "  ✓ Connected (1ms)\n  ✓ Tools discovered: " + str(len(names)) + "\n\n" + "".join(
+        f"    {name:<36} Description\n" for name in names)
+
+
 PASS = "import unittest\n\n\nclass T(unittest.TestCase):\n    def test(self):\n        self.assertTrue(True)\n"
 
 
@@ -244,11 +249,15 @@ class UpdateTest(unittest.TestCase):
             git(self.dev, "push", "-q", "origin", "HEAD:main")
         printed = io.StringIO()
         shown = f"Profile: day-desk\nInstalled from: {self.deploy / 'tenant' / 'hermes'}\n"
-        defaults = [("hermes profile show", subprocess.CompletedProcess([], 0, shown, "")),
-                    ("hermes -p day-desk mcp tools factory_drive",
-                     subprocess.CompletedProcess([], 0, json.dumps(sorted(AGENT_TOOLS)), "")),
-                    ("hermes -p day-desk mcp tools factory",
-                     subprocess.CompletedProcess([], 0, json.dumps(self.include()), ""))]
+        defaults = [("hermes -p day-desk config get mcp_servers.factory_drive.tools --json",
+                     subprocess.CompletedProcess([], 1, "", "Config key not set: mcp_servers.factory_drive.tools\n")),
+                    ("hermes -p day-desk config get mcp_servers.factory.tools --json",
+                     subprocess.CompletedProcess([], 0, json.dumps({"include": self.include()}), "")),
+                    ("hermes profile show", subprocess.CompletedProcess([], 0, shown, "")),
+                    ("hermes -p day-desk mcp test factory_drive",
+                     subprocess.CompletedProcess([], 0, probe_output(sorted(AGENT_TOOLS)), "")),
+                    ("hermes -p day-desk mcp test factory",
+                     subprocess.CompletedProcess([], 0, probe_output(self.include()), ""))]
 
         def run(*cmd, **_):
             text = " ".join(str(part) for part in cmd)
@@ -282,7 +291,7 @@ class UpdateTest(unittest.TestCase):
 
     def test_a_config_change_removes_the_driving_tool_list_the_token_replaces(self):
         commands, printed = self.deploy_with("tenant/hermes/config.yaml", "mcp_servers: {}\n", results={
-            "hermes -p day-desk config get": subprocess.CompletedProcess([], 0, '["factory_status"]', "")})
+            "hermes -p day-desk config get mcp_servers.factory_drive.tools.include": subprocess.CompletedProcess([], 0, '["factory_status"]', "")})
         self.assertIn(("hermes", "-p", "day-desk", "config", "unset",
                        "mcp_servers.factory_drive.tools.include"), commands)
         self.assertIn("removed mcp_servers.factory_drive.tools.include", printed)
@@ -290,7 +299,7 @@ class UpdateTest(unittest.TestCase):
 
     def test_a_config_change_with_no_driving_tool_list_runs_no_unset(self):
         commands, printed = self.deploy_with("tenant/hermes/config.yaml", "mcp_servers: {}\n", results={
-            "hermes -p day-desk config get": subprocess.CompletedProcess([], 1, "", "Config key not set")})
+            "hermes -p day-desk config get mcp_servers.factory_drive.tools.include": subprocess.CompletedProcess([], 1, "", "Config key not set")})
         self.assertNotIn(("hermes", "-p", "day-desk", "config", "unset",
                           "mcp_servers.factory_drive.tools.include"), commands)
         self.assertNotIn("removed mcp_servers.factory_drive.tools.include", printed)
@@ -347,8 +356,8 @@ class UpdateTest(unittest.TestCase):
 
     def test_an_update_that_changed_the_profile_verifies_the_tools_both_tokens_list(self):
         commands, printed = self.deploy_with("tenant/hermes/SOUL.md", "soul\n")
-        self.assertIn(("hermes", "-p", "day-desk", "mcp", "tools", "factory_drive"), commands)
-        self.assertIn(("hermes", "-p", "day-desk", "mcp", "tools", "factory"), commands)
+        self.assertIn(("hermes", "-p", "day-desk", "mcp", "test", "factory_drive"), commands)
+        self.assertIn(("hermes", "-p", "day-desk", "mcp", "test", "factory"), commands)
         self.assertEqual(set(self.mcp.asked), {"Bearer agent-token", "Bearer owner-token"})
         # Nothing private leaks and nothing private is touched: profile show and update only, the
         # factory-owned unset it already knows, no install, no model, gateway or config writes.
@@ -365,13 +374,13 @@ class UpdateTest(unittest.TestCase):
         missed = sorted(AGENT_TOOLS - {"factory_resolve_human"})
         with self.assertRaisesRegex(SystemExit, "factory_resolve_human"):
             self.deploy_with("tenant/hermes/SOUL.md", "soul\n", results={
-                "hermes -p day-desk mcp tools factory_drive":
-                    subprocess.CompletedProcess([], 0, json.dumps(missed), "")})
+                "hermes -p day-desk mcp test factory_drive":
+                    subprocess.CompletedProcess([], 0, probe_output(missed), "")})
         record = (cli.STATE / "deployed").read_text()  # the previous baseline is kept
         self.assertEqual(len(self.restarts), 1)  # but the already-verified code runs on factory-mcp
         commands, printed = self.deploy_with()  # a fixed profile: the same commit deploys
         self.assertIn("update: deployed", printed)
-        self.assertIn(("hermes", "-p", "day-desk", "mcp", "tools", "factory_drive"), commands)
+        self.assertIn(("hermes", "-p", "day-desk", "mcp", "test", "factory_drive"), commands)
         self.assertNotEqual((cli.STATE / "deployed").read_text(), record)
 
     def test_an_owner_tool_the_live_profile_misses_fails_the_deploy_loudly(self):
@@ -379,20 +388,38 @@ class UpdateTest(unittest.TestCase):
         missed = [tool for tool in include if tool != "factory_approve_lesson"]
         with self.assertRaisesRegex(SystemExit, "factory_approve_lesson"):
             self.deploy_with("tenant/hermes/SOUL.md", "soul\n", results={
-                "hermes -p day-desk mcp tools factory":
-                    subprocess.CompletedProcess([], 0, json.dumps(missed), "")})
+                "hermes -p day-desk mcp test factory":
+                    subprocess.CompletedProcess([], 0, probe_output(missed), "")})
 
     def test_a_profile_update_that_blinds_both_servers_fails_before_any_deploy_record(self):
         with self.assertRaisesRegex(SystemExit, "the live tool discovery check failed"):
             self.deploy_with("tenant/hermes/SOUL.md", "soul\n", results={
-                "hermes -p day-desk mcp tools": subprocess.CompletedProcess([], 1, "", "no such profile")})
+                "hermes -p day-desk mcp test": subprocess.CompletedProcess([], 1, "", "no such profile")})
         self.assertNotIn("update: deployed", (cli.STATE / "deployed").read_text())
 
     def test_a_discovery_answer_the_update_cannot_read_fails_the_deploy_too(self):
-        with self.assertRaisesRegex(SystemExit, r"discovers 0 of the 9 factory_drive tools"):
+        with self.assertRaisesRegex(SystemExit, r"discovers 0 of the 11 factory_drive tools"):
             self.deploy_with("tenant/hermes/SOUL.md", "soul\n", results={
-                "hermes -p day-desk mcp tools":
+                "hermes -p day-desk mcp test":
                     subprocess.CompletedProcess([], 0, "Profile: day-desk\nnot json\n", "")})
+
+    def test_a_live_filter_that_hides_a_discovered_tool_refuses_the_deploy(self):
+        with self.assertRaisesRegex(SystemExit, "factory_resolve_human"):
+            self.deploy_with("tenant/hermes/SOUL.md", "soul\n", results={
+                "hermes -p day-desk config get mcp_servers.factory_drive.tools --json":
+                    subprocess.CompletedProcess([], 0, '{"exclude": ["*resolve*"]}', "")})
+
+    def test_live_include_patterns_take_precedence_over_exclude_like_hermes(self):
+        _, printed = self.deploy_with("tenant/hermes/SOUL.md", "soul\n", results={
+            "hermes -p day-desk config get mcp_servers.factory_drive.tools --json":
+                subprocess.CompletedProcess([], 0, '{"include": "factory_*", "exclude": ["*"]}', "")})
+        self.assertIn("update: deployed", printed)
+
+    def test_an_unreadable_live_filter_refuses_the_deploy(self):
+        with self.assertRaisesRegex(SystemExit, "cannot read factory_drive tool filters"):
+            self.deploy_with("tenant/hermes/SOUL.md", "soul\n", results={
+                "hermes -p day-desk config get mcp_servers.factory_drive.tools --json":
+                    subprocess.CompletedProcess([], 1, "", "install failure")})
 
     def test_the_endpoint_keeps_its_request_history_to_itself(self):
         """Each endpoint instance records only its own requests: the missing-token deploy above
