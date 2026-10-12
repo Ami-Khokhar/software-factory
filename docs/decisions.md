@@ -1334,3 +1334,22 @@ one call; and an owner may only react to a live retry after it has stopped. Depl
 confirms which factory-mcp version is running (the guard is in the running server, not the merged
 file) and reads the tool description back before applying the existing #233–#235 plan. Merged code
 is not live proof.
+
+---
+
+## ADR-0061 — The pause barrier is enforced at the submission point
+
+**Context.** #233 gave recovery a durable pause barrier, but nothing enforced it against
+dispatch: a WorkItem a barrier holds could still receive a worker pass, and a barrier recorded
+after the dispatch decision would race the relay call.
+
+**Decision.** The Foreman refuses the dispatch decision of a WorkItem named in an active pause
+barrier (`store.active_pauses`), and repeats the check immediately before the relay submit — the
+last guard before a worker runs. A refusal before the intent is written leaves the WorkItem as it
+was, and the next tick retries; a refusal after leaves state `dispatching` with its saved
+WorkOrder and no relay task, so releasing the barrier submits it on the next tick with no new pass
+spent. No tool writes barriers yet, so only a recovery operation can trip the guard.
+
+**Consequence.** Fail-closed only for the work the barrier names: unrelated WorkItems dispatch as
+usual while recovery is incomplete, and a held WorkItem needs no person to resume after release.
+The checks run without a store write, so they cost nothing when no barrier exists.

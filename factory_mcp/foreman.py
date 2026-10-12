@@ -521,6 +521,12 @@ class Foreman:
     def _default_branch(self, repo):
         return self.github.repository(repo)["default_branch"]
 
+    def _barrier(self, wi):
+        """Active pause barriers holding this WorkItem (roles of the recovery graph), or [] (#233, #234).
+        The check must be the last one before a worker runs: an operation may pause the graph after
+        the dispatch decision and before the relay call, so submit() rechecks at the submission point."""
+        return self.store.active_pauses(wi["id"])
+
     def dispatch(self, wi, kind, findings=(), named=()):
         with self.runtime_lock:
             return self._dispatch(wi, kind, findings, named)
@@ -531,6 +537,11 @@ class Foreman:
         # Up to passes_per_repo passes of one repo run at once, and the runner gives them the shared
         # checkout in turns (ADR-0036). The rest wait. Two ticks at once may each start one, so the
         # limit is soft; the runner's lock is what keeps the checkout safe.
+        paused = self._barrier(wi)
+        if paused:  # fail-closed for the held graph; a release lets the next tick dispatch (#234)
+            self.store.log("dispatch_paused", {"pausedBy": [row["requestId"] for row in paused]},
+                           wi["id"])
+            return wi
         running = sum(other["repo"] == wi["repo"] and other["id"] != wi["id"] and other["state"] in WORKING
                       for other in self.store.all())
         if running >= self.config.passes_per_repo:
@@ -564,6 +575,11 @@ class Foreman:
         return self.submit(wi, order)
 
     def submit(self, wi, order):
+        paused = self._barrier(wi)  # the race guard: rechecked immediately before the worker runs (#234)
+        if paused:  # the intent was written (state dispatching); a released barrier resumes it
+            self.store.log("submit_paused", {"order": order["id"],
+                                             "pausedBy": [row["requestId"] for row in paused]}, wi["id"])
+            return wi
         task = self.relay.submit(wi["worker"], documents.worker_input(order, wi["branch"]),
                                  order["idempotencyKey"], order["budget"]["wallMs"],
                                  cwd=self.config.checkout(wi["repo"]))
