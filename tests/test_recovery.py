@@ -99,9 +99,12 @@ class ReplaceIssueTest(unittest.TestCase):
         starts again under a different one forces a conflict against the journal before any write,
         so one replacement never runs twice (test_recovery_barrier covers the replay)."""
         self.wait()
+        # the journal row is hand-written without the requestId key on purpose: if the tool left
+        # the request ID out of the inputs it journalls (the only piece of code that makes the
+        # request ID part of the identity), its fingerprint would equal this row's and a second
+        # call under a different ID would replay instead of conflicting — the test must fail there
         self.foreman.store.open_request(f"replace/{ORIGINAL}", "replace",
-                                        {"workItemId": ORIGINAL, "replacements": [A, B],
-                                         "requestId": "req"})
+                                        {"workItemId": ORIGINAL, "replacements": [A, B]})
         with self.assertRaisesRegex(ToolError, "conflicts with the replacement journal"):
             # the same operation that lost its request ID and came back as another
             self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar", "owner approves", "another-call")
