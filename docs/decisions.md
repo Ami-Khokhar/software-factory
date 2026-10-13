@@ -352,7 +352,9 @@ on two or more WorkItems of one repo. Only a person turns a candidate into a les
 Approved lessons live in `lessons.json` (`FACTORY_LESSONS_FILE`; `factory serve` uses
 `~/.config/factory-mcp/lessons.json`), next to `repos.json` and for the same reason (ADR-0014): a
 file a person can read and edit. `factory_retire_lesson` removes one. A model never approves a
-lesson, and a fingerprint that is not a candidate is refused. A WorkOrder carries at most 10 of the
+lesson, and a fingerprint that is not a candidate is refused. `factory lessons-path` prints the
+path the service resolves, env or the default next to repos.json, and verifies the file loads
+without any credential (Issue 204). A WorkOrder carries at most 10 of the
 repo's lessons, newest first, each cut to 300 characters, because the file is hand-editable
 (`lessons.MAX_PER_WORKORDER` and `lessons.MAX_TEXT`; the WorkOrder schema holds the same caps).
 `factory_status` measures each lesson from the stored WorkOrders: on how many WorkItems it rode

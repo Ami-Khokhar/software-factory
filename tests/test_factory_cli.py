@@ -648,6 +648,64 @@ class ReportTest(unittest.TestCase):
         self.assertIn("2 of 9 ended WorkItems needed no person (22%), and 1 rebuilt from GitHub", lines[1])
 
 
+class LessonsPathTest(unittest.TestCase):
+    """`factory lessons-path`: the lessons file the service resolves, verified, no credentials."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.config = Path(tmp.name) / "config"
+        self.config.mkdir()  # tests write lessons.json into it
+
+    def printed(self, **patches):
+        out = io.StringIO()
+        with mock.patch.object(cli, "CONFIG", self.config), \
+                mock.patch.object(cli, "SETTINGS", {}), \
+                mock.patch.object(cli, "read_env", lambda path: {}), \
+                mock.patch.object(cli, "run", side_effect=AssertionError("no command may run")), \
+                mock.patch.dict(os.environ, patches, clear=False), \
+                contextlib.redirect_stdout(out):
+            for key in ("FACTORY_LESSONS_FILE", "FACTORY_MCP_TOKEN"):
+                if key not in patches:  # no credential may be required and no stray path leak in
+                    os.environ.pop(key, None)
+            try:
+                cli.cmd_lessons_path([])
+            except SystemExit as stopped:
+                return out.getvalue(), str(stopped)
+        return out.getvalue(), None
+
+    def test_the_service_default_resolves_and_reports_its_lessons(self):
+        lesson = '{"repo": "o/r", "fingerprint": "f", "text": "t", "approved_by": "a",'
+        (self.config / "lessons.json").write_text(
+            '{"version": 1, "lessons": [' + lesson + ' "approved_at": "2026-01-01T00:00:00Z"}]}')
+        out, stopped = self.printed()
+        self.assertIsNone(stopped)
+        self.assertEqual(out.strip(), f"{self.config / 'lessons.json'} (1 lesson)")
+
+    def test_the_environment_overrides_the_default(self):
+        path = self.config / "elsewhere.json"
+        out, stopped = self.printed(FACTORY_LESSONS_FILE=str(path))
+        self.assertIsNone(stopped)
+        self.assertEqual(out.strip(), f"{path} (0 lessons)")
+
+    def test_no_lessons_file_yet_still_says_the_resolved_path(self):
+        out, stopped = self.printed()
+        self.assertEqual(out.strip(), f"{self.config / 'lessons.json'} (0 lessons)")
+
+    def test_a_broken_lessons_file_fails_loudly_and_names_it(self):
+        (self.config / "lessons.json").write_text("{oops")
+        out, stopped = self.printed()
+        self.assertEqual(out, "")  # it printed nothing before the loud failure
+        self.assertIn("not JSON", stopped)
+
+    def test_serve_resolves_the_same_path_the_command_prints(self):
+        """The service and the check must never disagree on where the lessons live."""
+        env = {}
+        with mock.patch.object(cli, "CONFIG", self.config):
+            env.setdefault("FACTORY_LESSONS_FILE", str(cli.lessons_path(env)))
+        self.assertEqual(env["FACTORY_LESSONS_FILE"], str(self.config / "lessons.json"))
+
+
 class StatusTest(unittest.TestCase):
     def status(self, **summary):
         """The lines `factory status` prints, given what factory_status returns."""
