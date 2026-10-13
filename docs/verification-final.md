@@ -6,6 +6,28 @@ verified**, and **live deployed** are three different facts (ADR-0068), and each
 which of them it is. Nothing here is a pass that was not run; a command that could not run is
 recorded with its exact error as an explicit incomplete blocker, never omitted.
 
+## Round-1 re-run (2026-10-13): the secret scan's flagged value replaced
+
+The secret scan sent the first attempt to a person: a constant in `tests/test_final_verification.py`
+(`KEYCHAIN_TOKEN`) was shaped like a real GitHub token. Investigated the fixture's intent (it is only a
+pass-through value the test must show never reaches a reported status; the token-shaped redaction
+coverage lives in `tests/test_diagnostics.py` and `tests/test_bootstrap_action.py` with their own
+synthetic values, both unchanged), then replaced the constant with clearly noncredential synthetic
+data and the scanner-safe replacement does not touch that coverage. The value's old text was never
+printed or copied anywhere. No scanner rule was evaded and no security test weakened; the full suite
+was re-run after the replacement and still covers every case on the same assertions:
+
+```bash
+$ python3 -m unittest discover -s tests -p 'test_*.py'
+Ran 565 tests in 54.019s
+OK
+```
+
+The blocked checks in the previous round stand exactly as they were: no agent-relay checkout and no
+Docker daemon in this sandbox, so the rehearsal (normal and lost-store), the real Docker worker
+regression, the bare-repo deployment and the live host checks remain explicit incomplete blockers
+recorded above.
+
 ## With what
 
 The checks ran against the checkout of `Ami-Khokhar/software-factory` on branch `factory/205` at the

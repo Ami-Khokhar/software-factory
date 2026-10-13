@@ -20,7 +20,10 @@ from factory_mcp.store import Store
 from tests.fakes import FakeGit, FakeGitHub, FakeRelay, result_line
 from tests.test_plan import FIRST, REPO, SECOND, plan
 
-KEYCHAIN_TOKEN = "ghp_0123456789abcdefghijklmnopqrstuvwxyz"  # shaped so the redaction regex catches it
+# Synthetic fixture data, not a credential: anything this test prints must never match the
+# Keychain value, and the token-shaped redaction coverage lives in test_diagnostics and
+# test_bootstrap_action, where it belongs.
+KEYCHAIN_TOKEN = "synthetic-keychain-fixture: not a credential: avoid copying it anywhere"
 ORIGINAL = SECOND  # 201: ready, waiting on nothing — the same fixture as the recovery suites
 A, B = 300, 301  # FakeGitHub numbers new issues from 200: start_plan gives 200, 201, 202
 
