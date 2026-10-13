@@ -62,7 +62,8 @@ class BarrierTest(unittest.TestCase):
         edited, the journal is at pushing, and the call raises."""
         self.github.fail_on = (REPO, 201)
         with self.assertRaisesRegex(RuntimeError, "dropped the connection"):
-            self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar")
+            self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar",
+                           "owner approves the replacement", "req")
         self.github.fail_on = None
 
     def tearDown(self):
@@ -96,7 +97,8 @@ class BarrierTest(unittest.TestCase):
         original. The next replace call cannot run a cancelled replacement again, but it does see
         the done phase, releases the barrier, and holds nothing back."""
         request = f"replace/{ORIGINAL}"
-        self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar")  # the run completed and released
+        self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar",
+                           "owner approves the replacement", "req")  # the run completed and released
         self.foreman.store.pause(request, "replace", {"original": [ORIGINAL],
                                                       "replacement": [f"o/r#{A}"],
                                                       "dependent": ["o/r#202"]})  # release never journalled
@@ -104,7 +106,8 @@ class BarrierTest(unittest.TestCase):
         self.restart()
         self.assertTrue(self.foreman.store.active_pauses(), "the restart lost the active barrier")
         with self.assertRaisesRegex(ToolError, "is cancelled"):
-            self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar")
+            self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar",
+                           "owner approves the replacement", "req")
         self.assertEqual(self.foreman.store.active_pauses(), [], "the barrier outlived its journal")
         self.assertEqual(self.foreman.store.all_workorders(), [])
 
@@ -132,7 +135,8 @@ class BarrierTest(unittest.TestCase):
     def test_a_resume_completes_releases_and_the_members_run_after_the_release(self):
         self.interrupted_replace()
         self.restart()
-        self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar")  # resume the journalled work
+        self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar",
+                           "owner approves the replacement", "req")  # resume the journalled work
         self.assertEqual((self.foreman.store.request(f"replace/{ORIGINAL}")["phase"],
                           self.foreman.store.active_pauses()), (REQUEST_PHASES[2], []))
         self.assertEqual(self.foreman.store.get(ORIGINAL)["state"], "cancelled")
@@ -196,12 +200,14 @@ class BarrierTest(unittest.TestCase):
         request = f"replace/{ORIGINAL}"
         dying = DyingForeman(self.foreman.store, self.github, self.foreman.config, self.foreman.relay)
         with self.assertRaisesRegex(RuntimeError, "died after the close"):
-            dying.replace_issue(ORIGINAL, [A, B], "amteshwar")
+            dying.replace_issue(ORIGINAL, [A, B], "amteshwar",
+                           "owner approves the replacement", "req")
         self.assertEqual((self.foreman.store.request(request)["phase"],
                           bool(self.foreman.store.active_pauses())), (REQUEST_PHASES[1], True))
         self.foreman.tick_one(ORIGINAL)  # a tick takes the close in: the original reconciles
         self.assertEqual(self.foreman.store.get(ORIGINAL)["state"], "cancelled")
-        self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar")  # the retry with the same inputs
+        self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar",
+                           "owner approves the replacement", "req")  # the retry with the same inputs
         self.assertEqual((self.foreman.store.request(request)["phase"],
                           self.foreman.store.active_pauses()), (REQUEST_PHASES[-1], []))
         self.assertTrue(any(h["action"] == "replace_abandoned"
@@ -219,7 +225,8 @@ class BarrierTest(unittest.TestCase):
         inputs records the takeover, advances the journal to done and releases the barrier."""
         self.interrupted_replace()
         self.foreman.resolve_human(ORIGINAL, "close", "taking the issue myself", "owner")
-        self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar")
+        self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar",
+                           "owner approves the replacement", "req")
         self.assertEqual((self.foreman.store.request(f"replace/{ORIGINAL}")["phase"],
                           self.foreman.store.active_pauses()), (REQUEST_PHASES[-1], []))
         # the release leaves the replacement dispatchable again: on its own facts now, not on the
@@ -235,9 +242,11 @@ class BarrierTest(unittest.TestCase):
         self.interrupted_replace()
         self.github.close_issue(REPO, A)  # the person closes the first replacement
         self.foreman.tick()  # the close is a fact the store takes in
-        self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar")  # the retry: takeover, done
+        self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar",
+                           "owner approves the replacement", "req")  # the retry: takeover, done
         self.github.reopen_issue(REPO, A)  # the replacement is ready again on GitHub
-        self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar")  # the same call again
+        self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar",
+                           "owner approves the replacement", "req")  # the same call again
         self.assertEqual(self.foreman.store.active_pauses(), [],
                          "a done journal recorded a barrier it never released")
         self.foreman.tick()
@@ -250,7 +259,8 @@ class BarrierTest(unittest.TestCase):
         self.interrupted_replace()
         self.github.close_issue(REPO, A)  # the person closes the first replacement
         self.foreman.tick()  # the close is a fact the store takes in
-        self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar")
+        self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar",
+                           "owner approves the replacement", "req")
         self.assertEqual((self.foreman.store.request(f"replace/{ORIGINAL}")["phase"],
                           self.foreman.store.active_pauses()), (REQUEST_PHASES[-1], []))
         self.foreman.tick()

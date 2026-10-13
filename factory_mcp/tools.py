@@ -205,7 +205,8 @@ def build(store, foreman, agent=False):
              "write", lambda args: {"workItem": foreman.set_dependencies(
                  args["id"], args["dependsOn"], args["by"], agent=agent)}),
         Tool("factory_replace_issue",
-             "Replace a WorkItem that is waiting on recovery (human_waiting or blocked) with ordered "
+             "The owner's replacement of a WorkItem that is waiting on recovery (human_waiting or "
+             "blocked) with ordered "
              "replacement issues of the same repo: the first inherits the original's "
              "upstream dependencies, each next one waits for the one before it, and every direct "
              "dependent of the original now waits for the last replacement, keeping its other "
@@ -221,7 +222,8 @@ def build(store, foreman, agent=False):
              "the original is cancelled and closed "
              "keeping what it tried, "
              "and the replacement is journalled so a retry resumes where it stopped.",
-             {"type": "object", "required": ["id", "replacements", "by"], "additionalProperties": False,
+             {"type": "object", "required": ["id", "replacements", "by", "note", "requestId"],
+              "additionalProperties": False,
               "properties": {"id": {"type": "string", "description": "owner/repo#issue"},
                              "replacements": {"type": "array", "minItems": 1, "maxItems": MAX_PLAN_ISSUES,
                                               "description": "issue numbers in the same repo, in the order they "
@@ -233,9 +235,23 @@ def build(store, foreman, agent=False):
                                                    "additionalProperties": False,
                                                    "properties": {"title": {"type": "string", "minLength": 1},
                                                                   "body": {"type": "string", "minLength": 1}}}]}},
-                             "by": {"type": "string", "minLength": 1, "description": "who asked"}}},
+                             "by": {"type": "string", "minLength": 1, "description": "who asked"},
+                             "note": {"type": "string", "minLength": 1, "description":
+                                      "the owner's approval: Day Desk quotes the owner's words in chat "
+                                      "approving this replacement, and the owner's own call says what "
+                                      "they approved"},
+                             "requestId": {"type": "string", "minLength": 1, "description":
+                                           "a stable ID for this replacement request: every repeat of "
+                                           "the same call, retries included, carries it, so the journal "
+                                           "replays; a different requestId for the same WorkItem "
+                                           "conflicts and refuses"},
+                             "ownerAsked": {"type": "boolean", "description":
+                                             "Day Desk only: the owner approved this replacement in chat "
+                                             "and the note quotes their words; the owner's own call runs "
+                                             "without it"}}},
              "write", lambda args: {"workItem": foreman.replace_issue(
-                 args["id"], args["replacements"], args["by"], agent=agent)}),
+                 args["id"], args["replacements"], args["by"], args["note"], args["requestId"],
+                 agent=agent, owner_asked=args.get("ownerAsked", False))}),
         Tool("factory_lessons",
              "Show what the factory learned about one repo: the blocking gate findings that "
              "recurred on two or more WorkItems (candidates), and the lessons the owner approved "

@@ -892,9 +892,17 @@ class Foreman:
         finally:
             self.store.release(workitem_id, self.holder)
 
-    def replace_issue(self, workitem_id, replacements, by, agent=False):
+    def replace_issue(self, workitem_id, replacements, by, note, request_id, *, agent=False,
+                      owner_asked=False):
         """Replace a WorkItem waiting on recovery with ordered replacement issues (ADR-0059). The
-        whole graph is planned and validated before anything is written (guard 8): the first
+        owner approves the replacement: Day Desk calls it only when the owner asked for it in chat
+        (`owner_asked`, ADR-0035 / ADR-0043), with the owner's approval words as the note; the owner's
+        own call carries its approval as the note and leaves ownerAsked unset. The caller passes a
+        stable request ID: the journal is keyed by the WorkItem, so the same request ID with the same
+        inputs replays where the run stopped, and a different request ID for the same original
+        conflicts and refuses before any write, so a lost or forked caller cannot run a replacement
+        again under a different key. The whole graph is planned and validated before anything is
+        written (guard 8): the first
         replacement inherits the original's upstream dependencies, the rest chain onto it, and each
         direct dependent of the original moves its edge to the last replacement, keeping its other
         dependencies. A replacement that had a worker pass, a dependent that had a worker pass, or a plan
@@ -907,8 +915,21 @@ class Foreman:
         its active barrier and returns; a partly run journal replays the remaining writes; a
         member a person took over meanwhile ends the run, and the barrier releases so the
         person's route stands."""
+        if owner_asked and not agent:
+            raise ToolError("ownerAsked is Day Desk's flag for a decision the owner asked for in chat; the "
+                            "owner's own call does not need it")
+        if agent and not owner_asked:
+            raise ToolError(f"replacing {workitem_id} is the owner's decision, because it cancels "
+                            "the owner's work: get the owner's words of approval in chat, quote them as "
+                            "the note, name the owner as by, and set ownerAsked true")
         if not isinstance(by, str) or not by.strip():
             raise ToolError("replacing an issue needs the name of the person who asked")
+        if not isinstance(note, str) or not note.strip():
+            raise ToolError("replacing an issue needs the owner's approval note")
+        if not isinstance(request_id, str) or not request_id.strip():
+            raise ToolError("replacing an issue needs a stable requestId: the same call repeats under "
+                            "it, so a repeat shares the replacement's journal and a different one for "
+                            "the same WorkItem refuses as a conflict")
         if (not isinstance(replacements, list) or not replacements or len(replacements) > MAX_PLAN_ISSUES
                 or any(isinstance(n, bool) or not isinstance(n, (int, dict))
                        or (isinstance(n, int) and n < 1)
@@ -931,18 +952,18 @@ class Foreman:
             wi = self.store.get(workitem_id)
             if wi is None:
                 raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
-            request_id = f"replace/{workitem_id}"
-            record = self.store.request(request_id)
+            journal_id = f"replace/{workitem_id}"
+            record = self.store.request(journal_id)
             active = {row["requestId"] for row in self.store.active_pauses()}
-            if record and record["phase"] == REQUEST_PHASES[-1] and request_id in active:
+            if record and record["phase"] == REQUEST_PHASES[-1] and journal_id in active:
                 # the run completed; only its release was killed. The journal says done, so the
                 # barrier gives way even though the WorkItem it names may now be refused (#235)
-                self.store.release_pause(request_id)
+                self.store.release_pause(journal_id)
             # A kill between the journal's advance to pushing and the release leaves the writes
             # partly done and the barrier held. A resume replays the remaining writes; a member a
             # person moved in the meantime is a takeover: the run ends without further writes, so
             # the barrier holds nothing the person's route now owns (ADR-0063).
-            resuming = bool(record) and record["phase"] in REQUEST_PHASES[:2] and request_id in active
+            resuming = bool(record) and record["phase"] in REQUEST_PHASES[:2] and journal_id in active
             takeover = None
             if resuming:
                 ours = (wi["state"] == "cancelled"
@@ -1014,33 +1035,38 @@ class Foreman:
             if cycle:
                 named = " depends on ".join(f"#{number}" for number in cycle)
                 raise ToolError(f"replacing #{mine} would make a cycle: {named}")
-            record = self.store.open_request(request_id, "replace",
-                                             {"workItemId": workitem_id, "replacements": replacements})
+            try:  # a different request ID for the same original conflicts with its journal (#203)
+                record = self.store.open_request(journal_id, "replace",
+                                                 {"workItemId": workitem_id, "replacements": replacements,
+                                                  "requestId": request_id})
+            except Conflict as exc:
+                raise ToolError(f"requestId {request_id!r} conflicts with the replacement journal for "
+                                f"{workitem_id}: {exc}") from None
             if resuming and (takeover is not None or ended is not None):
                 # a person's takeover closes the run: take the journal to done and release the
                 # barrier it holds, so the person's route is the one that runs (ADR-0063)
                 if record["phase"] == REQUEST_PHASES[0]:
-                    self.store.advance_request(request_id, REQUEST_PHASES[1])
-                self.store.advance_request(request_id, REQUEST_PHASES[-1])
+                    self.store.advance_request(journal_id, REQUEST_PHASES[1])
+                self.store.advance_request(journal_id, REQUEST_PHASES[-1])
                 self.store.log("replace_abandoned", {"replacements": replacements}, workitem_id)
-                self.store.release_pause(request_id)
+                self.store.release_pause(journal_id)
                 return self.store.get(workitem_id)
             # A planned replacement becomes a factory:proposed issue now, or the issue a lost
             # create response already opened is adopted by its marker. Creating touches only the
             # new issue, and a proposal is never factory:ready, so nothing can dispatch while the
             # barrier being recorded next is still absent.
-            numbers = self._resolve_replacements(repo, request_id, mine, graph, replacements)
+            numbers = self._resolve_replacements(repo, journal_id, mine, graph, replacements)
             plan = workitem.replacement_plan(graph, mine, numbers)
             barrier = {"original": [workitem_id],
                        "replacement": [workitem.workitem_id(repo, n) for n in numbers],
                        "dependent": [workitem.workitem_id(repo, n) for n in plan
                                      if n not in numbers]}
             active = [row["requestId"] for row in self.store.active_pauses()]
-            if request_id in active:
+            if journal_id in active:
                 # the run is resumed: it keeps the barrier its first attempt recorded, whose graph
                 # was read before any write and cannot be derived again after the edits
                 if record["phase"] == REQUEST_PHASES[-1]:  # done, but a kill before the release
-                    self.store.release_pause(request_id)
+                    self.store.release_pause(journal_id)
             elif record["reused"] and record["phase"] == REQUEST_PHASES[-1]:
                 # the journal says this run already ended (a takeover, or nothing left to run):
                 # return what it found without holding the graph again, or no retry could ever
@@ -1049,11 +1075,11 @@ class Foreman:
             else:
                 # recorded before any GitHub write, so no tick takes the ready-labelled graph
                 # members during the operation, on this process or after a restart (#233, #235)
-                self.store.pause(request_id, "replace", barrier)
+                self.store.pause(journal_id, "replace", barrier)
             if record["reused"] and record["phase"] == "done":
                 return self.store.get(workitem_id)  # the replacement already ran; do not run it again
             if record["phase"] == REQUEST_PHASES[0]:
-                self.store.advance_request(request_id, "pushing")
+                self.store.advance_request(journal_id, "pushing")
             # Every plan edge is written and then verified by exact readback (ADR-0065): a lost
             # edit response or drifted body cannot be trusted, so it raises while the barrier and
             # the pushing journal hold, and the same call replays. The write sets the whole
@@ -1085,14 +1111,16 @@ class Foreman:
             # record's continuation, not a wipe of its history
             new = self._write(wi, dict(wi, state="cancelled", terminalReason=f"replaced by {names}",
                                        blockedOn=None, waitingOn=None), "replaced",
-                              replacements=replacements, **({"agent": True} if agent else {}))
-            self.store.advance_request(request_id, "done")
-            self.store.release_pause(request_id)  # the operation completed: the graph runs again
+                              replacements=replacements, note=note, requestId=request_id,
+                              **({"agent": True} if agent else {}),
+                              **({"ownerAsked": True} if owner_asked else {}))
+            self.store.advance_request(journal_id, "done")
+            self.store.release_pause(journal_id)  # the operation completed: the graph runs again
             return new
         finally:
             self.store.release(workitem_id, self.holder)
 
-    def _resolve_replacements(self, repo, request_id, mine, graph, replacements):
+    def _resolve_replacements(self, repo, journal_id, mine, graph, replacements):
         """Every replacement as an issue number. A title-and-body item is a replacement the factory
         opens itself: a factory:proposed issue, never factory:ready. The first one waits where the
         original waited, each later one on the replacement before it, the same chain the plan
@@ -1103,10 +1131,10 @@ class Foreman:
                 numbers.append(entry)
                 continue
             deps = list(graph.get(mine) or ()) if len(numbers) == 0 else [numbers[-1]]
-            numbers.append(self._open_replacement(repo, request_id, position, entry, deps))
+            numbers.append(self._open_replacement(repo, journal_id, position, entry, deps))
         return numbers
 
-    def _open_replacement(self, repo, request_id, position, item, deps):
+    def _open_replacement(self, repo, journal_id, position, item, deps):
         """Open one planned replacement at `position` as a factory:proposed issue, or adopt the one
         already there. The issue body carries a durable identity marker naming this request and
         position. Before it creates, the call looks for the marker among the repo's
@@ -1115,10 +1143,10 @@ class Foreman:
         same journalled call, picks up the issue GitHub already holds instead of opening a
         duplicate. An issue the marker names whose words were changed after the fact also refuses,
         so a person's edit can never be silently overwritten."""
-        marker = f"<!-- factory replace {request_id} {position} -->"
+        marker = f"<!-- factory replace {journal_id} {position} -->"
         body = workitem.with_dependencies(item["body"], deps).rstrip() + "\n\n" + marker
         matches = [issue for issue in self.github.labelled_issues(repo, workitem.PROPOSED)
-                   if any(found == (request_id, str(position))
+                   if any(found == (journal_id, str(position))
                           for found in REPLACEMENT_MARKER.findall(issue.get("body") or ""))]
         if len(matches) > 1:
             raise ToolError(f"the marker this request writes appears on "

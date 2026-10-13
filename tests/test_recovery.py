@@ -57,7 +57,68 @@ class ReplaceIssueTest(unittest.TestCase):
                                     blockedOn=f"this issue depends on #199, which ended cancelled"))
 
     def replace(self, workitem_id=ORIGINAL, numbers=(A, B), **kw):
-        return self.foreman.replace_issue(workitem_id, list(numbers), "amteshwar", **kw)
+        return self.foreman.replace_issue(workitem_id, list(numbers), "amteshwar",
+                                          "you may replace it", f"req/{workitem_id}", **kw)
+
+    def test_replacing_needs_an_owner_note_and_a_stable_request_id(self):
+        self.wait()
+        with self.subTest("no note"):
+            with self.assertRaisesRegex(ToolError, "needs the owner's approval note"):
+                self.foreman.replace_issue(ORIGINAL, [A], "amteshwar", "  ", f"req/{ORIGINAL}")
+            with self.subTest("no requestId"):
+                with self.assertRaisesRegex(ToolError, "needs a stable requestId"):
+                    self.foreman.replace_issue(ORIGINAL, [A], "amteshwar", "ok", "")
+        self.assertEqual(self.github.writes, [])
+
+    def test_day_desk_may_replace_only_on_the_owners_approval(self):
+        """A replacement cancels the owner's work and opens the factory's own issues, so a driving
+        Day Desk call is refused: the owner decides, as ownerAsked says they asked in chat."""
+        self.wait()
+        with self.assertRaisesRegex(ToolError, "is the owner's decision"):
+            self.replace(agent=True)
+        self.assertEqual(self.github.writes, [])
+        with self.assertRaisesRegex(ToolError, "is the owner's decision"):
+            self.replace(agent=True, owner_asked=False)
+        self.wait()
+        wi = self.replace(agent=True, owner_asked=True)  # the owner asked in chat
+        self.assertEqual(wi["state"], "cancelled")
+        replaced = [h for h in self.foreman.store.history(ORIGINAL) if h["action"] == "replaced"]
+        self.assertEqual(replaced[0]["detail"].get("ownerAsked"), True)
+        self.assertEqual(replaced[0]["detail"].get("note"), "you may replace it")
+        self.assertEqual(replaced[0]["detail"].get("requestId"), f"req/{ORIGINAL}")
+
+    def test_ownerAsked_is_not_the_owners_own_flag(self):
+        self.wait()
+        with self.assertRaisesRegex(ToolError, "ownerAsked is Day Desk's flag"):
+            self.replace(owner_asked=True)
+        self.assertEqual(self.github.writes, [])
+
+    def test_a_different_requestId_for_the_same_original_conflicts(self):
+        """The journal is keyed by the WorkItem, so one replacement request carries one stable ID: a
+        repeat under the same ID replays where the run stopped, and a caller that lost its ID and
+        starts again under a different one forces a conflict against the journal before any write,
+        so one replacement never runs twice (test_recovery_barrier covers the replay)."""
+        self.wait()
+        # the journal row is hand-written without the requestId key on purpose: if the tool left
+        # the request ID out of the inputs it journalls (the only piece of code that makes the
+        # request ID part of the identity), its fingerprint would equal this row's and a second
+        # call under a different ID would replay instead of conflicting — the test must fail there
+        self.foreman.store.open_request(f"replace/{ORIGINAL}", "replace",
+                                        {"workItemId": ORIGINAL, "replacements": [A, B]})
+        with self.assertRaisesRegex(ToolError, "conflicts with the replacement journal"):
+            # the same operation that lost its request ID and came back as another
+            self.foreman.replace_issue(ORIGINAL, [A, B], "amteshwar", "owner approves", "another-call")
+        self.assertEqual(self.github.writes, [])
+
+    def test_the_tool_carries_note_requestId_and_ownerAsked(self):
+        built = tools.build(self.foreman.store, self.foreman)
+        schema = built["factory_replace_issue"].input_schema
+        self.assertIn("note", schema["required"])
+        self.assertIn("requestId", schema["required"])
+        self.assertNotIn("ownerAsked", schema["required"])
+        self.assertEqual(built["factory_replace_issue"].effect, "write")
+        agent = tools.build(self.foreman.store, self.foreman, agent=True)["factory_replace_issue"]
+        self.assertEqual(agent.input_schema["required"], schema["required"])
 
     def test_replacements_inherit_the_original_upstream_and_chain_in_order(self):
         self.wait()
@@ -207,7 +268,11 @@ class ReplaceIssueTest(unittest.TestCase):
             tool = built["factory_replace_issue"]
             self.assertEqual(tool.effect, "write")
             self.wait(original)
-            result = tool.fn({"id": original, "replacements": numbers, "by": "x"})
+            args = {"id": original, "replacements": numbers, "by": "x", "note": "go on then",
+                    "requestId": f"req/{original}"}
+            if agent:
+                args["ownerAsked"] = True
+            result = tool.fn(args)
             self.assertEqual(result["workItem"]["state"], "cancelled")
             self.assertEqual([h["detail"].get("agent") for h in self.foreman.store.history(original)
                               if h["action"] == "replaced"], [True] if agent else [None])
