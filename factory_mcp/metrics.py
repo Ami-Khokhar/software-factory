@@ -132,12 +132,17 @@ def weekly(workitems, history_of, candidates, effect, now):
     with its repo; `effect` is lesson_effect of the approved lessons."""
     until, since, before = (_stamp(now - WEEK * weeks) for weeks in (0, 1, 2))
     reasons = escalation_reasons(workitems, history_of, since, until)
+    allowances = sum(1 for wi in workitems for h in history_of(wi["id"])
+                     if h["action"] == "allowance_spent" and since < h["at"] <= until)
+    allowances_before = sum(1 for wi in workitems for h in history_of(wi["id"])
+                            if h["action"] == "allowance_spent" and before < h["at"] <= since)
     return {"since": since, "until": until,
             "autonomy": autonomy(ended_between(workitems, history_of, since, until), history_of),
             "autonomyWeekBefore": autonomy(ended_between(workitems, history_of, before, since),
                                            history_of),
             "escalated": sum(group["count"] for group in reasons),
             "topReasons": reasons[:TOP_REASONS],
+            "allowanceUses": allowances, "allowanceUsesWeekBefore": allowances_before,
             "newCandidates": [c for c in candidates if since < c["candidateSince"] <= until],
             "notWorking": [e for e in effect.values() if e["notWorking"]]}
 

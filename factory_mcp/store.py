@@ -55,6 +55,13 @@ CREATE TABLE IF NOT EXISTS pauses (
   released_at TEXT
 );
 CREATE INDEX IF NOT EXISTS pauses_workitem ON pauses (workitem_id, released_at);
+CREATE TABLE IF NOT EXISTS allowances (
+  plan_id TEXT PRIMARY KEY,
+  actions TEXT NOT NULL,
+  remaining INTEGER NOT NULL,
+  approved_by TEXT NOT NULL,
+  approved_at TEXT NOT NULL
+);
 """
 # Migration 1: WorkItem fields the contract no longer has (#27).
 REMOVED_FIELDS = ("parentGoalId", "baseSha", "provider", "sessionHandle", "sessionNative", "sessionUrl")
@@ -84,7 +91,13 @@ def _migrate_4(wi):
     return wi
 
 
-MIGRATIONS = {1: _migrate_1, 2: _migrate_2, 3: _migrate_3, 4: _migrate_4}
+# Migration 5: the plan recovery allowance (#239). It adds only a new table, so no stored
+# WorkItem changes; the version bump marks stores that have the `allowances` table.
+def _migrate_5(wi):
+    return wi
+
+
+MIGRATIONS = {1: _migrate_1, 2: _migrate_2, 3: _migrate_3, 4: _migrate_4, 5: _migrate_5}
 
 
 def canonical_inputs(inputs):
@@ -370,3 +383,66 @@ class Store:
                              "AND released_at IS NULL", (now(), request_id))
             self._db.execute("INSERT INTO audit (at, workitem_id, action, detail) VALUES (?, NULL, ?, ?)",
                              (now(), "pause_released", json.dumps({"requestId": request_id}, sort_keys=True)))
+
+    def approve_allowance(self, plan_id, actions, remaining, approved_by):
+        """Record one owner approval of a plan recovery allowance (#239). One approval per plan id:
+        another call for the same plan refuses, so an allowance is never quietly topped up."""
+        with self._lock:
+            try:
+                self._db.execute("INSERT INTO allowances VALUES (?, ?, ?, ?, ?)",
+                                 (plan_id, json.dumps(actions, sort_keys=True), remaining,
+                                  approved_by, now()))
+            except sqlite3.IntegrityError:
+                raise Conflict(f"a plan allowance for {plan_id!r} is already approved") from None
+
+    def allowance(self, plan_id):
+        """The approved plan allowance, or None."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT plan_id, actions, remaining, approved_by, approved_at FROM allowances "
+                "WHERE plan_id = ?", (plan_id,)).fetchone()
+        return self._allowance_row(row) if row else None
+
+    def allowances(self):
+        """Every approved plan allowance, oldest approval first."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT plan_id, actions, remaining, approved_by, approved_at FROM allowances "
+                "ORDER BY approved_at, plan_id").fetchall()
+        return [self._allowance_row(row) for row in rows]
+
+    @staticmethod
+    def _allowance_row(row):
+        return dict(zip(("planId", "actions", "remaining", "approvedBy", "approvedAt"),
+                        (row[0], json.loads(row[1]), row[2], row[3], row[4])))
+
+    def spend_allowance(self, plan_id, action, workitem_id=None, evidence=""):
+        """Count one recovery use against an approved plan allowance (#239), and audit it.
+
+        Read, check and write sit in one committed transaction, so two callers racing on the
+        same use cannot both spend it, and the audit line lands with the count. Raises Conflict
+        when no allowance is approved for the plan, when `action` is outside its scope, or when
+        the remaining allowance is gone or changed under this spend.
+        """
+        with self._lock, self._transaction():
+            row = self._db.execute("SELECT actions, remaining FROM allowances WHERE plan_id = ?",
+                                   (plan_id,)).fetchone()
+            if not row:
+                raise Conflict(f"no plan allowance for {plan_id!r} is approved; the owner approves "
+                               "one with factory_approve_plan_allowance")
+            actions, remaining = json.loads(row[0]), row[1]
+            if action not in actions:
+                raise Conflict(f"the plan allowance {plan_id!r} permits {actions}, not {action!r}")
+            if remaining < 1:
+                raise Conflict(f"the plan allowance {plan_id!r} is exhausted; the owner decides any "
+                               "further recovery, for example with factory_resolve_human")
+            decremented = self._db.execute(
+                "UPDATE allowances SET remaining = remaining - 1 "
+                "WHERE plan_id = ? AND remaining = ?", (plan_id, remaining))
+            if decremented.rowcount != 1:
+                raise Conflict(f"the plan allowance {plan_id!r} changed while this spend was written")
+            spent = {"planId": plan_id, "action": action, "remaining": remaining - 1}
+            self._db.execute("INSERT INTO audit (at, workitem_id, action, detail) VALUES (?, ?, ?, ?)",
+                             (now(), workitem_id, "allowance_spent",
+                              json.dumps(dict(spent, evidence=evidence), sort_keys=True)))
+        return spent

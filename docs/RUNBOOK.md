@@ -96,6 +96,26 @@ What the design does not protect against:
 - **An unprotected `main`.** Nothing in the factory pushes to `main`, but branch protection is the
   independent backstop (ADR-0008). Turn it on where your plan allows it.
 
+### Rollout: the plan recovery allowance (ADR-0069)
+
+By default nothing changes: with no plan allowance approved, Day Desk answers each escalation
+once and the owner decides everything else, as before. To let Day Desk recover a whole plan's
+waiting issues on its own judgment, approve one bounded allowance on your token:
+
+```bash
+# via the factory CLI's MCP tools, or the owner's Day Desk buttons: a write tool, once per plan id
+factory_approve_plan_allowance planId="plan/<plan>" actions=["retry","replace"] remaining=<n> by=you
+```
+
+That buys Day Desk at most `remaining` recovery uses: evidence-based retries of waiting issues,
+and replacements that name open issues already in the repo. Every use is counted and audited with
+its evidence; `factory_status` shows each plan's remaining allowance and the latest use. These
+still need you, whatever the allowance says: a HUMAN gate verdict, a protected path, access
+trouble, a confirmed environment fault not yet repaired, a replacement that opens new
+title-and-body issues, and an exhausted plan or per-item allowance. Make the first representative
+use explicit: pick one waiting WorkItem, ask Day Desk to recover it through the allowance, and
+read the audit entry and the remaining count before asking for more.
+
 ## Workers
 
 Any agent registered in agent-relay can be a factory worker. Each one runs `worker/runner.py`,
@@ -444,7 +464,9 @@ and that the `factory-update` job names: `/usr/bin/python3 -m pip install -r req
 Day Desk is one Hermes agent you talk to in Telegram (ADR-0013), and it drives the factory for
 you (ADR-0030). Through factory-mcp's tools it shows what needs you, plans and starts issues, and
 answers the escalations a worker can fix: it retries with a note or sends a PR back to the gate,
-once per WorkItem, and never closes one. It calls those tools with its own token,
+once per WorkItem, and never closes one. With an owner-approved plan allowance (ADR-0069) it may
+also retry on evidence and replace with open issues of the same repo, counted against the
+allowance and audited, without one approval per recovery — see Rollout below. It calls those tools with its own token,
 `FACTORY_AGENT_TOKEN`, for which factory-mcp lists only them. Setting up a repo and approving or
 retiring a lesson still go through your token, and Hermes asks you to approve each of those calls
 with buttons in Telegram; no answer in 15 minutes is a no. Its settings, skill and manner are the Hermes profile
