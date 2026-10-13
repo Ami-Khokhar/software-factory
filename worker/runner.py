@@ -304,9 +304,10 @@ def collect(sandbox, work, base, default, goal, limits):
     """The harness's work as one unified diff against `base`, computed in the sandbox. Uncommitted
     changes are committed first, so a harness that forgot to commit still hands its work over.
     Refuses the work when the whole pull request — every commit on the branch against the default
-    branch's merge base, so a fix is measured with the attempt it follows (ADR-0040) — is over `limits`:
-    that stands in for an expensive verify, and factory-mcp's own prepush check stays for a base that
-    advanced under the pass."""
+    branch's merge base, so a fix is measured with the attempt it follows (ADR-0040). Over the line
+    target warns: the small-PR line count stays guidance, not a wall (ADR-0069). Over the file count
+    refuses the work: that stands in for an expensive verify, and factory-mcp's own prepush check
+    stays for a base that advanced under the pass."""
     code, diff, err = sandbox.run(["sh", "-c", EXTRACT], 300, work,
                                   env={"FACTORY_BASE": base, "FACTORY_DEFAULT": default,
                                        "FACTORY_GOAL": goal})
@@ -322,11 +323,23 @@ def collect(sandbox, work, base, default, goal, limits):
     files, added, deleted = (int(n or 0) for n in (stat.groups() if stat else (None, None, None)))
     lines = added + deleted
     max_lines, max_files = limits["maxChangedLines"], limits["maxChangedFiles"]
-    if lines > max_lines or files > max_files:
+    # Line count is advisory (maxChangedLinesAdvisory, default true for WorkOrders without the
+    # field): a modest exceedance warns and the pass continues. Only the line count warns; the file
+    # count, the patch-byte ceiling and the protected paths stay binding (ADR-0069).
+    advisory = limits.get("maxChangedLinesAdvisory", True)
+    if lines > max_lines:
+        if not advisory:
+            raise WorkerError(
+                f"the proposed pull request is {lines} lines in {files} files; the WorkOrder allows "
+                f"{max_lines} lines and {max_files} files, which leaves {max_lines - lines} lines "
+                f"and {max_files - files} files")
+        print(f"factory advisory: the whole pull request is {lines} lines in {files} files, over the "
+              f"WorkOrder's {max_lines}-line target with {max_lines - lines} lines left; this is "
+              "advisory, not a rejection", file=sys.stderr, flush=True)
+    if files > max_files:
         raise WorkerError(
             f"the proposed pull request is {lines} lines in {files} files; the WorkOrder allows "
-            f"{max_lines} lines and {max_files} files, which leaves {max_lines - lines} lines "
-            f"and {max_files - files} files")
+            f"{max_files} files, which leaves {max_files - files} files")
     return diff if diff.endswith("\n") else diff + "\n"
 
 

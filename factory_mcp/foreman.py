@@ -703,8 +703,10 @@ class Foreman:
         return patches.apply(self.config.git_url.format(repo=wi["repo"]), self.config.github_token,
                              branch or wi["branch"], base, patch, f"{wi['goal']} (#{wi['issueNumber']})\n\n"
                              f"WorkOrder {order['id']}", force=order["kind"] != "fix" if force is None else force,
-                             protected=limits["protectedPaths"], limits=(self._default_branch(wi["repo"]),
-                             limits["maxChangedLines"], limits["maxChangedFiles"]))
+                             protected=limits["protectedPaths"],
+                             limits=(self._default_branch(wi["repo"]), limits["maxChangedLines"],
+                                     limits["maxChangedFiles"],
+                                     limits.get("maxChangedLinesAdvisory", True)))
 
     def check_pushed(self, wi, order, sha):
         """Guards on what GitHub holds after the push, never on what the worker says it did."""
@@ -717,8 +719,14 @@ class Foreman:
                   for name in (f["filename"], f.get("previous_filename")) if name
                   and patches.is_protected(name, limits["protectedPaths"])]
         lines = sum(f["additions"] + f["deletions"] for f in files)
-        if lines > limits["maxChangedLines"] or len(files) > limits["maxChangedFiles"]:
-            errors.append(f"{lines} lines in {len(files)} files exceeds the WorkOrder constraints")
+        if len(files) > limits["maxChangedFiles"]:
+            errors.append(f"{lines} lines in {len(files)} files exceeds the WorkOrder constraint of "
+                          f"{limits['maxChangedFiles']} files")
+        elif lines > limits["maxChangedLines"]:
+            # Advisory (ADR-0070): recorded, not failed. The file count, protected paths and the
+            # runner's patch-byte ceiling stay binding.
+            self.store.log("pr_size_advisory", {"lines": lines, "target": limits["maxChangedLines"],
+                                                "files": len(files)}, wi["id"])
         return errors, files
 
     def open_pr(self, wi, order, files, evidence, worker):

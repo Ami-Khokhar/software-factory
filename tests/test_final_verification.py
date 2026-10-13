@@ -113,9 +113,10 @@ class RecoveryLimitTest(unittest.TestCase):
 
 class ReplacementToReportTest(unittest.TestCase):
     """The recovery hand-off into the guards and the report: a replacement approved and dispatched
-    whose worker returns a patch over the PR limits fails twice, goes to a person naming the size,
-    and the completion report counts that escalation once. Merge authority and the 600-line/20-file
-    limits are never loosened on the way."""
+    whose worker returns a patch over the file-count limit fails twice, goes to a person naming the
+    size, and the completion report counts that escalation once. Merge authority, the protected
+    paths and the file/patch-byte bounds are never loosened on the way; the line count only warns
+    (ADR-0070)."""
     def setUp(self):
         self.github = CountingGitHub()
         self.relay = FakeRelay()
@@ -145,12 +146,12 @@ class ReplacementToReportTest(unittest.TestCase):
         return self.foreman.tick(self.workitem_id())["workItem"]
 
     def test_a_replacement_worker_over_the_limit_ends_reported_to_a_person_untouched_by_github(self):
-        wi = self.fail_with((("src/big.py", 591, 10),))  # 601 changed lines: over the 600 limit
+        wi = self.fail_with(tuple((f"src/big{n}.py", 0, 1) for n in range(21)))  # 21 files: over the limit
         self.assertEqual(wi["state"], "ready")
-        self.assertIn("601 lines in 1 files exceeds the WorkOrder constraints", wi["attempts"][0])
+        self.assertIn("21 files exceeds the WorkOrder constraint of 20 files", wi["attempts"][0])
         self.assertEqual(self.github.pulls, [])  # nothing was pushed that busts the limits
 
-        wi = self.fail_with((("src/big2.py", 595, 12),))
+        wi = self.fail_with(tuple((f"src/big2_{n}.py", 0, 1) for n in range(21)))
         self.assertEqual(wi["state"], "blocked")
         reasons = metrics.escalation_reasons([self.foreman.store.get(self.workitem_id())],
                                              self.foreman.store.history, "0000", "9999")

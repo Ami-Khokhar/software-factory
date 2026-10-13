@@ -127,6 +127,25 @@ class SchemaTest(unittest.TestCase):
         self.assertEqual(len(found), 3)
         for verdict in found:
             self.assertEqual([e.message for e in validator.iter_errors(verdict)], [])
+    def test_the_workorder_constraints_migrate_to_advisory_lines(self):
+        """ADR-0070's migration: a WorkOrder written before the advisory flag — constraints with no
+        maxChangedLinesAdvisory — still validates, and the consumers read it as advisory; the flag
+        set true or false validates too."""
+        validator = Draft202012Validator(schema("workorder"))
+        constraints = [{"maxChangedLines": 600, "maxChangedFiles": 20, "protectedPaths": [".github/"]},
+                       {"maxChangedLines": 600, "maxChangedLinesAdvisory": True, "maxChangedFiles": 20,
+                        "protectedPaths": [".github/"]},
+                       {"maxChangedLines": 600, "maxChangedLinesAdvisory": False, "maxChangedFiles": 20,
+                        "protectedPaths": [".github/"]}]
+        orders = [dict(ORDER, schemaVersion="factory.workorder/v1", workItemId="o/r#7", round=0,
+                       kind="implement", repo="o/r", baseSha="b0", headSha=None, goal="Fix",
+                       description="", acceptance=[{"claim": "it works", "doneWhen": "tests pass"}], constraints=c,
+                       findingsToAddress=[], lessons=[], requiredEvidence=["tests-pass"],
+                       budget={"maxPasses": 2, "wallMs": 1000}, idempotencyKey="k",
+                       createdAt="2026-10-13T00:00:00Z") for c in constraints]
+        for order in orders:
+            with self.subTest(constraints=order["constraints"]):
+                self.assertEqual([e.message for e in validator.iter_errors(order)], [])
 
 
 if __name__ == "__main__":

@@ -23,7 +23,8 @@ def workorder(wi, kind, attempt, config, base_sha=None, findings=(), lessons=())
             "round": wi.get("gateRound", 0), "kind": kind, "repo": wi["repo"], "baseSha": base_sha,
             "headSha": wi.get("headSha") if kind == "fix" else None, "goal": wi["goal"],
             "description": wi.get("description") or "", "acceptance": wi["acceptance"],
-            "constraints": {"maxChangedLines": 600, "maxChangedFiles": 20,
+            "constraints": {"maxChangedLines": 600, "maxChangedLinesAdvisory": True,
+                            "maxChangedFiles": 20,
                             "protectedPaths": list(config.protected_paths)},
             "findingsToAddress": list(findings),
             "lessons": [{"fingerprint": entry["fingerprint"], "text": entry["text"][:MAX_TEXT]}
@@ -47,8 +48,10 @@ def worker_input(order, branch):
         "- Commit your change locally. Do not push, do not open a pull request, and do not change git "
         "remotes or git configuration.",
         f"- Never change these paths: {', '.join(order['constraints']['protectedPaths'])}.",
-        f"- Stay within {order['constraints']['maxChangedLines']} changed lines and "
-        f"{order['constraints']['maxChangedFiles']} files. The whole pull request is measured, as "
+        f"- Keep the pull request at about {order['constraints']['maxChangedLines']} changed lines and "
+        f"within {order['constraints']['maxChangedFiles']} files. Going over the lines is advisory: "
+        "report the size and keep going; the file count binds. Small, split pull requests stay "
+        "preferred. The whole pull request is measured, as "
         "the diff from the merge base with the default branch to HEAD, including the commits "
         "already on the branch. Your copy has no origin remote; the default branch is "
         "source/HEAD, which the runner leaves there, so check the size before you finish with: "

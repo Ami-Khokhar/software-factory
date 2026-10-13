@@ -42,8 +42,9 @@ last steps, and what it needs from you.
 
 ### Writing issues the factory can finish
 
-- One issue is one PR: at most 600 changed lines and 20 files. Split larger work into issues that
-  each make sense alone, and aim for about half that size: a worker finishes a small issue in one
+- One issue is one PR: about 600 changed lines (advisory, ADR-0070: going over warns, it never
+  rejects on line count alone) and at most 20 files. Split larger work into issues that
+  each make sense alone, and aim for about half the size: a worker finishes a small issue in one
   pass, and an issue near the limit can run out of time.
 - Make each check readable from the result: a test that must pass, a command that must print
   something, a file that must contain something. "Works well" is not a check.
@@ -78,7 +79,7 @@ last steps, and what it needs from you.
 |---|---|---|
 | Worker (any relay agent: pi, Codex, OpenCode, ...) | Edit and commit in a throwaway container that holds a fresh copy of one repo and a copy of its harness's login files | Push, open PRs, read your files, or use your GitHub account: it has no GitHub credential, and its copy has no remote |
 | worker/runner.py | Run the repo's gate `verify` command from the base commit, in the same sandbox | Accept a patch whose tests fail |
-| factory-mcp | Push `factory/<issue>` and open the PR. It refuses a patch that touches a protected path (`.github/`, `AGENTS.md`) or takes the PR over the size limits before the push, then checks the pushed branch and the size limits again | Merge. There is no merge tool |
+| factory-mcp | Push `factory/<issue>` and open the PR. It refuses a patch that touches a protected path (`.github/`, `AGENTS.md`) or takes the PR over the file-count limit before the push (a lines exceedance warns instead, ADR-0070), then checks the pushed branch and the size again | Merge. There is no merge tool |
 | pr-gatekeeper | Review and merge, or ask for changes, or send the PR to a person (HUMAN) | Be bypassed by the factory: a HUMAN verdict waits for you |
 
 Limits: a WorkItem gets at most 4 worker passes (then `exhausted`); your `retry` gives it 4 more,
@@ -96,7 +97,7 @@ What the design does not protect against:
 - **An unprotected `main`.** Nothing in the factory pushes to `main`, but branch protection is the
   independent backstop (ADR-0008). Turn it on where your plan allows it.
 
-### Rollout: the plan recovery allowance (ADR-0069)
+### Rollout: the plan recovery allowance (ADR-0070)
 
 By default nothing changes: with no plan allowance approved, Day Desk answers each escalation
 once and the owner decides everything else, as before. To let Day Desk recover a whole plan's
@@ -464,7 +465,7 @@ and that the `factory-update` job names: `/usr/bin/python3 -m pip install -r req
 Day Desk is one Hermes agent you talk to in Telegram (ADR-0013), and it drives the factory for
 you (ADR-0030). Through factory-mcp's tools it shows what needs you, plans and starts issues, and
 answers the escalations a worker can fix: it retries with a note or sends a PR back to the gate,
-once per WorkItem, and never closes one. With an owner-approved plan allowance (ADR-0069) it may
+once per WorkItem, and never closes one. With an owner-approved plan allowance (ADR-0070) it may
 also retry on evidence and replace with open issues of the same repo, counted against the
 allowance and audited, without one approval per recovery — see Rollout below. It calls those tools with its own token,
 `FACTORY_AGENT_TOKEN`, for which factory-mcp lists only them. Setting up a repo and approving or

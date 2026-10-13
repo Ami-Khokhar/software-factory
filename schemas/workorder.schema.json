@@ -107,6 +107,11 @@
       "required": ["maxChangedLines", "maxChangedFiles", "protectedPaths"],
       "properties": {
         "maxChangedLines": { "type": "integer", "minimum": 1 },
+        "maxChangedLinesAdvisory": {
+          "type": "boolean",
+          "default": true,
+          "description": "A small pull request stays guidance, not a wall: when true (or absent, as it is in older WorkOrders, which read as advisory), the runner and factory-mcp report exceeding maxChangedLines as a size warning and push anyway. Setting false restores a hard line rejection. The file count and the patch-byte and protected-path bounds are independent and stay binding in both modes (ADR-0070)."
+        },
         "maxChangedFiles": { "type": "integer", "minimum": 1 },
         "protectedPaths": {
           "type": "array",

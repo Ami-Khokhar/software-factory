@@ -1554,8 +1554,6 @@ completion report names exactly which of merged, verified and deployed each stat
 live access stands as a blocker the owner clears. Merge authority, the protected paths and the
 PR size limits are unchanged by any of this.
 
----
-
 ## ADR-0069 — Plan-level recovery is one owner-approved, counted allowance
 
 **Context.** Day Desk answered each trivial escalation one owner reply at a time, and its only
@@ -1581,3 +1579,38 @@ code stops needing a false `ownerAsked` for each attempt. Approvals are visible 
 names the plan allowances and the latest use with its evidence), and spending beyond scope
 fails loudly with what to do next. Broader or unreviewed agent authority has not changed: the
 rollout stays owner-directed (ADR-0068), and the representative first use precedes any wider use.
+
+---
+
+## ADR-0070 — The 600-line target is advisory: a modest exceedance warns and never rejects on line count alone
+
+**Context.** The whole-pull-request size check (ADR-0040) rejected a branch at 600 changed lines:
+a good, coherent change of 601 lines failed the same way a runaway one did, and fixes on branches
+that a previous attempt already carried past the target were refused for size before the gate
+could judge their content. The owner asked for small, coherent pull requests to stay guidance —
+to permit a modest exceedance without rejection solely on line count — while every other bound
+keeps its force, and asked the counterpart pr-gatekeeper policy to coordinate, not to weaken the
+gate's authority.
+
+**Decision.** `maxChangedLines` becomes an advisory target everywhere the factory measures the
+whole pull request: the WorkOrder's constraints carry `maxChangedLinesAdvisory` (default true;
+absent, as in every WorkOrder written before this ADR, reads as advisory — no stored WorkItem
+migrates; a WorkOrder may set it false to restore the old hard bound). In the three producers —
+`worker/runner.py` `collect` (before the verify), `Foreman.check_pushed` (what GitHub holds) and
+`patches.apply` (the push's own check, for a base that advanced) — a lines exceedance prints a
+`factory advisory:` warning naming the actual size, the target and what remains, and the pass
+continues; the Foreman records the exceedance in the audit log as `pr_size_advisory` instead of
+failing the attempt. The file count, the worker's patch-byte ceiling (`MAX_PATCH_BYTES`, the
+distinct resource ceiling: a patch over its bytes is a transferability limit, not a review
+standard, and it binds) and the protected paths are independent and unchanged. pr-gatekeeper's
+own repo policy is tracked as a separate change against that repository; this repo's `.github/`
+gate configuration and the factory standard's statement to customer repos are not changed here.
+Small, split pull requests stay preferred in the issue-writing guidance and the worker's rules
+text.
+
+**Consequence.** A whole PR of 601 or 610 lines opens, its size named, and the gate judges the
+content; nothing reads "600" as a rejection anymore. Whole-pull-request measurement — the
+diff from the default branch's merge base, a fix counted with the attempt it follows (ADR-0040) —
+is unchanged. The guard's tests move to the file count and to an explicit `false` flag for the
+old refusal, so the hard path keeps coverage. Repeated careless exceedance is left to review and
+the owner, not to an automatic rejection.

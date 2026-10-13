@@ -4,6 +4,7 @@ import base64
 import os
 import re
 import subprocess
+import sys
 import tempfile
 
 SHORTSTAT = re.compile(r"(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?")
@@ -191,9 +192,12 @@ def update_bootstrap(url, token, branch, head_sha, files, message):
 def apply(url, token, branch, base_sha, patch, message, force, protected=(), limits=None):
     """Clone, apply the patch on base_sha, commit, push to `branch`. Returns the new commit sha.
     A patch that touches a protected path is refused before the push: a pushed workflow file would
-    already run (`on: push`) with the repo's secrets, whatever checks come after. So is one that takes
-    the branch over `limits`, (default branch, lines, files): a push to an open PR stays on it, and
-    the next fix builds on it (ADR-0040)."""
+    already run (`on: push`) with the repo's secrets, whatever checks come after. `limits` is
+    (default branch, lines, files, advisory): a push that takes the branch over the file count is
+    refused, and over the line count refused too unless `advisory` — the 4th element; absent, the
+    old hard bound stands — in which case the size is reported as a warning and the push proceeds
+    (ADR-0070). A push to an
+    open PR stays on it, and the next fix builds on it (ADR-0040)."""
     env = _env(token)
     with tempfile.TemporaryDirectory() as tmp:
         _git(["clone", "-q", "--no-checkout", url, "repo"], tmp, env)
@@ -218,8 +222,17 @@ def apply(url, token, branch, base_sha, patch, message, force, protected=(), lim
             raise PatchError(f"changes protected path {', '.join(refused)}")
         if limits:
             lines, files = _size(work, env, f"origin/{limits[0]}")
-            if lines > limits[1] or files > limits[2]:
-                raise PatchError(f"{lines} lines in {files} files exceeds the WorkOrder constraints")
+            advisory = limits[3] if len(limits) > 3 else False  # a caller without the flag keeps hard
+            if files > limits[2]:
+                raise PatchError(f"{lines} lines in {files} files exceeds the WorkOrder constraint of "
+                                 f"{limits[2]} files")
+            if lines > limits[1]:
+                if not advisory:
+                    raise PatchError(f"{lines} lines in {files} files exceeds the WorkOrder constraint "
+                                     f"of {limits[1]} lines")
+                print(f"factory advisory: the whole pull request is {lines} lines in {files} files, "
+                      f"over the WorkOrder's {limits[1]}-line target with {limits[1] - lines} lines "
+                      "left; this is advisory, not a rejection", file=sys.stderr, flush=True)
         _git(["push", "-q", *(["--force"] if force else []), "origin", f"HEAD:refs/heads/{branch}"], work, env)
         return _git(["rev-parse", "HEAD"], work, env)
 
