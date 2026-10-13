@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 
 from . import docker, lessons, metrics, repos
-from .foreman import MAX_PLAN_ISSUES, Foreman, agent_resolved
+from .foreman import MAX_ALLOWANCE, MAX_PLAN_ISSUES, RECOVERY_ACTIONS, Foreman, agent_resolved
 from .mcp import Tool, ToolError
 
 # What Day Desk may call when it drives the factory with FACTORY_AGENT_TOKEN (ADR-0030). Setting up
@@ -10,8 +10,20 @@ from .mcp import Tool, ToolError
 AGENT_TOOLS = frozenset({"factory_status", "factory_repo_check", "factory_lessons", "factory_report",
                          "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
                          "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
+                         "factory_use_allowance",
                          "factory_docker_status", "factory_docker_control"})
 WAITING = ("human_waiting", "blocked")
+
+
+def last_allowance_use(history):
+    """The WorkItem's latest plan-allowance spend from the audit: who authorized it (the approval is
+    a store fact), what evidence the decision carried and what it cost, with no secret data."""
+    spends = [h for h in history if h["action"] == "allowance_spent"]
+    if not spends:
+        return None
+    at, detail = spends[-1]["at"], spends[-1]["detail"]
+    return {"at": at, "planId": detail.get("planId"), "action": detail.get("action"),
+            "evidence": detail.get("evidence"), "remaining": detail.get("remaining")}
 
 
 def build(store, foreman, agent=False):
@@ -29,7 +41,9 @@ def build(store, foreman, agent=False):
             workitems = store.all()
             summary = {"workItems": [summary_of(wi) for wi in workitems],
                        "autonomy": metrics.autonomy(workitems, store.history),
-                "repos": sorted(foreman.config.repos)}
+                       "repos": sorted(foreman.config.repos),
+                       "planAllowances": store.allowances()  # identity, scope and remaining, no secrets
+                       }
             if foreman.config.lessons_file:
                 try:
                     summary["lessonEffect"] = metrics.lesson_effect(
@@ -42,7 +56,8 @@ def build(store, foreman, agent=False):
             raise ToolError(f"No WorkItem {workitem_id}")
         history = store.history(workitem_id)
         return {"workItem": wi, "escalation": metrics.escalation(wi, history),
-                "passes": len(store.workorders(workitem_id)), "history": history}
+                "passes": len(store.workorders(workitem_id)), "history": history,
+                "allowanceUse": last_allowance_use(history)}
 
     def repo_check(args):
         repo = args["repo"]
@@ -248,10 +263,48 @@ def build(store, foreman, agent=False):
                              "ownerAsked": {"type": "boolean", "description":
                                              "Day Desk only: the owner approved this replacement in chat "
                                              "and the note quotes their words; the owner's own call runs "
-                                             "without it"}}},
+                                             "without it"},
+                             "allowancePlanId": {"type": "string", "minLength": 1, "description":
+                                                 "Day Desk only: replace inside the owner-approved plan "
+                                                 "allowance (ADR-0069), spending one use; the scope is "
+                                                 "open issues already in the repo"}}},
              "write", lambda args: {"workItem": foreman.replace_issue(
                  args["id"], args["replacements"], args["by"], args["note"], args["requestId"],
-                 agent=agent, owner_asked=args.get("ownerAsked", False))}),
+                 agent=agent, owner_asked=args.get("ownerAsked", False),
+                 allowance_plan_id=args.get("allowancePlanId"))}),
+        Tool("factory_approve_plan_allowance",
+             "The owner's one approval of bounded recovery for a plan (ADR-0069): Day Desk may then "
+             "spend up to `remaining` uses on the recovery actions named, without the owner answering "
+             "each one. One approval per plan id; nothing unlimited. Safety stops (a HUMAN verdict, "
+             "protected paths, access) and confirmed environment faults still need a person, and the "
+             "per-item pass budget stays as it is.",
+             {"type": "object", "required": ["planId", "actions", "remaining", "by"],
+              "additionalProperties": False,
+              "properties": {"planId": {"type": "string", "minLength": 1,
+                                        "description": "the plan this allowance is bound to"},
+                             "actions": {"type": "array", "minItems": 1, "uniqueItems": True,
+                                         "items": {"enum": list(RECOVERY_ACTIONS)}},
+                             "remaining": {"type": "integer", "minimum": 1, "maximum": MAX_ALLOWANCE},
+                             "by": {"type": "string", "minLength": 1, "description": "who approved"}}},
+             "write", lambda args: foreman.approve_plan_allowance(
+                 args["planId"], args["actions"], args["remaining"], args["by"])),
+        Tool("factory_use_allowance",
+             "Day Desk's recovery decision inside the owner-approved plan allowance (ADR-0069): retry "
+             "a waiting WorkItem on the decision evidence, without ownerAsked and without spending "
+             "Day Desk's one own answer. Refused when the escalation is a safety stop, when a "
+             "confirmed environment fault is not repaired, when the action is outside the "
+             "allowance's scope, or when the allowance is exhausted: then the owner decides.",
+             {"type": "object", "required": ["id", "planId", "action", "note", "by"],
+              "additionalProperties": False,
+              "properties": {"id": {"type": "string"},
+                             "planId": {"type": "string", "minLength": 1},
+                             "action": {"enum": list(RECOVERY_ACTIONS)},
+                             "note": {"type": "string", "minLength": 1, "description":
+                                      "the decision's evidence: what the attempt showed and why this "
+                                      "recovery is sound; it rides in the audit, sanitized"},
+                             "by": {"type": "string", "minLength": 1}}},
+             "write", lambda args: {"workItem": foreman.use_allowance(
+                 args["id"], args["planId"], args["action"], args["note"], args["by"])}),
         Tool("factory_lessons",
              "Show what the factory learned about one repo: the blocking gate findings that "
              "recurred on two or more WorkItems (candidates), and the lessons the owner approved "

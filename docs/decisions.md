@@ -1553,3 +1553,31 @@ explicit incomplete blocker, never omitted.
 completion report names exactly which of merged, verified and deployed each state is, and missing
 live access stands as a blocker the owner clears. Merge authority, the protected paths and the
 PR size limits are unchanged by any of this.
+
+---
+
+## ADR-0069 — Plan-level recovery is one owner-approved, counted allowance
+
+**Context.** Day Desk answered each trivial escalation one owner reply at a time, and its only
+route around that was setting `ownerAsked` per attempt, which claims words the owner never said.
+Recovery is bounded today, but every use still costs the owner a decision.
+
+**Decision.** The owner approves, once per plan id and durably in the store, a recovery
+allowance: which recovery actions Day Desk may take (`retry`, `replace`), and how many uses it
+buys (at most `MAX_ALLOWANCE`); nothing unlimited is approved. Within it, Day Desk retries a
+waiting WorkItem on the decision evidence (`factory_use_allowance`) and may replace with open
+issues the repo already has (`factory_replace_issue` with `allowancePlanId`), without setting
+`ownerAsked`. Every use is one committed count against the allowance with the sanitized evidence
+in the audit; a replay of a journalled request never pays a second use. The safety stops stay
+with a person whatever the allowance says: a HUMAN verdict, a protected path and access trouble
+refuse an allowance decision, as does a confirmed environment fault until a person answers it.
+An exhausted allowance, or an exhausted per-item budget, sends the WorkItem back to the owner;
+the per-item pass budget stays as it is, so an allowance retry buys no fresh budget. A
+replacement that opens title-and-body issues is new scope: the owner decides it. With no
+allowance approved, everything behaves exactly as before.
+
+**Consequence.** The owner approves one bounded policy instead of repeating themselves, and the
+code stops needing a false `ownerAsked` for each attempt. Approvals are visible (`factory_status`
+names the plan allowances and the latest use with its evidence), and spending beyond scope
+fails loudly with what to do next. Broader or unreviewed agent authority has not changed: the
+rollout stays owner-directed (ADR-0068), and the representative first use precedes any wider use.

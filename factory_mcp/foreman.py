@@ -20,6 +20,14 @@ WORKING = ("dispatching", "implementing")
 BOOTSTRAP_PREFIX = "factory-bootstrap/"
 MAX_PLAN_ISSUES = 10  # one approval covers this many issues at most (ADR-0024)
 REGATE_MARKER = re.compile(r"<!-- factory regate (\d+) -->")
+# The plan recovery allowance (#239): what one owner approval covers, and how far it reaches.
+RECOVERY_ACTIONS = ("retry", "replace")
+MAX_ALLOWANCE = 20
+# Access escalations must reach a person here, so these name what the factory's own access
+# troubles emit, not a phrase nothing writes (round 1 finding, #239): the remote-verify 403 points
+# at FACTORY_GITHUB_TOKEN and docs, and a denied git push says "Permission to ... denied".
+SAFETY_STOPS = ("pr-gatekeeper decided human", "protected path", "access denied",
+                "resource not accessible", "permission to", "may read actions")
 # the identity marker a replacement the factory opens carries: this request, at this position
 REPLACEMENT_MARKER = re.compile(r"<!-- factory replace (\S+) (\d+) -->")
 REMOTE_VERIFY_WORKFLOW = ".github/workflows/factory-verify.yml"  # the workflow's name there is `factory-verify`
@@ -808,6 +816,96 @@ class Foreman:
                               REGATE_MARKER.sub(marker, body) if seen else f"{body.rstrip()}\n\n{marker}\n")
         return True
 
+    def approve_plan_allowance(self, plan_id, actions, remaining, by):
+        """The owner's one approval of bounded plan-level recovery (ADR-0069): within the plan's
+        scope, Day Desk may spend the allowance on evidence-based retries and on replacements that
+        name open issues of the same repo, up to `remaining` uses, without the owner answering each
+        one and without falsely setting ownerAsked. The approval is durable in the store and one per
+        plan id: a second approval of the same plan refuses, and
+        nothing unlimited is approved. Safety stops and confirmed environment faults stay with a
+        person whatever the allowance says.
+        """
+        if not isinstance(by, str) or not by.strip() or not isinstance(plan_id, str) or not plan_id.strip():
+            raise ToolError("approving a plan allowance needs its plan identity and the name of the "
+                            "person who approved it")
+        if (not isinstance(actions, list) or not all(isinstance(a, str) for a in actions)
+                or not actions or len(set(actions)) != len(actions)
+                or any(a not in RECOVERY_ACTIONS for a in actions)):
+            raise ToolError(f"actions is a non-empty list drawn from {RECOVERY_ACTIONS}, once each")
+        if isinstance(remaining, bool) or not isinstance(remaining, int) or not 1 <= remaining <= MAX_ALLOWANCE:
+            raise ToolError(f"remaining is 1 to {MAX_ALLOWANCE} recovery uses; nothing unlimited "
+                            "is approved")
+        plan_id = plan_id.strip()
+        try:
+            self.store.approve_allowance(plan_id, actions, remaining, by)
+        except Conflict as exc:
+            raise ToolError(str(exc)) from None
+        self.store.log("allowance_approved", {"planId": plan_id, "actions": actions,
+                                              "remaining": remaining, "by": by})
+        return {"planId": plan_id, "actions": actions, "remaining": remaining}
+
+    def use_allowance(self, workitem_id, plan_id, action, note, by):
+        """Day Desk's recovery decision inside an owner-approved plan allowance (ADR-0069): a retry
+        on the decision evidence, without ownerAsked and without spending Day Desk's one own answer.
+        The per-item pass budget stays as it is: an allowance retry buys no fresh budget, and when
+        the allowance itself is exhausted the WorkItem goes back to the owner. A replacement is a
+        different tool: factory_replace_issue carries the allowance's planId.
+        """
+        if not all(isinstance(value, str) and value.strip()
+                   for value in (workitem_id, plan_id, action, note, by)):
+            raise ToolError("using an allowance needs the WorkItem, the plan id, the action, the "
+                            "decision evidence and who decided")
+        if not self.store.acquire(workitem_id, self.holder):
+            raise ToolError(f"{workitem_id} is being ticked; try again")
+        try:
+            wi = self.store.get(workitem_id)
+            if wi is None or wi["state"] not in ("human_waiting", "blocked"):
+                raise ToolError(f"{workitem_id} is not waiting on a person")
+            stop = self._safety_stop(wi)
+            if stop:
+                raise ToolError(f"{workitem_id}'s escalation falls under a safety stop ({stop}); the "
+                                "owner decides that: factory retry|regate|close " + workitem_id)
+            cause = self._env_paused(wi)
+            if cause:
+                raise ToolError(f"{workitem_id}'s environment failed ({cause}); the fault is confirmed "
+                                "and not repaired, so no recovery runs: ask the owner to repair it, "
+                                "then answer with factory_resolve_human")
+            if action == "replace":
+                raise ToolError("an allowance replacement runs through factory_replace_issue, with "
+                                "this planId as allowancePlanId")
+            try:
+                spent = self.store.spend_allowance(plan_id, action, workitem_id=workitem_id,
+                                                   evidence=diagnostics.sanitize(note))
+            except Conflict as exc:
+                raise ToolError(str(exc)) from None
+            new = dict(wi, state="changes_requested" if wi.get("prNumber") else "ready",
+                       blockedOn=None, attempts=[], terminalReason=None)
+            return self._write(wi, new, "allowance_retry", planId=plan_id, evidence=note, by=by,
+                               remaining=spent["remaining"])
+        finally:
+            self.store.release(workitem_id, self.holder)
+
+    def _safety_stop(self, wi):
+        """The safety stop this WorkItem's escalation names (ADR-0007's risk classes and the guarded
+        push), or None: a HUMAN verdict, a protected path or an access trouble needs a person,
+        whatever an allowance says (#239). The phrases name what a HUMAN verdict, a refused
+        protected path and the factory's real access troubles (a remote-verify 403, a denied git
+        push) emit; the escalation and the attempts' text is data about this WorkItem's own facts,
+        not untrusted instruction."""
+        text = " ".join([wi.get("blockedOn") or "", *(wi.get("attempts") or [])]).lower()
+        return next((stop for stop in SAFETY_STOPS if stop in text), None)
+
+    def _env_paused(self, wi):
+        """The confirmed environment fault the WorkItem is still paused on, or None (#239, ADR-0051):
+        the last attempt that failed named the environment and no human_resolved has followed it."""
+        for h in reversed(self.store.history(wi["id"])):
+            if h["action"] == "human_resolved":
+                return None
+            if (h["action"] == "attempt_failed"
+                    and diagnostics.environment_fault(h["detail"].get("cause"))):
+                return h["detail"].get("cause")
+        return None
+
     def propose_issue(self, repo, title, body):
         """Planner: open an issue labelled factory:proposed. A person adds factory:ready."""
         repo = self._enabled(repo, "factory_propose_issue")
@@ -893,7 +991,7 @@ class Foreman:
             self.store.release(workitem_id, self.holder)
 
     def replace_issue(self, workitem_id, replacements, by, note, request_id, *, agent=False,
-                      owner_asked=False):
+                      owner_asked=False, allowance_plan_id=None):
         """Replace a WorkItem waiting on recovery with ordered replacement issues (ADR-0059). The
         owner approves the replacement: Day Desk calls it only when the owner asked for it in chat
         (`owner_asked`, ADR-0035 / ADR-0043), with the owner's approval words as the note; the owner's
@@ -918,10 +1016,18 @@ class Foreman:
         if owner_asked and not agent:
             raise ToolError("ownerAsked is Day Desk's flag for a decision the owner asked for in chat; the "
                             "owner's own call does not need it")
-        if agent and not owner_asked:
+        if agent and not owner_asked and not allowance_plan_id:
             raise ToolError(f"replacing {workitem_id} is the owner's decision, because it cancels "
                             "the owner's work: get the owner's words of approval in chat, quote them as "
-                            "the note, name the owner as by, and set ownerAsked true")
+                            "the note, name the owner as by, and set ownerAsked true; or run it inside "
+                            "an owner-approved plan allowance with allowancePlanId")
+        if not agent and allowance_plan_id:
+            raise ToolError("allowancePlanId is Day Desk's allowance-backed replacement (ADR-0069); "
+                            "the owner's own call carries its approval as the note")
+        if allowance_plan_id and any(isinstance(entry, dict) for entry in replacements or []):
+            raise ToolError("an allowance replacement may only name open issues the repo already "
+                            "has; a planned title-and-body item changes the material scope, so the "
+                            "owner approves that with ownerAsked instead")
         if not isinstance(by, str) or not by.strip():
             raise ToolError("replacing an issue needs the name of the person who asked")
         if not isinstance(note, str) or not note.strip():
@@ -1035,6 +1141,14 @@ class Foreman:
             if cycle:
                 named = " depends on ".join(f"#{number}" for number in cycle)
                 raise ToolError(f"replacing #{mine} would make a cycle: {named}")
+            if allowance_plan_id and record is None:
+                # the first run spends one use; a journalled replay resumes it without a new spend
+                # (ADR-0069), so an interrupted replacement is never charged twice
+                try:
+                    spent = self.store.spend_allowance(allowance_plan_id, "replace",
+                                                       workitem_id=workitem_id)
+                except Conflict as exc:
+                    raise ToolError(str(exc)) from None
             try:  # a different request ID for the same original conflicts with its journal (#203)
                 record = self.store.open_request(journal_id, "replace",
                                                  {"workItemId": workitem_id, "replacements": replacements,
@@ -1113,7 +1227,8 @@ class Foreman:
                                        blockedOn=None, waitingOn=None), "replaced",
                               replacements=replacements, note=note, requestId=request_id,
                               **({"agent": True} if agent else {}),
-                              **({"ownerAsked": True} if owner_asked else {}))
+                              **({"ownerAsked": True} if owner_asked else {}),
+                              **({"allowance": allowance_plan_id} if allowance_plan_id else {}))
             self.store.advance_request(journal_id, "done")
             self.store.release_pause(journal_id)  # the operation completed: the graph runs again
             return new
