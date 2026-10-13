@@ -1526,3 +1526,30 @@ resumes and a lost-ID caller stops with a refusal instead of racing its own jour
 the code for the agent path and the store's fingerprint for the replay path. Verification that
 the owner really said the words stays a claim, as in ADR-0030; Day Desk quotes them as the note,
 and the audit row holds the note and the ID.
+
+## ADR-0068 — Merged is not complete: a feature ends when its agreed runtime check passes on the deployed feature
+
+**Context.** A multi-issue feature ends when its last implementation issue merges, but nothing in
+the plan then proves the feature works end to end: the owner specification's API, browser, platform,
+failure and responsive checks belong in the issues' acceptance and the repo's verify, and the
+integrated check (gate, deployment, real workers, live interfaces) was until now left to chance. An
+owner was told a feature was complete when only implementation had merged. Deployment, hosting and
+install were also left implicit, and a simulator was presented as the real adapter.
+
+**Decision.** A plan for a feature ends with a runtime-verification issue that runs the agreed
+integrated check — gate, host deployment, real Docker worker, relay rehearsal, live discovery and
+audit comparison — after the implementation issues merge. The factory and Day Desk report three
+states and never blur them: implementation merged, runtime verified, live deployed. Completion is
+merge-observed plus the integrated check's recorded output: until it passes, the report says the
+feature is not complete. Deployment, hosting and install steps are explicit plan work; a preview
+address is verified immediately before it is shared; a simulator is never reported as the real
+adapter. Rollout lands one change at a time — deployed consumers before worker producers
+(ADR-0052's rule) — and the first live run is one owner-approved representative issue; broader
+rollout follows only after that issue closes with the live discovery and audit confirmed by
+reading the host, not inferred from mocks. A host check a worker cannot reach is recorded as an
+explicit incomplete blocker, never omitted.
+
+**Consequence.** Nothing reports a whole feature complete on the strength of a unit suite. The
+completion report names exactly which of merged, verified and deployed each state is, and missing
+live access stands as a blocker the owner clears. Merge authority, the protected paths and the
+PR size limits are unchanged by any of this.

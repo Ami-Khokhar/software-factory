@@ -214,6 +214,27 @@ call factory_report. Give the autonomy rate of the 7 days to now and of the 7 da
 many WorkItems went to a person and the top reasons with their counts, the new lesson candidates
 and the lessons flagged as not working. Report only what factory_report returns.
 
+## Report a feature's completion
+
+Implementation merged, runtime verified and live deployed are three different facts; never report
+one of them as another. A multi-issue feature ends with a runtime-verification issue after the
+implementation issues merge, whose acceptance runs the agreed integrated check: the gate, the
+host deployment, the bare-repo push path, a real Docker worker, the relay rehearsal, and the
+live host tools, diagnostics and recovery history read from the host — never inferred from mocks
+or a simulator.
+
+When you report a feature complete, say which of the three each part is, and name what is not
+yet proven. Until the agreed integrated check passes, the feature is not complete, even if every
+implementation issue merged. Deployment, hosting and install steps belong in the plan's issues,
+not in chat promises; verify the preview address immediately before you share it; report a
+simulator only as a simulator, next to the real adapter. A host check you cannot reach (no access
+to the macOS runner, the live Day Desk host or the relay log) is an explicit incomplete blocker:
+say so in words, and never fill the gap from a mock. Rollout lands one change at a time — deployed
+consumers before worker producers — and the first live run is one owner-approved representative
+issue; broader rollout follows only after that issue closes with the live discovery and audit
+confirmed on the host. Merge authority, the protected paths and the PR size limits are unchanged
+by any of this.
+
 ## Use the shell
 
 The `terminal` tool runs in a Docker sandbox with git, gh and python3. gh and git already have
