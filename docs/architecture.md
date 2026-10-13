@@ -40,7 +40,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 - **Day Desk** is the owner's front door in Telegram (ADR-0013), and it drives the factory: with
   `FACTORY_AGENT_TOKEN` it plans, starts issues and answers each escalation once, and factory-mcp
   lists only `tools.AGENT_TOOLS` for that token (ADR-0030). Within an owner-approved plan
-  allowance (ADR-0069) it retries on evidence and replaces with open issues of the same repo,
+  allowance (ADR-0070) it retries on evidence and replaces with open issues of the same repo,
   counted, without asking once per recovery; safety stops and confirmed environment faults still
   need a person. Its bounded Docker tools
   check/start/stop the host engine without the terminal sandbox (ADR-0057). The `factory` CLI calls the same
@@ -180,16 +180,17 @@ The states are the enum in `schemas/workitem.schema.json`.
   so a planted hook or filter cannot run on the host.
 - The runner turns the commits into a unified patch, measures the whole pull request — the branch's
   diff against its merge base with the default branch, so a fix is counted with the implementation it
-  follows — and refuses an oversized one before the gate's `verify` command from the base commit runs
-  in the same sandbox. It then prints the Result as its last line.
+  follows — and checks an oversized one before the gate's `verify` command from the base commit runs
+  in the same sandbox: over the file count it refuses the pass; over the line target it warns
+  (advisory, ADR-0070) and continues. It then prints the Result as its last line.
 - For a repo in `FACTORY_REMOTE_VERIFY_REPOS` the WorkOrder has `remoteVerify: true` and the runner
   skips that verify step: the Linux container cannot run it. factory-mcp pushes the patch to
   `factory-verify/<issue>-<n>`, where the repo's `factory-verify` workflow runs the same verify
   command on a GitHub macOS runner. A pass there continues as below; a failure is a failed attempt
   whose finding is the run's log tail (ADR-0045).
 - factory-mcp checks the Result, refuses a patch that touches a protected path or takes the PR over
-  its size limits before pushing it, pushes `factory/<issue>`, checks what GitHub holds, and opens
-  the PR.
+  its file-count limit before pushing it (a line-count exceedance warns instead, ADR-0070),
+  pushes `factory/<issue>`, checks what GitHub holds, and opens the PR.
 
 ## Guards
 
@@ -203,7 +204,7 @@ The states are the enum in `schemas/workitem.schema.json`.
 | A Result meets its contract | `documents.check_result` | `test_schemas`: `test_check_result_accepts_what_the_result_schema_accepts` |
 | Only factory-mcp pushes, and only a patch (ADR-0017) | `Foreman.push_patch`, `patches.apply` | `test_actions`: `test_ready_to_pr_open`; `test_gate_loop`: `test_changes_fix_merge_closed`; `test_workers`: `test_unified_and_mbox_patches_push_the_workers_change` |
 | Changed paths come from GitHub, protected paths refused | `Foreman.check_pushed`, `patches.apply` | `test_actions`: `test_renaming_a_protected_path_fails_the_result`; `test_workers`: `test_a_patch_to_a_protected_path_is_never_pushed` |
-| One PR's size: 600 lines, 20 files, refused before the push (ADR-0040) | `worker/runner.py` `collect` (whole PR, before the verify), `Foreman.check_pushed`, `patches.apply` (the push's own check, for a base that advanced) | `test_worker_runner`: `test_a_whole_pull_request_over_its_limits_fails_before_the_verify`; `test_actions`: `test_a_change_must_fit_one_pr`; `test_workers`: `test_a_patch_that_takes_the_branch_over_its_limits_is_never_pushed` |
+| One PR's size: 600 lines advisory, 20 files binding, whole PR measured from the default branch (ADR-0040 with ADR-0070) | `worker/runner.py` `collect` (whole PR, before the verify — line-count exceedance warns), `Foreman.check_pushed` (covers the file count, records `pr_size_advisory`), `patches.apply` (the push's own check, for a base that advanced) | `test_worker_runner`: `test_a_whole_pull_request_over_its_limits_fails_before_the_verify`, `test_an_advisory_lines_exceedance_warns_and_is_collected`, `test_a_hard_line_bound_still_refuses_when_the_workorder_names_it`; `test_actions`: `test_a_change_must_fit_one_pr`; `test_workers`: `test_a_patch_that_takes_the_branch_over_its_limits_is_never_pushed` |
 | GitHub holds the pushed commit | `Foreman.check_pushed` | `test_actions`: `test_bad_results_fail_attempts_then_block` |
 | One PR per WorkItem | `Foreman.open_pr` | `test_actions`: `test_a_result_for_a_branch_with_an_open_pr_joins_that_pr`, `test_open_pr_adopts_a_pr_opened_after_the_reconcile` |
 | A stale verdict is ignored | `workitem.current_verdict` | `test_actions`: `test_stale_verdict_ignored`; `test_reconcile`: `test_old_round_is_stale` |
@@ -216,7 +217,7 @@ The states are the enum in `schemas/workitem.schema.json`.
 | A planned replacement is opened `factory:proposed` and adopted by its marker, never duplicated (ADR-0064) | `Foreman._resolve_replacements`, `Foreman._open_replacement` | `test_recovery_creation`: `test_a_planned_replacement_is_opened_proposed_and_chained`, `test_a_lost_create_response_adopts_the_exact_issue`, `test_after_a_restart_the_barrier_holds_and_the_resume_adopts`, `test_mismatched_words_refuse` |
 | A replacement runs only on the owner's approval (Day Desk with `ownerAsked`, the owner's note), under one stable `requestId`; a different ID for the same WorkItem conflicts before any write (ADR-0067) | `Foreman.replace_issue` | `test_recovery`: `test_day_desk_may_replace_only_on_the_owners_approval`, `test_ownerAsked_is_not_the_owners_own_flag`, `test_a_different_requestId_for_the_same_original_conflicts` |
 | A rewired dependent body is verified by exact readback before the operation claims it; a lost edit response or a drift refuses and the journalled retry replays it (ADR-0065) | `Foreman.replace_issue` | `test_recovery_creation`: `test_the_rewiring_reads_back_exactly_and_keeps_the_unrelated_edges`, `test_a_drifted_edit_refuses_and_the_journalled_retry_replays_it`, `test_a_lost_edit_response_replays_without_duplicate_or_lost_edges`, `test_a_kill_between_rewirings_replays_the_remaining_edges` |
-| A plan allowance backs only scoped recovery (ADR-0069): one approval per plan id, each use one committed count, a safety stop or a confirmed environment fault refused, an exhausted or out-of-scope allowance refused, and a journalled replay never pays a second use | `store.spend_allowance`, `Foreman.approve_plan_allowance`, `Foreman.use_allowance`, `Foreman.replace_issue` | `test_plan_allowance` |
+| A plan allowance backs only scoped recovery (ADR-0070): one approval per plan id, each use one committed count, a safety stop or a confirmed environment fault refused, an exhausted or out-of-scope allowance refused, and a journalled replay never pays a second use | `store.spend_allowance`, `Foreman.approve_plan_allowance`, `Foreman.use_allowance`, `Foreman.replace_issue` | `test_plan_allowance` |
 | The original retires before the replacement can run: its unmerged PR is closed, never merged, and a merged or unverifiable PR stops the run with the barrier held; a replay closes nothing twice (ADR-0066) | `Foreman._retire_original`, `Foreman.replace_issue` | `test_recovery_creation`: `test_the_original_pr_is_closed_before_the_issue_and_is_never_merged`, `test_a_merged_original_pr_stops_before_anything_can_run`, `test_an_unverifiable_original_pr_stops_before_activation`, `test_a_lost_pr_close_replays_and_closes_nothing_twice` |
 | An issue starts only after each `Depends on #n` issue merged | `Foreman._wait_for` | `test_plan`: `test_a_dependent_waits_while_its_dependency_is_open_and_starts_once_it_merged`, `test_a_dependency_that_ends_without_a_merge_sends_the_dependent_to_a_person` |
 | Dependencies change only before any worker pass, in one repo, without a cycle or an ended issue; a stranded `human_waiting` one may change too | `Foreman.set_dependencies` | `test_dependencies`: `test_a_workitem_no_worker_has_touched_may_change_and_any_other_may_not`, `test_a_human_waiting_workitem_with_no_pass_may_change_its_order`, `test_a_dependency_must_be_an_open_issue_of_the_same_repo_that_has_not_ended`, `test_a_change_that_would_make_a_cycle_is_refused` |

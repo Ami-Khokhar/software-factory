@@ -209,7 +209,8 @@ def case_preflight(image, tmp, case):
 
 
 def case_size(image, tmp, case):
-    """An oversized patch is refused before any verify command runs in a container."""
+    """An oversized patch is refused on the file count before any verify command runs in a
+    container; the line count is advisory (ADR-0070)."""
     work, base = fixture(tmp, extra=[(f"big-{n}.txt", "adding a line\n" * 60)
                                      for n in range(4)])
     code, _, err, _ = run("size", image, ["sh", "-c", COMMIT], SECONDS, work)
@@ -220,8 +221,9 @@ def case_size(image, tmp, case):
         runner.collect(runner.Sandbox(image, "size"), work, base, base, "size",
                        {"maxChangedLines": 10, "maxChangedFiles": 2})
     except runner.WorkerError as exc:
+        # 4 files over the file-count bound: the line count is advisory, the file count refuses.
         case.observe("runner.collect: an oversized patch is refused",
-                     "lines" in str(exc) and "allows" in str(exc), str(exc))
+                     "2 files" in str(exc) and "allows" in str(exc), str(exc))
     else:
         case.observe("runner.collect: an oversized patch is refused", False,
                      "no error was raised")

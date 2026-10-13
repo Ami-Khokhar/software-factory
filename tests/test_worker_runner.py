@@ -236,8 +236,66 @@ class RunnerTest(unittest.TestCase):
     def test_a_whole_pull_request_over_its_limits_fails_before_the_verify(self):
         """A fix on an open PR is measured with the implementation it follows: the branch's whole
         diff against the default branch's merge base must fit the WorkOrder (ADR-0040), and the
-        runner refuses it before the verify runs, with the actual size and what remains."""
+        runner refuses it before the verify runs, with the actual size and what remains. The file
+        count binds; the line count only warns (ADR-0070)."""
         branch = Path(self.tmp.name) / "branch"
+        sh(self.tmp.name, "clone", "-q", str(self.origin), str(branch))
+        sh(branch, "checkout", "-q", "-b", "factory/7")
+        for n in range(20):  # the prior implementation: 20 files, so the fix makes 21: one over
+            (branch / f"note{n}.txt").write_text("note\n")
+        sh(branch, "add", "-A")
+        sh(branch, "-c", "user.name=w", "-c", "user.email=w@w", "commit", "-qm", "round 1")
+        sh(branch, "push", "-q", "origin", "factory/7")
+        head = sh(branch, "rev-parse", "HEAD")
+        result, _ = self.run_order("fix", kind="fix", head=head)
+        self.assertEqual(result["status"], "failed", result)
+        self.assertIn("22 lines in 21 files", result["error"])
+        self.assertIn("leaves -1 files", result["error"])
+        phase = self.phases_of(result)["patch collection"]
+        self.assertIn("22 lines in 21 files", phase.get("tail", ""))
+        self.assertNotIn("verification", self.phases_of(result))
+        self.assertEqual(result["evidence"], [])
+        verify_runs = [argv for argv in self.sandbox_runs
+                       if argv[:2] == ["sh", "-c"] and "check.py" in argv[2]]
+        self.assertEqual(verify_runs, [], "the verify ran on an oversized pull request")
+
+    def test_an_advisory_lines_exceedance_warns_and_is_collected(self):
+        """ADR-0070: whole-PR sizes around the target — 599 and 600 land without a warning, 601 and
+        610 (the previous round's fix's size) warn — and the line count alone never rejects; the
+        verify still runs on the advisory-sized pull request."""
+        for prior, result_lines, warns in ((597, 599, False), (598, 600, False),
+                                           (599, 601, True), (608, 610, True)):
+            with self.subTest(target_lines=result_lines):
+                branch = Path(self.tmp.name) / f"adv-{result_lines}"
+                sh(self.tmp.name, "clone", "-q", str(self.origin), str(branch))
+                sh(branch, "checkout", "-q", "-b", "factory/7")
+                # a prior implementation under the target, so the whole PR lands past it;
+                # structure it so the file count stays far under 20
+                (branch / "notes.txt").write_text("note\n" * prior)
+                sh(branch, "add", "-A")
+                sh(branch, "-c", "user.name=w", "-c", "user.email=w@w", "commit", "-qm", "round 1")
+                # -f: the four subTests share the origin, and each overwrites the last's factory/7
+                sh(branch, "push", "-q", "-f", "origin", "factory/7")
+                head = sh(branch, "rev-parse", "HEAD")
+                err = io.StringIO()
+                stdout, stderr = sys.stdout, sys.stderr
+                sys.stderr = err
+                try:
+                    result, order = self.run_order("fix", kind="fix", head=head, max_lines=600)
+                finally:
+                    sys.stderr = stderr
+                self.assertEqual(result["status"], "completed", result.get("error"))
+                self.assertEqual(documents.check_result(result, order), [])
+                prefix = "factory advisory: the whole pull request is"
+                self.assertEqual(prefix in err.getvalue(), warns)
+                verify_runs = [argv for argv in self.sandbox_runs
+                               if argv[:2] == ["sh", "-c"] and "check.py" in argv[2]]
+                self.assertTrue(verify_runs, "the verify did not run on the advisory-sized PR")
+
+    def test_a_hard_line_bound_still_refuses_when_the_workorder_names_it(self):
+        """ADR-0070: an old WorkOrder's migration path — maxChangedLinesAdvisory false — keeps the
+        old refusal, with the actual size and what remains."""
+        branch = Path(self.tmp.name) / "hard"
         sh(self.tmp.name, "clone", "-q", str(self.origin), str(branch))
         sh(branch, "checkout", "-q", "-b", "factory/7")
         (branch / "notes.txt").write_text("note\n" * 601)  # the prior implementation: 601 lines
@@ -245,17 +303,25 @@ class RunnerTest(unittest.TestCase):
         sh(branch, "-c", "user.name=w", "-c", "user.email=w@w", "commit", "-qm", "round 1")
         sh(branch, "push", "-q", "origin", "factory/7")
         head = sh(branch, "rev-parse", "HEAD")
-        result, _ = self.run_order("fix", kind="fix", head=head)
+        wi = workitem(id="o/r#7", repo="o/r", issueNumber=7, goal="Fix the app", headSha=head)
+        config = Config(mcp_token="t", repos=frozenset())
+        order = documents.workorder(wi, "fix", 0, config, self.base)
+        order["constraints"]["maxChangedLinesAdvisory"] = False
+        text = documents.worker_input(order, "factory/7")
+        out = io.StringIO()
+        cwd = os.getcwd()
+        os.chdir(self.checkout)
+        try:
+            with redirect_stdout(out):
+                runner.main([*self.flags, "--", sys.executable, str(self.harness), "fix", text])
+        finally:
+            os.chdir(cwd)
+        result = json.loads(out.getvalue().strip().splitlines()[-1])
         self.assertEqual(result["status"], "failed", result)
         self.assertIn("603 lines in 2 files", result["error"])
         self.assertIn("leaves -3 lines", result["error"])
         phase = self.phases_of(result)["patch collection"]
         self.assertIn("603 lines in 2 files", phase.get("tail", ""))
-        self.assertNotIn("verification", self.phases_of(result))
-        self.assertEqual(result["evidence"], [])
-        verify_runs = [argv for argv in self.sandbox_runs
-                       if argv[:2] == ["sh", "-c"] and "check.py" in argv[2]]
-        self.assertEqual(verify_runs, [], "the verify ran on an oversized pull request")
 
     def test_a_whole_pull_request_at_its_limit_is_collected(self):
         result, order = self.run_order("fix", max_lines=2)  # app.txt: one in, one out

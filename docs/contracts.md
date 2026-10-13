@@ -42,10 +42,12 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
 - **The patch is the handoff (ADR-0017).** A `Result` with `status: completed`
   **must** carry `patch` (format + diff, which `worker/runner.py` returns) and a
   passing test in its evidence. factory-mcp pushes the patch itself, after it
-  refuses one that touches a protected path or takes the PR over its size limits;
-  a worker never pushes. The runner rejects an oversized pull request first, before the
+  refuses one that touches a protected path or takes the PR over its size limits
+  (the line count warns instead: advisory, ADR-0070; the file count binds);
+  a worker never pushes. The runner checks an oversized pull request first, before the
   verify runs: the size is the branch's own diff against its merge base with the
-  default branch, including the commits a fix follows (ADR-0040). The Result is
+  default branch, including the commits a fix follows (ADR-0040), and an exceedance of
+  the line target warns while an exceedance of the file count refuses. The Result is
   the last JSON line of the relay task's output; the Foreman reads nothing else
   the worker prints. This is what makes any harness that can commit a
   first-class worker.
@@ -57,6 +59,11 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
 - **`human_waiting` is not terminal.** `closed`, `cancelled` and `exhausted`
   are; `merged` waits for the issue to close. HUMAN is an action queue with a
   path back.
+- **The line target is advisory (ADR-0070).** `constraints.maxChangedLines` is the WorkOrder's
+  small-PR target: its consumers warn and continue past it, and never reject on line count alone.
+  `constraints.maxChangedLinesAdvisory` (optional boolean) makes it explicit — true, or absent in
+  older WorkOrders, is advisory; false restores a hard line rejection. `maxChangedFiles` and the
+  worker's patch-byte ceiling bind in both modes.
 - **Acceptance is checkable.** Each `acceptance` item has a `claim` and a
   `doneWhen`: a check read back from the produced artifact, never from effort.
 - **`blocked` carries evidence.** A WorkItem in `blocked` must have `blockedOn`

@@ -172,8 +172,9 @@ class WorkerTest(unittest.TestCase):
         self.assertEqual(git("branch", "--list", "factory/7", cwd=self.bare), "")  # never pushed
 
     def test_a_patch_that_takes_the_branch_over_its_limits_is_never_pushed(self):
-        """ADR-0040. Counted from where the branch left main, as GitHub counts the PR: a small fix on a
-        big PR counts the whole PR."""
+        """ADR-0040 with ADR-0070. Counted from where the branch left main, as GitHub counts the PR:
+        a small fix on a big PR counts the whole PR. The file count binds, the line count is advisory
+        unless a WorkOrder says hard."""
         git("checkout", "-q", "-B", "factory/7", "origin/main", cwd=self.work)
         self.write("app.py", "print('new')\n")
         git("commit", "-q", "-am", "The PR so far", cwd=self.work)
@@ -182,14 +183,39 @@ class WorkerTest(unittest.TestCase):
         self.write("more.py", "a = 1\nb = 2\n")
         git("add", "-A", cwd=self.work)
         patch = {"format": "unified", "diff": git("diff", "--cached", "HEAD", cwd=self.work) + "\n"}
-        for limits in (("main", 3, 20), ("main", 600, 1)):
+        for limits in (("main", 3, 20), ("main", 3, 20, False), ("main", 600, 1), ("main", 600, 1, False)):
             with self.subTest(limits), self.assertRaisesRegex(patches.PatchError, "4 lines in 2 files exceeds"):
                 patches.apply(self.bare, "", "factory/7", head, patch, "Fix", force=False, limits=limits)
         self.assertEqual(git("rev-parse", "refs/heads/factory/7", cwd=self.bare), head)  # never pushed
-        pushed = patches.apply(self.bare, "", "factory/7", head, patch, "Fix", force=False, limits=("main", 4, 2))
+        # Advisory lines exceed: warned, and pushed anyway; at the target it just pushes.
+        pushed = patches.apply(self.bare, "", "factory/7", head, patch, "Fix", force=False,
+                               limits=("main", 3, 2, True))
         self.assertEqual(git("rev-parse", "refs/heads/factory/7", cwd=self.bare), pushed)
+        rolled = patches.apply(self.bare, "", "factory/7", head, patch, "Reset to head", force=True,
+                               limits=("main", 4, 2, True))
+        self.assertEqual(git("rev-parse", "refs/heads/factory/7", cwd=self.bare), rolled)
+        # A WorkOrder that says the line bound is hard still refuses (migration path, ADR-0070).
+        git("push", "-q", "-f", "origin", f"{head}:refs/heads/factory/7", cwd=self.work)
+        with self.assertRaisesRegex(patches.PatchError, "exceeds the WorkOrder constraint of 3 lines"):
+            patches.apply(self.bare, "", "factory/7", head, patch, "Fix", force=False,
+                          limits=("main", 3, 2, False))
 
     def test_a_change_over_the_workorders_limits_fails_the_attempt_before_the_push(self):
+        git("checkout", "-q", "-B", "factory/7", "origin/main", cwd=self.work)
+        for n in range(21):
+            self.write(f"big{n}.py", "x = 1\n")  # 21 files: over the file count, which binds
+        git("add", "-A", cwd=self.work)
+        diff = git("diff", "--cached", "origin/main", cwd=self.work) + "\n"
+        foreman = self.foreman()
+        wi = foreman.tick(ID)["workItem"]
+        self.relay.finish(wi["providerTaskId"], output=result_line(wi["activeWorkOrderId"], diff))
+        wi = foreman.tick(ID)["workItem"]
+        self.assertIn("patch not pushed: 21 lines in 21 files exceeds the WorkOrder constraint of 20 files",
+                      wi["attempts"][0])
+        self.assertIsNone(self.github.branch_head(REPO, "factory/7"))
+
+    def test_an_advisory_lines_exceedance_is_pushed_and_the_pr_opens(self):
+        """ADR-0070: a patch 1 line over the 600 target is pushed; the whole pull request is noted."""
         git("checkout", "-q", "-B", "factory/7", "origin/main", cwd=self.work)
         self.write("big.py", "x = 1\n" * 601)
         git("add", "-A", cwd=self.work)
@@ -198,8 +224,10 @@ class WorkerTest(unittest.TestCase):
         wi = foreman.tick(ID)["workItem"]
         self.relay.finish(wi["providerTaskId"], output=result_line(wi["activeWorkOrderId"], diff))
         wi = foreman.tick(ID)["workItem"]
-        self.assertIn("patch not pushed: 601 lines in 1 files exceeds the WorkOrder constraints", wi["attempts"][0])
-        self.assertIsNone(self.github.branch_head(REPO, "factory/7"))
+        self.assertEqual(wi["state"], "pr_open", wi.get("attempts"))
+        self.assertTrue(self.github.branch_head(REPO, "factory/7"))
+        noted = [row["detail"] for row in foreman.store.history(ID) if row["action"] == "pr_size_advisory"]
+        self.assertEqual(noted, [{"lines": 601, "target": 600, "files": 1}])
 
     def test_a_patch_that_is_not_text_is_a_patch_error(self):
         """poll turns a PatchError into a failed attempt; anything else leaves the WorkItem stuck."""

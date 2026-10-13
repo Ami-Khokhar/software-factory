@@ -107,9 +107,12 @@ class ActionsTest(unittest.TestCase):
         self.assertIn("changes protected path AGENTS.md", wi["attempts"][0])
 
     def test_a_change_must_fit_one_pr(self):
-        """ADR-0002: a PR stays within 600 changed lines and 20 files, the gate's limits."""
+        """ADR-0070 over ADR-0002: the line count is a small-PR target, not a wall — a whole-PR
+        exceedance warns and still opens the pull request; the file count binds, as do the
+        protected paths."""
         cases = [("600 lines", (("src/app.py", 590, 10),), "pr_open"),
-                 ("601 lines", (("src/app.py", 591, 10),), "ready"),
+                 ("601 lines", (("src/app.py", 591, 10),), "pr_open"),
+                 ("610 lines, the previous fix's size", (("src/app.py", 601, 9),), "pr_open"),
                  ("20 files", tuple((f"src/m{n}.py", 1, 0) for n in range(20)), "pr_open"),
                  ("21 files", tuple((f"src/m{n}.py", 1, 0) for n in range(21)), "ready")]
         for case, files, state in cases:
@@ -121,7 +124,19 @@ class ActionsTest(unittest.TestCase):
                 wi = self.tick()
                 self.assertEqual(wi["state"], state, wi.get("attempts"))
                 if state == "ready":
-                    self.assertIn("exceeds the WorkOrder constraints", wi["attempts"][0])
+                    self.assertIn("exceeds the WorkOrder constraint of 20 files", wi["attempts"][0])
+
+    def test_an_advisory_lines_exceedance_is_recorded_not_failed(self):
+        """ADR-0070: a whole-PR lines exceedance over the opened pull request is noted in the audit
+        log, never as an attempt failure: no rejection solely for line count."""
+        wi, task = self.dispatched()
+        self.git.files = (("src/app.py", 591, 10),)  # 601 changed lines, over the 600 target
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
+        wi = self.tick()
+        self.assertEqual(wi["state"], "pr_open", wi.get("attempts"))
+        noted = [row["detail"] for row in self.foreman.store.history(ID)
+                 if row["action"] == "pr_size_advisory"]
+        self.assertEqual(noted, [{"lines": 601, "target": 600, "files": 1}])
 
     def test_a_result_that_reports_failed_is_an_attempt(self):
         """How worker/runner.py reports a failing verify: the task completes, and its Result says failed."""
