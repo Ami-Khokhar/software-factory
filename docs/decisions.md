@@ -1496,3 +1496,31 @@ instead of a fresh worker redoing it. Merge authority and the gate's tools stay 
 replacement tool only ever closes, never merges a PR, and only the PR the WorkItem itself
 records. The already-journalled replay machinery carries any interrupt inside the cleanup, so
 the boundary between cleanup and activation is restart-safe without a new journal field.
+
+---
+
+## ADR-0067 — factory_replace_issue runs only on the owner's approval, under one stable request ID
+
+**Context.** ADR-0059's `factory_replace_issue` sat in the agent tool list without an approval
+rule of its own: a driving Day Desk call that had a plausible plan could cancel the owner's work,
+retire its PR and open the factory's own replacement issues on its own say-so, exactly the kind
+of decision ADR-0030 reserves for the owner. And because the caller, not the factory, chose how
+to repeat the call, a chat that lost its thread could start a second replacement run under a
+fresh identity where the journal of the first one was waiting to be replayed.
+
+**Decision.** The tool takes an approval `note`, a stable `requestId` and (Day Desk only)
+`ownerAsked`. A driving call without `ownerAsked` refuses: replacing is the owner's decision.
+`ownerAsked` stays a Day Desk flag, as in `factory_resolve_human` (ADR-0043): the owner's own
+call carries its approval as the note and leaves it unset. The skill's guidance must show the
+owner, before they approve, the original's acceptance, each replacement's acceptance, which
+dependents move, and the passes each replacement may spend. The journal for a replacement is
+keyed by the WorkItem and includes the `requestId` in its inputs, so the same ID with the same
+inputs replays where the run stopped (ADR-0063's machinery), and a different ID for the same
+WorkItem conflicts and refuses before any write. The skill says every repeat, retries included,
+carries the same `requestId`.
+
+**Consequence.** One replacement request is one journalled run under one ID: an interrupted call
+resumes and a lost-ID caller stops with a refusal instead of racing its own journal. The guard is
+the code for the agent path and the store's fingerprint for the replay path. Verification that
+the owner really said the words stays a claim, as in ADR-0030; Day Desk quotes them as the note,
+and the audit row holds the note and the ID.

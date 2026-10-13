@@ -96,7 +96,7 @@ class ReplaceCreationTest(unittest.TestCase):
                                Config(mcp_token="t", repos=frozenset({REPO})), FakeRelay())
 
     def replace(self, items):
-        return self.foreman.replace_issue(ORIGINAL, items, "amteshwar")
+        return self.foreman.replace_issue(ORIGINAL, items, "amteshwar", "owner approves the replacement", "req")
 
     def proposals(self):
         return sorted(issue["number"] for issue in self.github.labelled_issues(REPO, "factory:proposed"))

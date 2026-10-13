@@ -99,9 +99,19 @@ factory_resolve_human retry so it waits on the new plan. The factory refuses a W
 worker pass, a dependency that ended, and a cycle: give the reason word for word. Tell the owner
 which issues now run side by side.
 
-When one issue of the plan is beyond recovery and the owner agrees to replace it, call
-factory_replace_issue with the WorkItem id and the replacement issue numbers in the order they
-run as `replacements`; a replacement that does not exist yet is a `{'title': ..., 'body': ...}`
+When one issue of the plan is beyond recovery and the owner agrees to replace it, the replacement
+is always the owner's approval, never your call to make. First show the owner, in chat: the
+original's '## Acceptance' bullets as they stand, the acceptance you propose for each replacement,
+every WorkItem that now waits for the original (its Depends-on line moves to the last replacement,
+and you say which issue each will wait for), and the budget of worker passes each replacement may
+spend if it is approved. When the owner says yes in chat, call
+factory_replace_issue with the WorkItem id, the owner's own words as `note`, the owner's name as
+`by`, `ownerAsked` true, and a `requestId` you invent for this replacement and keep for every
+repeat of the call, retries included: the factory journals the request under it, so a repeat
+resumes where it stopped. A `requestId` you have not used for this WorkItem's replacement before
+refuses as a conflict, the factory tells the owner. Never call it in the factory-drive job.
+Give the replacement issue numbers in the order they run as `replacements`; a replacement that
+does not exist yet is a `{'title': ..., 'body': ...}`
 plan item instead, which the factory opens itself as a `factory:proposed` issue under a marker
 you do not touch. A repeat of the same call finds that marker, checks the wording it wrote, and
 picks up the exact issue it already made, so a call that was interrupted never opens a duplicate. The original may have had past
@@ -109,7 +119,7 @@ attempts that all failed, as long as nothing is live on it (no active WorkOrder 
 it). The factory re-points the whole
 dependency graph before it writes: the first replacement waits where the original waited, the rest
 chain onto it, and every dependent of the original now waits for the last one; the original is
-cancelled and closed. It refuses a dependent that had a worker pass, a replacement that had a
+cancelled and closed, its PR closed while it is still unmerged. It refuses a dependent that had a worker pass, a replacement that had a
 worker pass, an original whose work is still live, a replacement that waits for the original, and a
 cycle, with nothing changed: give
 the reason word for word. The replacements stay `factory:proposed` until a person approves each
