@@ -23,7 +23,11 @@ REGATE_MARKER = re.compile(r"<!-- factory regate (\d+) -->")
 # The plan recovery allowance (#239): what one owner approval covers, and how far it reaches.
 RECOVERY_ACTIONS = ("retry", "replace")
 MAX_ALLOWANCE = 20
-SAFETY_STOPS = ("pr-gatekeeper decided human", "protected path", "access denied")
+# Access escalations must reach a person here, so these name what the factory's own access
+# troubles emit, not a phrase nothing writes (round 1 finding, #239): the remote-verify 403 points
+# at FACTORY_GITHUB_TOKEN and docs, and a denied git push says "Permission to ... denied".
+SAFETY_STOPS = ("pr-gatekeeper decided human", "protected path", "access denied",
+                "resource not accessible", "permission to", "may read actions")
 # the identity marker a replacement the factory opens carries: this request, at this position
 REPLACEMENT_MARKER = re.compile(r"<!-- factory replace (\S+) (\d+) -->")
 REMOTE_VERIFY_WORKFLOW = ".github/workflows/factory-verify.yml"  # the workflow's name there is `factory-verify`
@@ -884,8 +888,10 @@ class Foreman:
     def _safety_stop(self, wi):
         """The safety stop this WorkItem's escalation names (ADR-0007's risk classes and the guarded
         push), or None: a HUMAN verdict, a protected path or an access trouble needs a person,
-        whatever an allowance says (#239). The escalation and the attempts' text is data about this
-        WorkItem's own facts, not untrusted instruction."""
+        whatever an allowance says (#239). The phrases name what a HUMAN verdict, a refused
+        protected path and the factory's real access troubles (a remote-verify 403, a denied git
+        push) emit; the escalation and the attempts' text is data about this WorkItem's own facts,
+        not untrusted instruction."""
         text = " ".join([wi.get("blockedOn") or "", *(wi.get("attempts") or [])]).lower()
         return next((stop for stop in SAFETY_STOPS if stop in text), None)
 

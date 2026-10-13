@@ -115,8 +115,7 @@ class AllowanceTest(unittest.TestCase):
 
     def test_a_safety_stop_needs_the_owner_and_spends_nothing(self):
         for blocked_on in ("pr-gatekeeper decided HUMAN; read the latest gate comment",
-                           "the Result changes protected path .github/workflows/ci.yml",
-                           "access denied: the token cannot read check runs"):
+                           "the Result changes protected path .github/workflows/ci.yml"):
             with self.subTest(blocked_on=blocked_on):
                 self.store.put(dict(self.store.get("o/r#1"), state="blocked", blockedOn=blocked_on))
                 self.allow()
@@ -125,6 +124,23 @@ class AllowanceTest(unittest.TestCase):
                     self.use(planId=plan_id)
                 self.assertEqual(self.store.allowance(plan_id)["remaining"], 1)
                 self.assertEqual(self.store.get("o/r#1")["state"], "blocked")
+
+    def test_a_real_access_trouble_safety_stop_is_detected(self):
+        """The stop must fire on the access troubles the factory itself escalates, not only on a
+        literal nothing writes: a remote-verify 403 and a denied git push both need the owner,
+        and the stop keeps Day Desk's one answer unspent so the owner's answer comes instead."""
+        for blocked_on in (
+                "remote verify: the runs of factory-verify could not be read (GitHub 403: Resource "
+                "not accessible); check that FACTORY_GITHUB_TOKEN may read Actions "
+                "(docs/RUNBOOK.md, Remote verify setup)",
+                "patch not pushed: git push failed: Permission to o/r.git denied to factory-token"):
+            with self.subTest(blocked_on=blocked_on):
+                self.store.put(dict(self.store.get("o/r#1"), state="blocked", blockedOn=blocked_on))
+                self.allow()
+                plan_id = self.store.allowances()[-1]["planId"]
+                with self.assertRaisesRegex(ToolError, "safety stop"):
+                    self.use(planId=plan_id)
+                self.assertEqual(self.store.allowance(plan_id)["remaining"], 1)
 
     def test_a_confirmed_environment_fault_stays_paused_until_a_person_answers(self):
         """The fault is confirmed: the last attempt named the environment and no person answered
