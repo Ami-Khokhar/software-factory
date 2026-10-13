@@ -304,6 +304,108 @@ class UpdateTest(unittest.TestCase):
                           "mcp_servers.factory_drive.tools.include"), commands)
         self.assertNotIn("removed mcp_servers.factory_drive.tools.include", printed)
 
+    def test_a_stale_owner_include_is_widened_in_place_and_a_repeat_touches_nothing(self):
+        # The 260 regression: the live profile's owner include list came from before
+        # #239's factory_approve_plan_allowance, so Day Desk discovered 4 of the 5 owner
+        # tools and the deploy could not advance. 4 reviewed entries plus one unrelated
+        # owner entry, which must survive untouched.
+        stale = [tool for tool in self.include() if tool != "factory_approve_plan_allowance"]
+        stale.append("factory_docker_status")
+        merged = stale + ["factory_approve_plan_allowance"]  # the owner's entries stay first
+        commands, printed = self.deploy_with("tenant/hermes/SOUL.md", "soul\n", results={
+            "hermes -p day-desk config get mcp_servers.factory.tools --json":
+                subprocess.CompletedProcess([], 0, json.dumps({"include": stale}), ""),
+            "hermes -p day-desk config get mcp_servers.factory.tools.include --json":
+                subprocess.CompletedProcess([], 0, json.dumps(merged), "")})
+        self.assertIn(("hermes", "-p", "day-desk", "config", "set",
+                       "mcp_servers.factory.tools.include", json.dumps(merged)), commands)
+        self.assertIn("update: added factory_approve_plan_allowance to "
+                      "mcp_servers.factory.tools.include", printed)
+        self.assertIn("update: deployed", printed)
+        sets = [command for command in commands if command[:5] == ("hermes", "-p", "day-desk",
+                                                                 "config", "set")]
+        self.assertEqual(sets, [("hermes", "-p", "day-desk", "config", "set",
+                                 "mcp_servers.factory.tools.include", json.dumps(merged))])
+        for secret in ("owner-token", "agent-token", "Bearer", "Authorization"):
+            self.assertNotIn(secret, printed)
+        # The unset of a hand-merged driving list is ADR-0048; writing one is not. The approval
+        # tool must never reach the driving identity through any include.
+        self.assertFalse([command for command in commands
+                          if ("config set" in " ".join(command) and "factory_drive"
+                              in " ".join(command))])
+        commands, printed = self.deploy_with("tenant/hermes/SOUL.md", "more\n", results={  # next update
+            "hermes -p day-desk config get mcp_servers.factory.tools --json":
+                subprocess.CompletedProcess([], 0, json.dumps({"include": merged}), "")})
+        self.assertEqual([command for command in commands if "config set" in " ".join(command)], [])
+        self.assertIn("update: deployed", printed)
+
+    def test_a_live_profile_with_no_owner_include_is_refused_not_narrowed(self):
+        for key, done in (("a missing include",
+                           subprocess.CompletedProcess([], 1, "",
+                            "Config key not set: mcp_servers.factory.tools")),
+                          ("a null include",
+                           subprocess.CompletedProcess([], 0, '{"include": null}', ""))):
+            with self.subTest(key):
+                with self.assertRaisesRegex(SystemExit, "factory.tools.include.*will not overwrite"):
+                    self.deploy_with("tenant/hermes/SOUL.md", key + "\n", results={
+                        "hermes -p day-desk config get mcp_servers.factory.tools --json": done})
+                # the deploy record stays at the baseline the update opened with
+                self.assertNotIn("update: deployed", (cli.STATE / "deployed").read_text())
+
+    def test_a_malformed_owner_include_is_refused_not_overwritten(self):
+        with self.assertRaisesRegex(SystemExit, "cannot read mcp_servers.factory.tools.include"):
+            self.deploy_with("tenant/hermes/SOUL.md", "soul\n", results={
+                "hermes -p day-desk config get mcp_servers.factory.tools --json":
+                    subprocess.CompletedProcess([], 0, '{"include": 42}', "")})
+        self.assertNotIn("update: deployed", (cli.STATE / "deployed").read_text())
+
+    def test_an_include_beside_an_exclude_is_refused(self):
+        with self.assertRaisesRegex(SystemExit, "beside a tools.exclude filter.*will not overwrite"):
+            self.deploy_with("tenant/hermes/SOUL.md", "soul\n", results={
+                "hermes -p day-desk config get mcp_servers.factory.tools --json":
+                    subprocess.CompletedProcess([], 0,
+                     json.dumps({"include": self.include(), "exclude": ["*lesson*"]}), "")})
+        self.assertNotIn("update: deployed", (cli.STATE / "deployed").read_text())
+
+    def test_a_failed_include_write_keeps_the_record_and_the_next_update_repairs_it(self):
+        stale = [tool for tool in self.include() if tool != "factory_approve_plan_allowance"]
+        merged = stale + ["factory_approve_plan_allowance"]
+        with self.assertRaisesRegex(SystemExit, "writing mcp_servers.factory.tools.include failed"):
+            self.deploy_with("tenant/hermes/SOUL.md", "soul\n", results={
+                "hermes -p day-desk config get mcp_servers.factory.tools --json":
+                    subprocess.CompletedProcess([], 0, json.dumps({"include": stale}), ""),
+                "hermes -p day-desk config set":
+                    subprocess.CompletedProcess([], 1, "", "Error: hermes could not write the profile")})
+        record = (cli.STATE / "deployed").read_text()
+        self.assertNotIn("update: deployed", record)
+        # A retry: the spare key the broken deploy could not write is verified by its readback now.
+        commands, printed = self.deploy_with(results={
+            "hermes -p day-desk config get mcp_servers.factory.tools --json":
+                subprocess.CompletedProcess([], 0, json.dumps({"include": stale}), ""),
+            "hermes -p day-desk config get mcp_servers.factory.tools.include --json":
+                subprocess.CompletedProcess([], 0, json.dumps(merged), "")})
+        self.assertIn(("hermes", "-p", "day-desk", "config", "set",
+                       "mcp_servers.factory.tools.include", json.dumps(merged)), commands)
+        self.assertNotEqual((cli.STATE / "deployed").read_text(), record)
+
+    def test_an_include_write_that_does_not_take_keeps_the_record(self):
+        stale = [tool for tool in self.include() if tool != "factory_approve_plan_allowance"]
+        merged = stale + ["factory_approve_plan_allowance"]
+        with self.assertRaisesRegex(SystemExit, "reads back.*not the written list"):
+            self.deploy_with("tenant/hermes/SOUL.md", "soul\n", results={
+                "hermes -p day-desk config get mcp_servers.factory.tools --json":
+                    subprocess.CompletedProcess([], 0, json.dumps({"include": stale}), ""),
+                "hermes -p day-desk config get mcp_servers.factory.tools.include --json":
+                    subprocess.CompletedProcess([], 0, json.dumps({"include": stale}), "")})
+        record = (cli.STATE / "deployed").read_text()
+        self.assertNotIn("update: deployed", record)  # and the same commit deploys on a true readback
+        commands, printed = self.deploy_with(results={
+            "hermes -p day-desk config get mcp_servers.factory.tools --json":
+                subprocess.CompletedProcess([], 0, json.dumps({"include": stale}), ""),
+            "hermes -p day-desk config get mcp_servers.factory.tools.include --json":
+                subprocess.CompletedProcess([], 0, json.dumps(merged), "")})
+        self.assertIn("update: deployed", printed)
+
     def test_a_failing_profile_update_fails_the_deploy_loudly(self):
         failed = subprocess.CompletedProcess([], 1, "", "Error: no such profile 'day-desk'")
         with self.assertRaisesRegex(SystemExit, "hermes profile update failed at [0-9a-f]{7}: Error: no such profile"):

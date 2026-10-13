@@ -613,12 +613,31 @@ After setting it up, check in Telegram that Day Desk:
 7. turns a goal of two issues into one `factory_start_plan` call that you approve once, and then
    answers "what needs me?" with the second issue waiting for the first.
 
-The profile deployment check uses `hermes -p day-desk mcp test factory_drive` and
-`hermes -p day-desk mcp test factory`. It checks discovered tool names against the
-live include/exclude filters from `hermes -p day-desk config get
-mcp_servers.<server>.tools --json`. An unsupported command or hidden required tool
-keeps the successful deployment record unchanged. Repair the check or filter and
-run `factory update` again before retrying blocked work.
+The profile deploy check uses `hermes -p day-desk mcp test factory_drive` and
+`hermes -p day-desk mcp test factory`. Before it runs, `factory update` repairs one
+known gap itself: a live `mcp_servers.factory.tools.include` that predates a merged
+owner tool. It widens that key in place to the shipped template's reviewed names —
+the profile's own entries stay first, and the exact value is read back before
+discovery is checked (ADR-0071). This is the only live write an update makes.
+
+Everything else is refused, not guessed: a profile with no include, a null one, a
+malformed one, or an include beside an exclude makes the update fail and say so
+(`update: ... will not overwrite ... Set the owner tools by hand (RUNBOOK)`), and the
+deployment record stays where it was. Set the list by hand, then run `factory update`
+again, which verifies it by readback and discovery:
+
+```bash
+hermes -p day-desk config set mcp_servers.factory.tools.include '["factory_bootstrap_repo", "factory_add_repo", "factory_approve_lesson", "factory_retire_lesson", "factory_approve_plan_allowance"]'
+```
+
+Keep the driving identity out of it: never add the approval tool, or any owner tool,
+under `factory_drive` (ADR-0041); the deploy refuses to write that key at all.
+
+The check compares discovered tool names against the live include/exclude filters
+from `hermes -p day-desk config get mcp_servers.<server>.tools --json`. An
+unsupported command or hidden required tool keeps the successful deployment record
+unchanged. Repair the check or filter and run `factory update` again before
+retrying blocked work.
 
 Day Desk can call `factory_docker_status` and `factory_docker_control` with
 `{"action":"start"}` to recover OrbStack without its terminal. The control verifies

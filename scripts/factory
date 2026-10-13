@@ -549,6 +549,11 @@ def deploy_steps(since, new, restart):
             must("hermes config unset", "hermes", "-p", "day-desk", "config", "unset", include_key)
             print(f"update: removed {include_key} from Day Desk's profile; the agent token lists its "
                   "driving tools (ADR-0048)")
+        # A stale owner include hides a newly reviewed tool from the live profile, exactly as the
+        # removed driving copy did on its server: `hermes profile update` keeps the live config, so
+        # the deploy widens the owner include to the shipped list in place (ADR-0071). It is the one
+        # live write here, and it fails the deploy rather than guess at any other filter.
+        owned = reconcile_owner_include(since)
         # A profile update that leaves Day Desk blind is a failed update (ADR-0049): before the
         # deploy record advances, the live profile must discover every driving tool the agent
         # token lists (its discovery is not filtered there), and every tool the shipped
@@ -569,26 +574,16 @@ def deploy_steps(since, new, restart):
             # `mcp test` probes the live profile but lists unfiltered server tools.
             # Read only its nonsecret tool filters before checking what Day Desk can use.
             found = set(re.findall(r"^\s+(factory_\w+)\s{2,}\S", discovery, re.M))
-            key = f"mcp_servers.{server}.tools"
-            filters = run("hermes", "-p", "day-desk", "config", "get", key, "--json")
-            if filters.returncode == 1 and filters.stderr.strip() == f"Config key not set: {key}":
-                selected = {}
-            elif filters.returncode == 0:
-                try:
-                    selected = json.loads(filters.stdout)
-                except ValueError:
-                    selected = None
-            else:
-                selected = None
-            if not isinstance(selected, dict):
-                die(f"update: cannot read {server} tool filters; the deploy record stays at {since[:7]}")
-            for key in ("include", "exclude"):
-                if selected.get(key) is None:
-                    selected.pop(key, None)
-                elif isinstance(selected[key], str):
-                    selected[key] = [selected[key]]
-                elif not isinstance(selected[key], list) or not all(isinstance(v, str) for v in selected[key]):
-                    die(f"update: cannot read {server} tool filters; the deploy record stays at {since[:7]}")
+            # The owner server's filter is the include list the reconciliation above verified by its
+            # exact readback; the drive server's filters are read here (no filter is set for it, and
+            # a tool list would be the stale copy the unset above removed).
+            selected = ({"include": owned} if server == "factory"
+                        else read_filters(f"mcp_servers.{server}.tools", since))
+            for name in ("include", "exclude"):
+                if selected.get(name, None) is not None:
+                    selected[name] = filter_names(selected[name], server, since)
+                else:
+                    selected.pop(name, None)
             # Hermes gives include precedence over exclude, including an empty include list.
             found = {name for name in found
                      if (any(fnmatch.fnmatchcase(name, pattern) for pattern in selected["include"])
@@ -599,6 +594,83 @@ def deploy_steps(since, new, restart):
                 die(f"update: Day Desk's profile discovers {len(want) - len(missing)} of the "
                     f"{len(want)} {server} tools ({', '.join(missing)}) at {new[:7]}; the deploy "
                     f"record stays at {since[:7]} and the next update tries again")
+
+
+def read_filters(key, since):
+    """The live profile's parsed `key` filters (`config get --json`): an object, or {} when the key
+    is not set (`hermes config get` exits non-zero for that alone). Anything else is refused and the
+    deploy record stays put: a filter the deploy cannot read cannot be checked against what it must
+    allow, and guessing one would narrow a policy nobody set."""
+    server = key.split(".")[1]
+    done = run("hermes", "-p", "day-desk", "config", "get", key, "--json")
+    if done.returncode == 1 and done.stderr.strip() == f"Config key not set: {key}":
+        return {}
+    try:
+        selected = json.loads(done.stdout) if done.returncode == 0 else None
+    except ValueError:
+        selected = None
+    if not isinstance(selected, dict):
+        die(f"update: cannot read {server} tool filters; the deploy record stays at {since[:7]}")
+    return selected
+
+
+def filter_names(value, server, since):
+    """A JSON filter value as a list of tool names: one string is one name (hermes accepts both
+    forms), a list of names is itself. Anything else is refused."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list) and all(isinstance(name, str) for name in value):
+        return value
+    die(f"update: cannot read the {server} tool filters; the deploy record stays at {since[:7]}")
+
+
+def reconcile_owner_include(since):
+    """Widen Day Desk's live `mcp_servers.factory.tools.include` to the shipped template's owner
+    tools, after the profile update and before the discovery check (ADR-0071). The live list is a
+    deliberate owner restriction (ADR-0041), so the only repair is a stable, deduplicated union
+    written in place: the owner's explicit entries first, in their order, then the template's
+    missing ones. A profile with no include, a null or malformed one, or an exclude beside the
+    include is refused: writing such a key would silently replace an unrestricted or exclude-only
+    policy or overwrite invalid config, and no other live setting is touched. The exact value is
+    read back after the write: only a verified readback tells the discovery check below what the
+    profile now filters. Returns the verified include list."""
+    tools_key = "mcp_servers.factory.tools"
+    include_key = f"{tools_key}.include"
+    want = profile_include_tools()
+    filters = read_filters(tools_key, since)
+    include = filters.get("include")
+    if filters.get("exclude") is not None or include is None:
+        why = ("an include beside a tools.exclude filter"
+               if filters.get("exclude") is not None else "no explicit include list (an unrestricted "
+               "or exclude-only one, which setting an include would narrow)")
+        die(f"update: Day Desk's profile has {include_key} as {why}; the update will not overwrite it "
+            f"({', '.join(want)}). Set the owner tools by hand (RUNBOOK); the deploy record stays "
+            f"at {since[:7]} and the next update verifies them")
+    if not isinstance(include, list) or not all(isinstance(name, str) for name in include):
+        die(f"update: cannot read {include_key}; the update will not overwrite invalid config. Set "
+            f"the owner tools by hand ({', '.join(want)}); the deploy record stays at {since[:7]}")
+    have = [name for index, name in enumerate(include) if name not in include[:index]]  # deduplicated, owner order kept
+    added = [name for name in want if name not in have]
+    if not added:  # nothing stale: the owner's list already holds every reviewed tool
+        return have
+    merged = have + added
+    written = run("hermes", "-p", "day-desk", "config", "set", include_key, json.dumps(merged))
+    if written.returncode != 0:
+        die(f"update: writing {include_key} failed at {since[:7]}: "
+            f"{' '.join((written.stderr or written.stdout).split())[-300:]}: set the owner tools by "
+            f"hand ({', '.join(want)}) and run update again")
+    done = run("hermes", "-p", "day-desk", "config", "get", include_key, "--json")
+    try:
+        readback = json.loads(done.stdout) if done.returncode == 0 else None
+    except ValueError:
+        readback = None
+    if readback != merged:
+        die(f"update: after the write, {include_key} reads back {readback}, not the written list; "
+            f"the deploy record stays at {since[:7]} and the next update tries again")
+    print(f"update: added {', '.join(added)} to {include_key} in Day Desk's profile")
+    return merged
 
 
 def profile_include_tools():

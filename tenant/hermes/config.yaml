@@ -20,6 +20,8 @@ mcp_servers:
       Authorization: "Bearer ${FACTORY_MCP_TOKEN}"
     trust: full  # no yes per call either (ADR-0041); the owner's token still names the caller
     tools:
+    # Deployment note: a live profile whose include list below predates a reviewed tool is
+    # widened to this list by `factory update` (ADR-0071); no other live setting is touched.
       include:  # a repo's setup and gate secrets, and the lessons its workers read, on the owner's token
         - factory_bootstrap_repo
         - factory_add_repo
