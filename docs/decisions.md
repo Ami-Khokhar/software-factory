@@ -1614,3 +1614,33 @@ diff from the default branch's merge base, a fix counted with the attempt it fol
 is unchanged. The guard's tests move to the file count and to an explicit `false` flag for the
 old refusal, so the hard path keeps coverage. Repeated careless exceedance is left to review and
 the owner, not to an automatic rejection.
+
+## ADR-0071 — The deploy widens the owner include list; it never guesses at any other filter
+
+**Context.** ADR-0069 added `factory_approve_plan_allowance` to the shipped owner include list in
+`tenant/hermes/config.yaml`, and ADR-0048 had made
+`mcp_servers.factory_drive.tools.include` deploy-removed from the live profile — but the
+owner-server list ADR-0041 keeps in the live profile is not deploy-managed. `hermes profile
+update` preserves the live config (it also holds model, Telegram and secret settings), so a live
+include list that predates a merged tool stayed short and hid the new tool at exactly the moment
+ADR-0049's discovery check tasted it: Day Desk discovered 4 of the 5 owner tools and the deploy
+could not advance, with no step that could ever repair it.
+
+**Decision.** When `factory update` has updated Day Desk's profile and before the ADR-0049
+discovery check, it widens the live `mcp_servers.factory.tools.include` to the shipped template's
+reviewed names: a stable, deduplicated union written in place with `hermes config set` (the
+owner's explicit entries first, in their order, then the template's missing ones), verified by an
+exact readback of the written key before discovery runs. It is the only live write the deploy
+may make. A profile with no include, a null one, a malformed one (not a list of names), or an
+include beside an exclude is refused: setting the key there would silently replace an
+unrestricted or exclude-only policy with a narrower one, or overwrite invalid config, so the
+deploy fails with the key named and keeps the deployment record; the owner sets the list by hand
+(RUNBOOK) and the next update verifies it. No wildcard, no force switch, no whole-file rewrite;
+the model, provider, Telegram, secret and URL settings, the other MCP servers and the driving
+identity are never written, and the approval tool stays on the owner token (ADR-0041).
+
+**Consequence.** A merged owner tool reaches a stale live profile within one deploy, and a
+repeated update writes nothing once the lists match. A profile whose filter cannot be parsed is
+an operator action, not a silent narrowing; a genuinely absent server tool still fails discovery
+(ADR-0049). The readback makes a partial or ignored write fail the deploy instead of letting the
+discovery check evaluate a filter nobody verified.
