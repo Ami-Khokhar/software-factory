@@ -9,6 +9,7 @@
   factory watch                           print each WorkItem that newly waits on you (Hermes cron)
   factory drive-queue                     the escalations Day Desk may still answer (its job's monitor)
   factory report                          the last 7 days in one message: autonomy, escalations, lessons
+  factory lessons-path                    the lessons file the service runs with, verified load
   factory retry  <owner/repo#n> <note>    try again; the note goes to the worker as a finding
   factory regate <owner/repo#n> <note>    the gate reviews again: your pushed fix, or the same head
   factory close  <owner/repo#n> <note>    give up on this WorkItem
@@ -374,6 +375,25 @@ def cmd_status(args):
               f"recurred on {effect['recurred']}{flag}")
 
 
+def lessons_path(env):
+    """The lessons file the service runs with: FACTORY_LESSONS_FILE, else next to repos.json."""
+    return Path(env.get("FACTORY_LESSONS_FILE", "") or CONFIG / "lessons.json")
+
+
+def cmd_lessons_path(_):
+    """Print the resolved lessons file and verify it loads. Reads no credential and runs no
+    command: the owner checks what the service would resolve before or after a service change."""
+    path = lessons_path(service_env())
+    real = Path(os.path.realpath(__file__)).parent.parent
+    sys.path.insert(0, str(real))  # the loader symlink runs from anywhere
+    import factory_mcp.lessons  # noqa: E402  here, so the script still loads without the checkout
+    try:
+        found = len(factory_mcp.lessons.load(path))
+    except (ValueError, OSError) as exc:
+        die(f"{path}: {exc}")
+    print(f"{path} ({found} {'lessons' if found != 1 else 'lesson'})")
+
+
 def cmd_resolve(resolution, args):
     if len(args) < 2:
         die(f"usage: factory {resolution} <owner/repo#n> <note>")
@@ -683,7 +703,7 @@ def cmd_update(args):
 def cmd_serve(_):
     env = service_env()
     env.setdefault("FACTORY_REPOS_FILE", str(CONFIG / "repos.json"))
-    env.setdefault("FACTORY_LESSONS_FILE", str(CONFIG / "lessons.json"))
+    env.setdefault("FACTORY_LESSONS_FILE", str(lessons_path(env)))
     if not env.get("FACTORY_MCP_TOKEN"):
         die(f"no FACTORY_MCP_TOKEN in {CONFIG / 'secrets'}")
     if not env.get("FACTORY_GITHUB_TOKEN"):
@@ -708,6 +728,8 @@ def main(argv):
         cmd_drive_queue(args)
     elif command == "report":
         cmd_report(args)
+    elif command == "lessons-path":
+        cmd_lessons_path(args)
     elif command in ("retry", "regate", "close"):
         cmd_resolve(command, args)
     elif command == "stop":

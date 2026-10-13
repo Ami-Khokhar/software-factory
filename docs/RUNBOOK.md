@@ -294,6 +294,15 @@ cannot choose the runner: the gate's verify of an iOS repo fails on Linux until 
 input for it (say `gates_runs_on`, default `ubuntu-latest`) and the repo's caller workflow passes
 `macos-latest`. That is a change in pr-gatekeeper, not in this repo, and it is not made yet.
 
+### Lessons: where they live and what the service resolves (ADR-0020)
+
+The lessons file the service runs with is `FACTORY_LESSONS_FILE`, or
+`~/.config/factory-mcp/lessons.json` when it is unset (`factory serve` sets it, next to the
+`repos.json` it sets). `factory lessons-path` prints that resolved path and verifies the file
+loads, reading no credential and running no command, so you can check a service change before
+or after it. A recurring gate finding becomes a lesson only when you approve it; the factory
+only presents the candidate.
+
 ### Lesson ranking: opt-in, off by default (ADR-0058)
 
 By default a WorkOrder carries the repo's approved lessons newest-first. Optionally, each dispatch

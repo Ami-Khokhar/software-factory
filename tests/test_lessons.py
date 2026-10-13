@@ -249,6 +249,53 @@ class ApproveRetireTest(unittest.TestCase):
             lessons.load(self.path)
 
 
+class ConfiguredPathTest(unittest.TestCase):
+    """Issue 204: the configured lessons path carries the exact approved lesson to the next
+    WorkOrder, and a recurring failure never becomes a lesson by itself."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.path = str(Path(self.dir.name) / "lessons.json")  # the resolved configured path
+        self.github, self.relay = FakeGitHub(), FakeRelay()
+        self.github.add_issue(REPO, 7)
+        self.foreman = Foreman(Store(":memory:"), self.github,
+                               Config(mcp_token="t", repos=frozenset({REPO}), lessons_file=self.path),
+                               self.relay)
+        for n in (3, 4):  # the gate blocked on FP on two WorkItems: FP becomes a candidate
+            wi = workitem(id=f"{REPO}#{n}", repo=REPO, issueNumber=n)
+            self.foreman.store.put(wi)
+            self.foreman.store.log("reconcile", {"headSha": f"c{n}", "from": "reviewing",
+                                                 "to": "changes_requested",
+                                                 "blocking": [{"fingerprint": FP,
+                                                               "problem": "No test for the error path"}]},
+                                   wi["id"])
+        self.tools = tools.build(self.foreman.store, self.foreman)
+        self.foreman.intake(REPO, 7)  # the next WorkOrder, after the lesson is approved
+
+    def approve(self):
+        return self.tools["factory_approve_lesson"].fn(
+            {"repo": REPO, "fingerprint": FP, "by": "amteshwar",
+             "text": "Every new endpoint carries a test for its 401 path."})
+
+    def test_approved_lesson_readback_then_the_next_workorder_carries_it(self):
+        entry = self.approve()
+        shown = self.tools["factory_lessons"].fn({"repo": REPO})
+        self.assertEqual(shown["lessons"], [entry])  # read back through the configured path
+        wi = self.foreman.tick(f"{REPO}#7")["workItem"]
+        self.assertEqual(wi["state"], "implementing")
+        order = self.foreman.store.workorders(f"{REPO}#7")[-1]
+        self.assertEqual(order["lessons"],
+                         [{"fingerprint": FP,
+                           "text": "Every new endpoint carries a test for its 401 path."}])
+
+    def test_a_recurring_failure_makes_no_lesson_by_itself(self):
+        shown = self.tools["factory_lessons"].fn({"repo": REPO})
+        self.assertEqual([c["fingerprint"] for c in shown["candidates"]], [FP])  # it recurs, reviewable
+        self.assertEqual(shown["lessons"], [])  # yet no lesson until the owner approves one
+        self.assertFalse(Path(self.path).exists())  # the factory wrote nothing into the file
+
+
 class WorkOrderLessonsTest(unittest.TestCase):
     """Issue 3: the WorkOrder carries the repo's lessons to the worker."""
 
