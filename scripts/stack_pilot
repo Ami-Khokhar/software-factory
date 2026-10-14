@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""The guarded stacked-pull-request pilot (issue #227): policy and an isolated fixture, no dispatch.
+
+    python3 scripts/stack_pilot <workdir>
+
+It rehearses a two-layer stack — a parent branch and a dependent child branch — in bare
+repositories created under <workdir>. Nothing here touches production dispatch: the pilot stays
+`factory:proposed` until the owner approves it; the guard is ADR-0072
+docs/decisions.md and the specification in docs/stacked-pr-pilot.md. It reuses the factory's
+existing rules: one issue is one pull request measured against the gate's limits (AGENTS.md),
+the gate's squash merge and latest-review verdict, and the WorkOrder/Result `baseSha` pin.
+
+The policy is checksum- and verdict-driven:
+
+    Child dict: head (the sha to merge), base (the pinned parent sha), lines, files, verdict.
+    Parent dict: head (its live sha), merged (the sha it was squash-merged at), status
+    ("open", "merged", "failed", "cancelled"), lines, files, verdict.
+
+check_child returns one instruction: split, pause, stale, hold or merge. Sizes are
+advisory exactly as the gate measures them (ADR-0070): the file count splits a layer or stack,
+the 600-line target warns instead, never rejecting on line count alone.
+check_stack measures the integrated size of every layer that is still open.
+"""
+import os
+import subprocess
+import sys
+
+# The gate limits from the factory standard: one stack shares one budget.
+GATE_LIMITS = (600, 20)
+
+
+def warn_size(lines, files, limits):
+    """What the size rules say about one layer or one stack: the file count binds, the line
+    target is advisory (ADR-0070), as it is everywhere the factory measures a whole pull
+    request. Exceeding the target is reported, not rejected.
+    """
+    if files > limits[1]:
+        return f"{lines} lines in {files} files exceeds the {limits[1]}-file budget; split the issue"
+    if lines > limits[0]:
+        return (f"factory advisory: {lines} lines in {files} files, over the {limits[0]}-line "
+                "target; advisory, not a rejection (ADR-0070)")
+    return None
+
+
+def check_child(child, parent, limits=GATE_LIMITS):
+    """Decide what may happen to a child pull request, given its pinned parent."""
+    oversized = warn_size(child["lines"], child["files"], limits)
+    if oversized and "file budget" in oversized:
+        return {"action": "split", "reason": f"layer is {oversized}; split the issue"}
+    # A line-target exceedance is advisory (ADR-0070): the child proceeds under the same rules
+    # but carries the warning, exactly like the worker prints one.
+    note = {"warning": oversized} if oversized else {}
+    if parent["status"] in ("failed", "cancelled"):
+        return {"action": "pause",
+                "reason": f"parent is {parent['status']}; the child waits for the owner", **note}
+    if parent["status"] != "merged":
+        if child["base"] != parent["head"]:
+            return {"action": "stale",
+                    "reason": f"parent moved from {child['base']} to {parent['head']}; "
+                              "rebase and re-review", **note}
+        return {"action": "hold", "reason": "the parent gates first; merges go bottom-up", **note}
+    if child["base"] != parent["merged"]:
+        return {"action": "stale",
+                "reason": f"parent merged at {parent['merged']}, not the pinned {child['base']}; "
+                          "rebase and re-review", **note}
+    if child["verdict"] != "MERGE":
+        return {"action": "hold", "reason": f"gate verdict is {child['verdict']}, not MERGE", **note}
+    return {"action": "merge",
+            "reason": f"evidence fresh at base {child['base']} and verdict MERGE", **note}
+
+
+def check_stack(children, limits=GATE_LIMITS):
+    """The open layers together are measured like one pull request (AGENTS.md, rule 3): the
+    summed size carries warn_size's verdict, so the file count binds and the 600-line target
+    only warns (ADR-0070).
+    """
+    open_layers = [c for c in children if c["status"] != "merged"]
+    lines = sum(c["lines"] for c in open_layers)
+    files = sum(c["files"] for c in open_layers)
+    warning = warn_size(lines, files, limits)
+    if warning and "file budget" in warning:
+        return {"fits": False, "lines": lines, "files": files, "reason": warning}
+    fitting = "the open stack fits one pull request's budget"
+    return {"fits": True, "lines": lines, "files": files,
+            "reason": warning if warning else fitting}
+
+
+def repair(bare, branch, old_base, new_base, tmp):
+    """One sandboxed rebase repair: replay the layer past `old_base` onto `new_base`.
+
+    The repair happens in a throwaway clone, never in the worker's or the gate's checkout, and it
+    forces one branch forward. A stack layer that cannot rebase cleanly is reworked, not forced.
+    """
+    scene = os.path.join(tmp, "repair")
+    subprocess.run(["rm", "-rf", scene], check=True)
+    git("clone", "-q", "--no-local", bare, scene, cwd=tmp)
+    git("checkout", "-q", "-B", branch, f"origin/{branch}", cwd=scene)
+    rebase = subprocess.run(["git", "rebase", "--onto", new_base, f"{old_base[:7]}", branch],
+                            cwd=scene, check=False, capture_output=True, text=True,
+                            env=dict(os.environ, GIT_AUTHOR_NAME="stack-pilot",
+                                     GIT_AUTHOR_EMAIL="pilot@example.com",
+                                     GIT_COMMITTER_NAME="stack-pilot",
+                                     GIT_COMMITTER_EMAIL="pilot@example.com"))
+    if rebase.returncode != 0:
+        git("rebase", "--abort", cwd=scene)
+        raise SystemExit(f"repair: {branch} does not rebase cleanly onto {new_base}; "
+                         "rework the layer instead")
+    git("push", "--force", "-q", "origin", f"{branch}:{branch}", cwd=scene)
+    return git("rev-parse", f"refs/heads/{branch}", cwd=bare)
+
+
+def git(*args, cwd):
+    run = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
+                         env=dict(os.environ, GIT_AUTHOR_NAME="stack-pilot",
+                                  GIT_AUTHOR_EMAIL="pilot@example.com",
+                                  GIT_COMMITTER_NAME="stack-pilot",
+                                  GIT_COMMITTER_EMAIL="pilot@example.com"))
+    if run.returncode != 0:
+        raise SystemExit(f"git {' '.join(args)}: {run.stderr.strip()}")
+    return run.stdout.strip()
+
+
+def demo(tmp):
+    """Rehearse the two-layer stack and print what the policy does at each step."""
+    os.makedirs(tmp, exist_ok=True)
+    bare = os.path.join(tmp, "origin.git")
+    work = os.path.join(tmp, "work")
+    git("init", "-q", "--bare", "-b", "main", bare, cwd=tmp)
+    git("clone", "-q", bare, work, cwd=tmp)
+    with open(os.path.join(work, "base.txt"), "w") as f:
+        f.write("the shared base\n")
+    git("add", "base.txt", cwd=work)
+    git("commit", "-q", "-m", "initial", cwd=work)
+    git("push", "-q", "origin", "HEAD:main", cwd=work)
+
+    def infer(step, verdict):
+        state = verdict.get("action") or ("fits" if verdict.get("fits") else "split")
+        print(f"{step} -> {state}: {verdict['reason']}")
+
+    parent = {"head": None, "merged": None, "status": "open", "lines": 60, "files": 3,
+              "verdict": "MERGE"}
+    child = {"head": None, "base": None, "status": "open", "lines": 90, "files": 4,
+             "verdict": "MERGE"}
+
+    # Parent layer.
+    git("checkout", "-q", "-b", "stack/parent", cwd=work)
+    with open(os.path.join(work, "parent.txt"), "w") as f:
+        f.write("parent layer\n")
+    git("add", "parent.txt", cwd=work)
+    git("commit", "-q", "-m", "parent layer", cwd=work)
+    parent["head"] = git("rev-parse", "HEAD", cwd=work)
+
+    # Child layer, pinned to the parent's exact head.
+    git("checkout", "-q", "-b", "stack/child", cwd=work)
+    with open(os.path.join(work, "child.txt"), "w") as f:
+        f.write("child layer\n")
+    git("add", "child.txt", cwd=work)
+    git("commit", "-q", "-m", "child layer", cwd=work)
+    child["head"] = git("rev-parse", "HEAD", cwd=work)
+    child["base"] = parent["head"]
+    git("push", "-q", "origin", "stack/parent", "stack/child", cwd=work)
+
+    infer("fresh child under an open parent", check_child(child, parent))
+
+    # The parent changes: the child's evidence is now stale, and it repairs off-tree.
+    git("checkout", "-q", "stack/parent", cwd=work)
+    with open(os.path.join(work, "parent.txt"), "a") as f:
+        f.write("revision\n")
+    git("commit", "-aqm", "parent revision", cwd=work)
+    git("push", "-q", "origin", "stack/parent", cwd=work)
+    parent["head"] = git("rev-parse", "refs/heads/stack/parent", cwd=bare)
+    infer("child after the parent changed", check_child(child, parent))
+    child["head"] = repair(bare, "stack/child", child["base"], parent["head"], tmp)
+    child["base"] = parent["head"]
+    infer("child after the sandboxed repair", check_child(child, parent))
+
+    # A failed parent pauses the child; nothing of the child reaches main.
+    infer("child while the parent failed", check_child(child, {**parent, "status": "failed"}))
+
+    # The parent's gate merges it; the child re-runs on the squash sha, then merges bottom-up.
+    git("checkout", "-q", "--detach", "refs/remotes/origin/main", cwd=work)
+    git("merge", "-q", "--squash", "stack/parent", cwd=work)
+    git("commit", "-qm", "stack/parent: parent layer", cwd=work)
+    git("push", "-q", "origin", "HEAD:main", cwd=work)
+    parent.update(status="merged", merged=git("rev-parse", "refs/heads/main", cwd=bare))
+    infer("child once the parent merged", check_child(child, parent))
+    child["base"] = parent["merged"]
+    infer("child rebased onto the merged parent", check_child(child, parent))
+    infer("integrated stack size", check_stack([parent, child]))
+
+    git("checkout", "-q", "--detach", "refs/remotes/origin/main", cwd=work)
+    git("fetch", "-q", "origin", cwd=work)
+    git("merge", "-q", "--squash", "origin/stack/child", cwd=work)
+    git("commit", "-qm", "stack/child: child layer", cwd=work)
+    git("push", "-q", "origin", "HEAD:main", cwd=work)
+    child["status"] = "merged"
+    infer("the stack, with both layers merged", check_stack([parent, child]))
+    return 0
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        raise SystemExit(__doc__)
+    folder = sys.argv[1]
+    if not os.path.isdir(folder):
+        raise SystemExit(f"stack_pilot: {folder} must exist; it is a scratch directory")
+    sys.exit(demo(folder))
