@@ -179,6 +179,17 @@ class SetupMergeTest(unittest.TestCase):
         self.assertEqual(readback["merge_commit_sha"], MERGE)
         self.assertTrue(retried["alreadyMerged"])
 
+    def test_a_fresh_request_recovering_an_already_merged_setup_reads_it_back(self):
+        # The merge landed but the journal never heard of this request: it resumes, not errors.
+        pr = self.setup_pr()
+        self.green()
+        self.foreman.merge_setup_pr(REPO, "day-desk", "req-1")
+        for request_id in ("req-2", "req-2"):  # the fresh request, then its own retry
+            again = self.foreman.merge_setup_pr(REPO, "day-desk", request_id)
+            self.assertEqual((again["prNumber"], again["mergeSha"], again["alreadyMerged"]),
+                             (pr["prNumber"], MERGE, True))
+            self.assertEqual(self.foreman.store.request(request_id)["phase"], "done")
+
     def test_revocation_takes_the_authorization_back_and_is_audited(self):
         self.setup_pr()
         self.green()

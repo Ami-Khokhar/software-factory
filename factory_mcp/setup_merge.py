@@ -122,6 +122,11 @@ def merge(store, github, repo, by, request_id):
         return _adopt(store, github, repo, by, request_id)  # a retry of a finished merge
     merged = _merged_setup(store, github, repo)
     if len(merged) == 1:  # an interrupted or ambiguous merge already went through
+        if request["phase"] == "started":  # a fresh request adopting the landed merge must
+            store.advance_request(request_id, "pushing")  # first pass through the journal, or
+            store.log("setup_merge_journalled", {"repo": repo, "requestId": request_id,  # its readback cannot reach done
+                                                 "prNumber": merged[0]["number"],
+                                                 "headSha": merged[0]["head"]["sha"]})
         return _readback(store, github, repo, merged[0]["number"], by, request_id, already=True)
     if len(merged) > 1:
         raise ToolError(f"{repo} shows several merged setup PRs for its approved branch; a person "
