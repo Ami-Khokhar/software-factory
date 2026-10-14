@@ -1,7 +1,10 @@
 """worker/runner.py: the trusted half of a worker. Real git, a scripted harness, no Docker."""
+import base64
+import hashlib
 import io
 import json
 import os
+import zipfile
 import shutil
 import subprocess
 import sys
@@ -664,6 +667,81 @@ class SandboxTest(unittest.TestCase):
         for item in ("/private/credential-0:/home/node/.pi/agent", "PI_CODING_AGENT_DIR=/home/node/.pi/agent"):
             self.assertIn(item, harness)
             self.assertNotIn(item, collect)
+
+
+class ImageEnvTest(unittest.TestCase):
+    """The pip pressure the image ENV puts on a pass (worker #266). A chained approved verify
+    that builds a virtualenv dies when the image forces pip user mode onto venv pip, and pip
+    has no env value that cancels the flag, so the image ENV is the whole lever."""
+
+    REPO_ROOT = Path(__file__).resolve().parent.parent
+
+    @classmethod
+    def setUpClass(cls):
+        """The image ENV pairs, read like Docker reads a bare keyword line."""
+        folded = (cls.REPO_ROOT / "worker" / "Dockerfile").read_text().replace("\\\n", " ")
+        line = [l for l in folded.splitlines() if l.startswith("ENV ")][0]
+        cls.image_env = dict(pair.split("=", 1) for pair in line[len("ENV "):].split())
+
+    def setUp(self):
+        """A pass-shaped env (the image ENV over a clean base) and a wheel pip installs offline."""
+        self.base = tempfile.TemporaryDirectory()
+        self.addCleanup(self.base.cleanup)
+        root = Path(self.base.name)
+        pkg = root / "tinypkg"
+        (pkg / "tinypkg").mkdir(parents=True)
+        (pkg / "tinypkg" / "cli.py").write_text("def main():\n    print('tinypkg works')\n")
+        dist = pkg / "tinypkg-1.0.dist-info"
+        dist.mkdir()
+        (dist / "METADATA").write_text("Metadata-Version: 2.1\nName: tinypkg\nVersion: 1.0\n")
+        (dist / "WHEEL").write_text("Wheel-Version: 1.0\nTag: py3-none-any\nRoot-Is-Purelib: true\n")
+        (dist / "entry_points.txt").write_text("[console_scripts]\ntinypkg = tinypkg.cli:main\n")
+        rows = [("tinypkg/__init__.py", ""),
+                ("tinypkg/cli.py", (pkg / "tinypkg" / "cli.py").read_text())]
+        rows += [(str(p.relative_to(pkg)), p.read_text()) for p in sorted(dist.iterdir()) if p.is_file()]
+        wheel = zipfile.ZipFile(pkg / "tinypkg-1.0-py3-none-any.whl", "w")
+        hashes = {}
+        for name, text in rows:
+            wheel.writestr(name, text)
+            hashes[name] = base64.urlsafe_b64encode(hashlib.sha256(text.encode()).digest()).rstrip(b"=").decode()
+        record = "\n".join(f"{name},sha256={hashes[name]},0" for name, _ in rows) \
+                 + "\ntinypkg-1.0.dist-info/RECORD,,\n"
+        wheel.writestr("tinypkg-1.0.dist-info/RECORD", record)
+        wheel.close()
+        self.wheel = pkg / "tinypkg-1.0-py3-none-any.whl"
+        self.env = dict(self.image_env, HOME=str(root), LANG="C.UTF-8",
+                        PATH=os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"))
+
+    def pip(self, *args, extra_env=None):
+        """pip as the pass runs it: the image ENV over its env, from the pass's scratch Home."""
+        return subprocess.run(["python3", "-m", "pip", *args], env=dict(self.env, **(extra_env or {})),
+                              cwd=self.base.name, check=False, capture_output=True, text=True)
+
+    def test_the_image_env_forces_no_pip_user_mode(self):
+        self.assertNotIn("PIP_USER", self.image_env)
+
+    def test_the_image_env_lets_a_chained_venv_verify_install_and_run(self):
+        """The approved chained pattern: build a virtualenv, install through its interpreter,
+        run the package entrypoint it installs."""
+        steps = ["python3 -m venv .venv",
+                 f".venv/bin/python -m pip install --quiet --no-index --no-warn-script-location {self.wheel}",
+                 ".venv/bin/tinypkg"]
+        done = subprocess.run(["sh", "-c", "\n".join(steps)], env=self.env, cwd=self.base.name,
+                              check=False, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("tinypkg works", done.stdout)
+
+    def test_an_explicit_user_install_is_respected(self):
+        """An explicit user install keeps working without rewriting: pip does the ordinary
+        non-venv non-root install (it falls back to user site-packages on its own), so an
+        explicit one must stay explicit."""
+        user = self.base.name + "/userbase"
+        done = self.pip("install", "--quiet", "--no-index", "--user", "--no-warn-script-location",
+                        str(self.wheel), extra_env={"PYTHONUSERBASE": user})
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        entry = subprocess.run([f"{user}/bin/tinypkg"], env=dict(self.env, PYTHONUSERBASE=user),
+                               capture_output=True, text=True, check=False)
+        self.assertEqual((entry.returncode, entry.stdout.strip()), (0, "tinypkg works"))
 
 
 class EnsureDockerTest(unittest.TestCase):

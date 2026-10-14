@@ -132,7 +132,11 @@ which harness runs, with which model, and what it logs in with:
   and OpenCode.
 
 The harness, patch collection, and verification run as the same host UID with a writable
-container-only HOME (`/tmp/factory-home`). Build the image with
+container-only HOME (`/tmp/factory-home`). The image sets no `PIP_USER` (worker #266): a forced
+pip user mode reaches pip inside a virtualenv too, where an approved chained install like
+`python3 -m venv .venv && .venv/bin/python -m pip install -e . pytest` dies, so the image leaves
+pip to fall back to a user install for the ordinary non-venv non-root case. Do not re-add the
+flag (ADR-0073). Build the image with
 `docker build -t factory-worker:latest worker/`; `factory update` rebuilds it when
 `worker/Dockerfile` changes, and tags the new build `latest` only after `python`, `python3` and
 `git` run in it. Hold point (ADR-0052, amended by ADR-0055): rebuild it — or enable it at all —
