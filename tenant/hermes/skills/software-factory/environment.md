@@ -14,10 +14,14 @@ file in the repo `software-factory`.
 - Not installed: xcodegen, xcodebuild, Xcode, an iOS Simulator, Swift, Go, Rust, Java, a C
   compiler, Docker, a GPU driver. The list is "what the Dockerfile installs": a tool missing
   from it is missing in the pass.
-- `pip install` works in a pass (the Dockerfile sets `PIP_USER=1` and says verify may pip-install
-  freely). The runner sets no `--network` flag, so Docker's default network applies: outbound
-  access is expected but was not tested. The image has no apt access for the worker: it runs as a
-  non-root user and `--cap-drop ALL`, so a worker cannot `apt-get install` a missing tool.
+- `pip install` works in a pass, two ways. The image does not set `PIP_USER` (it was removed: the
+  forced flag reaches pip inside a virtualenv too, where user site-packages are not visible, so an
+  approved chained install like `python3 -m venv .venv && .venv/bin/python -m pip install -e .`
+  died) — pip gets `PIP_BREAK_SYSTEM_PACKAGES=1`, and for an ordinary non-venv install as the
+  non-root user it falls back to a user install on its own. The runner sets no `--network` flag, so
+  Docker's default network applies: outbound access is expected but was not tested. The image has
+  no apt access for the worker: it runs as a non-root user and `--cap-drop ALL`, so a worker
+  cannot `apt-get install` a missing tool.
 - The container has the checkout copy and a copy of the harness's model credential. It has no
   GitHub credential, no host file, no push (`worker/runner.py` docstring, ADR-0017). A repo
   secret, an API key for the repo's own services, a signing certificate or a database the verify

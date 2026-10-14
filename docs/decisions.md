@@ -1662,3 +1662,25 @@ merges, opens or dispatches anything.
 **Consequence.** No stacked behaviour is live. Later implementation arrives as separate reviewed
 issues that obey the existing limits, keeps the worker's credential isolation and never bypasses
 the gate as the only orchestrator of a bottom-up merge.
+
+## ADR-0073 — The worker image leaves pip's install location to pip
+
+**Context.** The worker image set `PIP_USER=1` so a pass could pip-install as its non-root user.
+The env value reaches pip inside a virtualenv too, and pip has no env value that cancels a
+boolean flag: an approved chained verify like `python3 -m venv .venv && .venv/bin/python -m pip
+install -e . pytest && .venv/bin/python -m pytest -q` died with "Can not perform a '--user'
+install", and no rewriting of the verify command by the runner or the issue can fix that. The
+env lives in `worker/Dockerfile`, so it is produced by the image only.
+
+**Decision.** The image sets no `PIP_USER`. Plain pip falls back to a user install on its own
+when system site-packages is not writable, which is the pass's ordinary non-venv non-root case,
+and an explicit `pip install --user` stays explicit. The image keeps
+`PIP_BREAK_SYSTEM_PACKAGES=1` and its other env unchanged. Rebuild the worker image after
+merging: until it is rebuilt, a pass keeps dying there. No consumer deploys first — the same
+image produces and consumes the env — but a repository whose approved virtualenv verify failed
+this way (self-maintaining-apis#2) stays blocked until the rebuilt image is live and a real pass
+has run its chained virtualenv install and tests.
+
+**Consequence.** Virtualenv installs and ordinary installs both work, no command is rewritten,
+and no run logs env values. A test reads the image ENV and runs the chained pattern offline, so
+re-adding the flag fails the gate.

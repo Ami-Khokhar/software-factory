@@ -33,7 +33,12 @@ RUN git config --system safe.directory '*' \
 
 USER node
 # The container is thrown away after each step, so a verify command may pip-install freely. No
-# bytecode, because `git add -A` would put the __pycache__ of a test run into the patch.
-ENV HOME=/home/node PI_OFFLINE=1 PI_TELEMETRY=0 PIP_BREAK_SYSTEM_PACKAGES=1 PIP_USER=1 \
+# forced pip user mode: PIP_USER=1 reaches pip inside a virtualenv too, where user site-packages
+# are not visible, so an approved chained install like `.venv/bin/python -m pip install -e .`
+# dies. pip alone falls back to a user install when system site-packages is not writable, which
+# is what the pass's non-root user runs as, so ordinary non-venv installs keep working. There is
+# no env-var way to cancel the flag, so the flag must not be set here. No bytecode, because
+# `git add -A` would put the __pycache__ of a test run into the patch.
+ENV HOME=/home/node PI_OFFLINE=1 PI_TELEMETRY=0 PIP_BREAK_SYSTEM_PACKAGES=1 \
     PYTHONDONTWRITEBYTECODE=1
 WORKDIR /work
