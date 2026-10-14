@@ -62,6 +62,13 @@ CREATE TABLE IF NOT EXISTS allowances (
   approved_by TEXT NOT NULL,
   approved_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS setup_merges (
+  repo TEXT PRIMARY KEY,
+  fingerprint TEXT NOT NULL,
+  verify TEXT NOT NULL,
+  approved_by TEXT NOT NULL,
+  approved_at TEXT NOT NULL
+);
 """
 # Migration 1: WorkItem fields the contract no longer has (#27).
 REMOVED_FIELDS = ("parentGoalId", "baseSha", "provider", "sessionHandle", "sessionNative", "sessionUrl")
@@ -97,7 +104,14 @@ def _migrate_5(wi):
     return wi
 
 
-MIGRATIONS = {1: _migrate_1, 2: _migrate_2, 3: _migrate_3, 4: _migrate_4, 5: _migrate_5}
+# Migration 6: the setup-merge authorization (#263). It adds only a new table, so no stored
+# WorkItem changes; the version bump marks stores that have the `setup_merges` table.
+def _migrate_6(wi):
+    return wi
+
+
+MIGRATIONS = {1: _migrate_1, 2: _migrate_2, 3: _migrate_3, 4: _migrate_4, 5: _migrate_5,
+              6: _migrate_6}
 
 
 def canonical_inputs(inputs):
@@ -191,6 +205,13 @@ class Store:
             rows = self._db.execute(
                 "SELECT at, action, detail FROM audit WHERE workitem_id = ? ORDER BY seq",
                 (workitem_id,)).fetchall()
+        return [{"at": at, "action": action, "detail": json.loads(detail)} for at, action, detail in rows]
+
+    def global_history(self):
+        """The audit rows with no WorkItem: the owner-tool trail, like a setup-merge grant."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT at, action, detail FROM audit WHERE workitem_id IS NULL ORDER BY seq").fetchall()
         return [{"at": at, "action": action, "detail": json.loads(detail)} for at, action, detail in rows]
 
     def acquire(self, workitem_id, holder, ttl=300):
@@ -383,6 +404,34 @@ class Store:
                              "AND released_at IS NULL", (now(), request_id))
             self._db.execute("INSERT INTO audit (at, workitem_id, action, detail) VALUES (?, NULL, ?, ?)",
                              (now(), "pause_released", json.dumps({"requestId": request_id}, sort_keys=True)))
+
+    def approve_setup_merge(self, repo, fingerprint, verify, approved_by):
+        """Record one owner authorization to merge this repo's setup PR unattended (#263). One row
+        per repo: a re-approval replaces the old one, and both the grant and the replacement land
+        in the audit, so every authorization is auditable. Revocation is explicit (revoke_setup_merge)."""
+        with self._lock:
+            self._db.execute("INSERT OR REPLACE INTO setup_merges VALUES (?, ?, ?, ?, ?)",
+                             (repo.lower(), fingerprint, verify or "", approved_by, now()))
+        self.log("setup_merge_authorized", {"repo": repo, "fingerprint": fingerprint, "by": approved_by})
+
+    def revoke_setup_merge(self, repo, revoked_by):
+        """Take an owner authorization back. Conflict when there is none. Revocation writesthe
+        audit before anything else may merge a setup PR again."""
+        with self._lock:
+            if not self._db.execute("SELECT 1 FROM setup_merges WHERE repo = ?",
+                                    (repo.lower(),)).fetchone():
+                raise Conflict(f"no setup-merge authorization for {repo!r} is approved")
+            self._db.execute("DELETE FROM setup_merges WHERE repo = ?", (repo.lower(),))
+        self.log("setup_merge_revoked", {"repo": repo, "by": revoked_by})
+
+    def setup_merge(self, repo):
+        """The approved setup-merge authorization for `repo`, or None. Lowercase: one row per repo."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT repo, fingerprint, verify, approved_by, approved_at FROM setup_merges "
+                "WHERE repo = ?", (repo.lower(),)).fetchone()
+        return (dict(zip(("repo", "fingerprint", "verify", "approvedBy", "approvedAt"), row))
+                if row else None)
 
     def approve_allowance(self, plan_id, actions, remaining, approved_by):
         """Record one owner approval of a plan recovery allowance (#239). One approval per plan id:

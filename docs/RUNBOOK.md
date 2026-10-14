@@ -215,6 +215,15 @@ the tool adds one commit with them to that PR and returns it as `updatedSha`. Wh
 or the secret statuses change, it rewrites the PR body to match (ADR-0023). It never force-pushes,
 and it refuses a repo with several open setup PRs: close all but one.
 
+The merge stays manual unless you grant it. To let Day Desk merge this repo's setup PR itself,
+say so to the owner's tool `factory_authorize_setup_merge` (with the verify command when the
+PR is made in place of `.github/pr-gatekeeper.json`): it pins the digest of exactly what you
+review and Day Desk may merge it unattended, with GitHub's checks reviewed first, and tells
+whether the repo's own checks pass once merged; it merges no other repository, path, or PR, and
+`factory_revoke_setup_merge` takes the authorization back. Without a grant, nothing merges
+without you (ADR-0074). Tell Day Desk to call `factory_repo_check` and only then to go on, after
+the merge:
+
 The tool also sets the gate's Actions secrets, so repo setup needs no secrets by hand (ADR-0022).
 Store each one once in your login Keychain; each command prompts for the value, so it stays out
 of your shell history:
@@ -631,7 +640,7 @@ deployment record stays where it was. Set the list by hand, then run `factory up
 again, which verifies it by readback and discovery:
 
 ```bash
-hermes -p day-desk config set mcp_servers.factory.tools.include '["factory_bootstrap_repo", "factory_add_repo", "factory_approve_lesson", "factory_retire_lesson", "factory_approve_plan_allowance"]'
+hermes -p day-desk config set mcp_servers.factory.tools.include '["factory_bootstrap_repo", "factory_add_repo", "factory_approve_lesson", "factory_retire_lesson", "factory_approve_plan_allowance", "factory_authorize_setup_merge", "factory_revoke_setup_merge"]'
 ```
 
 Keep the driving identity out of it: never add the approval tool, or any owner tool,

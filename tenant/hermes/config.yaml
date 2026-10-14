@@ -28,6 +28,8 @@ mcp_servers:
         - factory_approve_lesson
         - factory_retire_lesson
         - factory_approve_plan_allowance
+        - factory_authorize_setup_merge
+        - factory_revoke_setup_merge
 
 # Every toolset is on (ADR-0041). terminal, file and code_execution run in the Docker sandbox below;
 # browser and computer_use act on the host as the owner.
