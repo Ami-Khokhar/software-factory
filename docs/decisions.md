@@ -1644,3 +1644,21 @@ repeated update writes nothing once the lists match. A profile whose filter cann
 an operator action, not a silent narrowing; a genuinely absent server tool still fails discovery
 (ADR-0049). The readback makes a partial or ignored write fail the deploy instead of letting the
 discovery check evaluate a filter nobody verified.
+
+---
+
+## ADR-0072 — The stacked-PR pilot stays factory:proposed until the owner approves activation
+
+**Context.** Issue #227 asks for a guarded two-issue stacked-pull-request pilot after the recovery
+work is done, not broad stacked dispatch. Stacked layers touch the merge authority that ADR-0004
+gives pr-gatekeeper and the one-issue/one-PR identity that ADR-0002 gives every deliverable.
+
+**Decision.** The pilot lives in `scripts/stack_pilot` and `docs/stacked-pr-pilot.md` as a
+specification plus an isolated fixture. The issue stays `factory:proposed`. Activation requires
+evidence that the current recovery implementation, integrated verification and the agreed
+representative rollout are complete, plus the owner's explicit approval; nothing in the pilot
+merges, opens or dispatches anything.
+
+**Consequence.** No stacked behaviour is live. Later implementation arrives as separate reviewed
+issues that obey the existing limits, keeps the worker's credential isolation and never bypasses
+the gate as the only orchestrator of a bottom-up merge.
