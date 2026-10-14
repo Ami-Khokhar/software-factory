@@ -176,6 +176,12 @@ class GitHub:
         return self._request("POST", f"{self.api}/repos/{repo}/issues",
                              {"title": title, "body": body, "labels": labels})[0]
 
+    def merge_pull(self, repo, number, sha):
+        """Merge PR `number` with the API, naming `sha` so GitHub refuses when the head moved
+        between this call's earlier reads and the merge. Failures surface as GitHubError."""
+        return self._request("PUT", f"{self.api}/repos/{repo}/pulls/{number}/merge",
+                             {"sha": sha, "merge_method": "squash"})[0]
+
     def create_pull(self, repo, head, base, title, body):
         return self._request("POST", f"{self.api}/repos/{repo}/pulls",
                              {"head": head, "base": base, "title": title, "body": body})[0]

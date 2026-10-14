@@ -1684,3 +1684,34 @@ has run its chained virtualenv install and tests.
 **Consequence.** Virtualenv installs and ordinary installs both work, no command is rewritten,
 and no run logs env values. A test reads the image ENV and runs the chained pattern offline, so
 re-adding the flag fails the gate.
+
+---
+
+## ADR-0074 — A setup PR merges unattended only under an owner grant pinned to a digest
+
+**Context.** The owner asks that Day Desk can finish routine repository setup end to end (#263).
+The bootstrap tool opens a setup PR whose merge is manual, and rightly so: it installs controls,
+and ADR-0019 makes the owner the reviewer of it, while ADR-0004 gives pr-gatekeeper the merge
+authority over worker PRs only. Something wider — generic PR merging, shell merges, default-branch
+pushes — is out of bounds.
+
+**Decision.** An owner may grant, per repo and nothing else, an authorization to merge that
+repo's one canonical setup PR without watching it: `factory_authorize_setup_merge` pins the
+digest of the setup plan computed fresh from GitHub at approval time, including the verify
+command when the gate config is still missing. `factory_merge_setup_pr` (an agent tool, Day
+Desk's) then merges only the open setup PR whose branch, digest, base, head and per-file content
+still match that grant exactly, with a green pr-gatekeeper check run and no blocking verdict on
+that head; it calls GitHub's merge API with the verified head, so branch protection still applies
+at GitHub, journals the request by `requestId` so a retry reconciles the exact same PR and never
+duplicates one, and reads the merged pull with its merge commit back before it reports whether
+the repo's checks pass. Any difference — moved base or head, changed verify command or control
+content, an added code path, missing, pending or failed checks — refuses before any merge call;
+a refused or unresolved merge calls GitHub's API and still leaves the PR open, and a merge call
+that heard no answer is resumed, not repeated blind. The grant is audited on both ends and
+revoked by `factory_revoke_setup_merge`. A repo with no grant keeps the manual merge.
+
+**Consequence.** Setup PRs can complete without the owner in the loop, exactly where and when the
+owner granted it, and both normal-PR merging, the worker sandbox and the repo's own branch
+protection stay untouched. Readiness is a readback fact, so Day Desk never dispatches against an
+incomplete setup; whether it may drive this path at all stays the deployment's decision, not the
+model's.

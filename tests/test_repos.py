@@ -178,7 +178,8 @@ class RepoCheckTest(unittest.TestCase):
                           FakeRelay())
         found = tools.build(foreman.store, foreman)
         self.assertEqual({key: value for key, value in found["factory_repo_check"].fn({"repo": REPO}).items()
-                          if key != "checks"}, {"repo": REPO, "enabled": True, "ready": True})
+                          if key != "checks"}, {"repo": REPO, "enabled": True, "ready": True,
+                                                 "setupMergeAuthorized": False})
         other = found["factory_repo_check"].fn({"repo": "o/other"})
         self.assertEqual((other["enabled"], other["ready"]), (False, False))
         for name in ("o/r/../x", "o/..", "../r", "o/."):  # a checkout path must stay under its root

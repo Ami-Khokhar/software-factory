@@ -10,7 +10,7 @@ from .mcp import Tool, ToolError
 AGENT_TOOLS = frozenset({"factory_status", "factory_repo_check", "factory_lessons", "factory_report",
                          "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
                          "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
-                         "factory_use_allowance",
+                         "factory_use_allowance", "factory_merge_setup_pr",
                          "factory_docker_status", "factory_docker_control"})
 WAITING = ("human_waiting", "blocked")
 
@@ -65,7 +65,8 @@ def build(store, foreman, agent=False):
             raise ToolError(f"{repo!r} is not a repo name in the form owner/repo")
         checks = repos.check(foreman.github, repo)
         return {"repo": repo, "enabled": foreman.config.listed(repo) is not None,
-                "ready": all(c["ok"] for c in checks), "checks": checks}
+                "ready": all(c["ok"] for c in checks), "checks": checks,
+                "setupMergeAuthorized": foreman.store.setup_merge(repo) is not None}
 
     def show_lessons(args):
         repo = args["repo"]
@@ -137,6 +138,43 @@ def build(store, foreman, agent=False):
                              "verify": {"type": "string", "description": "repo test command, if gate config is missing"},
                              "by": {"type": "string", "minLength": 1, "description": "who approved the setup PR"}}},
              "write", lambda args: foreman.bootstrap_repo(args["repo"], args.get("verify"), args["by"])),
+        Tool("factory_authorize_setup_merge",
+             "An owner's explicit grant that this repo's one canonical setup PR may merge without a "
+             "person (ADR-0074): it pins a digest of exactly what a person would review — the "
+             "missing gate files and factory-standard block, plus the verify command when the gate "
+             "config is missing. One authorization per repo; a re-approval for a changed plan "
+             "replaces it, every change lands in the audit, and factory_revoke_setup_merge takes it "
+             "back. It merges nothing. Repos without it still merge their setup PR by hand.",
+             {"type": "object", "required": ["repo", "by"], "additionalProperties": False,
+              "properties": {"repo": {"type": "string", "description": "owner/repo"},
+                             "by": {"type": "string", "minLength": 1, "description": "who grants it"},
+                             "verify": {"type": "string", "minLength": 1,
+                                        "description": "repo test command, when the repo lacks .github/pr-gatekeeper.json"}}},
+             "write", lambda args: foreman.authorize_setup_merge(args["repo"], args.get("verify"), args["by"])),
+        Tool("factory_revoke_setup_merge",
+             "An owner's no: takes the setup-merge authorization for a repo away, so Day Desk can "
+             "no longer merge its setup PR. Auditable, and idempotent only in that revoking an "
+             "absent authorization is refused.",
+             {"type": "object", "required": ["repo", "by"], "additionalProperties": False,
+              "properties": {"repo": {"type": "string", "description": "owner/repo"},
+                             "by": {"type": "string", "minLength": 1, "description": "who revokes it"}}},
+             "write", lambda args: foreman.revoke_setup_merge(args["repo"], args["by"])),
+        Tool("factory_merge_setup_pr",
+             "Day Desk's guarded merge of a repo's owner-authorized canonical setup PR (ADR-0074). "
+             "Refuses unless the owner granted it, the open setup PR matches the approved setup "
+             "exactly (paths, per-file content, default-branch base, live head), and the gate's "
+             "pr-gatekeeper check on the head succeeded with no blocking verdict; GitHub's own "
+             "branch protection still applies at the merge. Journalled by requestId: an "
+             "interrupted or ambiguous merge is re-run and reconciles the same PR, reads the "
+             "merged commit back and reports whether the repo's checks pass now, so nothing is "
+             "dispatched against an incomplete setup. Merges only that one PR.",
+             {"type": "object", "required": ["repo", "by", "requestId"], "additionalProperties": False,
+              "properties": {"repo": {"type": "string", "description": "owner/repo"},
+                             "by": {"type": "string", "minLength": 1,
+                                    "description": "who answers for this merge in the audit"},
+                             "requestId": {"type": "string", "minLength": 1,
+                                           "description": "stable ID for the request; every retry carries it"}}},
+             "write", lambda args: foreman.merge_setup_pr(args["repo"], args["by"], args["requestId"])),
         Tool("factory_intake",
              "Create a WorkItem from an open GitHub issue in an allowlisted repo. The issue needs an "
              "'## Acceptance' list of '- <claim> — done when: <check>' bullets. Idempotent.",

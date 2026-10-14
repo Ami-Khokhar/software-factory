@@ -7,7 +7,8 @@ import time
 import threading
 import uuid
 
-from . import diagnostics, documents, gate_secrets, jev_rank, lessons, patches, repos, routing, workitem
+from . import (diagnostics, documents, gate_secrets, jev_rank, lessons, patches, repos, routing,
+               setup_merge, workitem)
 from .github import GitHubError
 from .mcp import ToolError
 from .relay import RelayError
@@ -17,7 +18,7 @@ from .verdict import blocking
 # States that need a person. Entering one posts a comment on the issue, so the owner hears of it.
 ATTENTION = ("human_waiting", "blocked", "exhausted")
 WORKING = ("dispatching", "implementing")
-BOOTSTRAP_PREFIX = "factory-bootstrap/"
+from .setup_merge import BOOTSTRAP_PREFIX
 MAX_PLAN_ISSUES = 10  # one approval covers this many issues at most (ADR-0024)
 REGATE_MARKER = re.compile(r"<!-- factory regate (\d+) -->")
 # The plan recovery allowance (#239): what one owner approval covers, and how far it reaches.
@@ -892,6 +893,38 @@ class Foreman:
                                remaining=spent["remaining"])
         finally:
             self.store.release(workitem_id, self.holder)
+
+    def authorize_setup_merge(self, repo, verify, by):
+        """The owner's explicit grant that this repo's canonical setup PR may merge without a
+        person (ADR-0074): it pins the plan's digest, computed from GitHub now, and the verify
+        command when the gate config is still missing. One row per repo; re-approving for a
+        changed plan replaces the row, and both land in the audit. Revoking is explicit."""
+        if not all(isinstance(value, str) and value.strip() for value in (repo, by)):
+            raise ToolError("authorizing a setup merge needs the repo and who grants it")
+        try:
+            plan = repos.bootstrap_plan(self.github, repo, verify)
+        except ValueError as exc:
+            raise ToolError(str(exc)) from None
+        self.store.approve_setup_merge(plan["repo"], plan["fingerprint"], (verify or "").strip(), by)
+        return {"repo": plan["repo"], "fingerprint": plan["fingerprint"], "authorizedBy": by,
+                "changedPaths": sorted(plan["files"])}
+
+    def revoke_setup_merge(self, repo, by):
+        """An owner's no: the factory cannot merge this repo's setup PR again until it is granted."""
+        if not all(isinstance(value, str) and value.strip() for value in (repo, by)):
+            raise ToolError("revoking a setup merge needs the repo and who revokes it")
+        try:
+            self.store.revoke_setup_merge(repo, by)
+        except Conflict as exc:
+            raise ToolError(str(exc)) from None
+        return {"repo": repo, "authorized": False}
+
+    def merge_setup_pr(self, repo, by, request_id):
+        """The one guarded merge of the authorized setup PR; see factory_mcp.setup_merge (ADR-0074)."""
+        if not all(isinstance(value, str) and value.strip() for value in (repo, by, request_id)):
+            raise ToolError("merging a setup PR needs the repo, who answers for the merge and a "
+                            "requestId, so an interrupted merge never merges twice")
+        return setup_merge.merge(self.store, self.github, repo, by, request_id)
 
     def _safety_stop(self, wi):
         """The safety stop this WorkItem's escalation names (ADR-0007's risk classes and the guarded

@@ -29,6 +29,7 @@ class FakeGitHub:
     """In-memory GitHub with the same methods as factory_mcp.github.GitHub."""
 
     def __init__(self):
+        self.on_merge = None  # a test's stand-in for the content a merge puts on the default branch
         self.issues, self.pulls, self.issue_comments, self.runs = {}, [], {}, {}
         self.workflow_run_list = {}  # (repo, sha) -> the gate's workflow runs, newest first
         self.posted = []  # (repo, number, body) of every comment the Foreman wrote
@@ -39,6 +40,7 @@ class FakeGitHub:
         self.labelled = []  # (repo, number, labels) of every label the Foreman added to an issue
         self.logs, self.deleted = {}, []  # run id -> failed job log; (repo, branch) of each branch deleted
         self.commits = {}  # (repo, sha) -> GitHub's commit; any other commit is a person's push
+        self.blocked = False  # when True, merge_pull refuses as branch protection does
 
     def add_issue(self, repo, number, labels=("factory:ready",), body=ISSUE_BODY, state="open", author=None):
         self.issues[(repo, number)] = {"number": number, "title": f"Goal {number}", "body": body,
@@ -189,6 +191,20 @@ class FakeGitHub:
         self.add_pr(repo, number, head, self.branches[(repo, head)])
         self.pulls[-1].update(title=title, body=body)
         return self.pulls[-1]
+
+    def merge_pull(self, repo, number, sha):
+        """The merge API with its optimistic head check: a moved head or a protected-branch
+        denial is lore GitHub returns 405. On success the PR reads back merged."""
+        pr = self.pull(repo, number)
+        if self.blocked and not pr.get("merged_at"):
+            raise GitHubError(405, "not allowed: changes must be made through a pull request")
+        if self.branches.get((repo, pr["head"]["ref"])) != sha:
+            raise GitHubError(405, "Pull Request is not mergeable: the head changed")
+        pr.update(merged=True, merged_at="2026-09-24T03:00:00Z", merge_commit_sha="merge-sha",
+                  state="closed")
+        if self.on_merge:
+            self.on_merge()
+        return {"sha": "merge-sha", "merged": True}
 
     def edit_pull(self, repo, number, body):
         pr = next(p for p in self.pulls if p["repo"] == repo and p["number"] == number)
