@@ -16,8 +16,10 @@ The policy is checksum- and verdict-driven:
     Parent dict: head (its live sha), merged (the sha it was squash-merged at), status
     ("open", "merged", "failed", "cancelled"), lines, files, verdict.
 
-check_child returns one instruction: split, pause, stale, hold or merge.
-check_stack checks the integrated size of every layer that is still open.
+check_child returns one instruction: split, pause, stale, hold or merge. Sizes are
+advisory exactly as the gate measures them (ADR-0070): the file count splits a layer or stack,
+the 600-line target warns instead, never rejecting on line count alone.
+check_stack measures the integrated size of every layer that is still open.
 """
 import os
 import subprocess
@@ -27,42 +29,60 @@ import sys
 GATE_LIMITS = (600, 20)
 
 
+def warn_size(lines, files, limits):
+    """What the size rules say about one layer or one stack: the file count binds, the line
+    target is advisory (ADR-0070), as it is everywhere the factory measures a whole pull
+    request. Exceeding the target is reported, not rejected.
+    """
+    if files > limits[1]:
+        return f"{lines} lines in {files} files exceeds the {limits[1]}-file budget; split the issue"
+    if lines > limits[0]:
+        return (f"factory advisory: {lines} lines in {files} files, over the {limits[0]}-line "
+                "target; advisory, not a rejection (ADR-0070)")
+    return None
+
+
 def check_child(child, parent, limits=GATE_LIMITS):
     """Decide what may happen to a child pull request, given its pinned parent."""
-    if child["lines"] > limits[0] or child["files"] > limits[1]:
-        return {"action": "split",
-                "reason": f"layer is {child['lines']} lines and {child['files']} files, "
-                          f"over the {limits[0]}-line, {limits[1]}-file limits; split the issue"}
+    oversized = warn_size(child["lines"], child["files"], limits)
+    if oversized and "file budget" in oversized:
+        return {"action": "split", "reason": f"layer is {oversized}; split the issue"}
+    # A line-target exceedance is advisory (ADR-0070): the child proceeds under the same rules
+    # but carries the warning, exactly like the worker prints one.
+    note = {"warning": oversized} if oversized else {}
     if parent["status"] in ("failed", "cancelled"):
         return {"action": "pause",
-                "reason": f"parent is {parent['status']}; the child waits for the owner"}
+                "reason": f"parent is {parent['status']}; the child waits for the owner", **note}
     if parent["status"] != "merged":
         if child["base"] != parent["head"]:
             return {"action": "stale",
                     "reason": f"parent moved from {child['base']} to {parent['head']}; "
-                              "rebase and re-review"}
-        return {"action": "hold", "reason": "the parent gates first; merges go bottom-up"}
+                              "rebase and re-review", **note}
+        return {"action": "hold", "reason": "the parent gates first; merges go bottom-up", **note}
     if child["base"] != parent["merged"]:
         return {"action": "stale",
                 "reason": f"parent merged at {parent['merged']}, not the pinned {child['base']}; "
-                          "rebase and re-review"}
+                          "rebase and re-review", **note}
     if child["verdict"] != "MERGE":
-        return {"action": "hold", "reason": f"gate verdict is {child['verdict']}, not MERGE"}
+        return {"action": "hold", "reason": f"gate verdict is {child['verdict']}, not MERGE", **note}
     return {"action": "merge",
-            "reason": f"evidence fresh at base {child['base']} and verdict MERGE"}
+            "reason": f"evidence fresh at base {child['base']} and verdict MERGE", **note}
 
 
 def check_stack(children, limits=GATE_LIMITS):
-    """The integrated stack obeys the same limits as one pull request (AGENTS.md)."""
+    """The open layers together are measured like one pull request (AGENTS.md, rule 3): the
+    summed size carries warn_size's verdict, so the file count binds and the 600-line target
+    only warns (ADR-0070).
+    """
     open_layers = [c for c in children if c["status"] != "merged"]
     lines = sum(c["lines"] for c in open_layers)
     files = sum(c["files"] for c in open_layers)
-    if lines > limits[0] or files > limits[1]:
-        return {"fits": False, "lines": lines, "files": files,
-                "reason": f"the open stack is {lines} lines and {files} files, over the "
-                          f"{limits[0]}-line, {limits[1]}-file budget; split a layer"}
+    warning = warn_size(lines, files, limits)
+    if warning and "file budget" in warning:
+        return {"fits": False, "lines": lines, "files": files, "reason": warning}
+    fitting = "the open stack fits one pull request's budget"
     return {"fits": True, "lines": lines, "files": files,
-            "reason": "the open stack fits one pull request's budget"}
+            "reason": warning if warning else fitting}
 
 
 def repair(bare, branch, old_base, new_base, tmp):

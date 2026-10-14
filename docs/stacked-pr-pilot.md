@@ -25,10 +25,12 @@ The pilot reuses what the factory already has and adds no orchestration framewor
    base, like `baseSha` is today. A child is never built on "~the branch".
 2. **Per-layer size and evidence.** Each layer satisfies the full one-issue rules from
    `AGENTS.md` — separately measured at `git diff --shortstat` from its own merge base, gate
-   review on its own pull request. The standard's 600 lines stay advisory (ADR-0070).
+   review on its own pull request. The standard's 600 lines stay advisory (ADR-0070), as they do
+for the whole pull request: no consumer rejects on line count alone.
 3. **Integrated size and verification.** The open layers together are measured like one pull
-   request (`pilot.check_stack`): the sum must fit the 600-line, 20-file budget, and the whole
-   stack is verified once integrated, not layer by layer only.
+   request (`pilot.check_stack`): the summed line total is advisory against the 600-line target,
+   exactly as for a single pull request (ADR-0070), while the summed file count binds the 20-file
+   budget, and the whole stack is verified once integrated, not layer by layer only.
 4. **Stale evidence on parent change.** If the parent's live head differs from the child's pin,
    or the parent merges at a squash sha different from the child's pin, the child's review
    evidence is stale (`pilot.check_child` → `stale`): the child is rebased and re-reviewed before

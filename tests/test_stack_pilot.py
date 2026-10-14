@@ -29,10 +29,24 @@ class PolicyTest(unittest.TestCase):
     def test_a_fresh_child_under_an_open_parent_waits_for_the_parent(self):
         self.assertEqual(pilot.check_child(child(), parent())["action"], "hold")
 
-    def test_a_child_over_the_one_issue_limits_is_split_before_anything_else(self):
-        verdict = pilot.check_child(child(lines=601), parent(status="failed"))
+    def test_a_child_over_the_file_count_is_split_before_anything_else(self):
+        verdict = pilot.check_child(child(files=21), parent(status="failed"))
         self.assertEqual(verdict["action"], "split")
-        self.assertIn("601 lines", verdict["reason"])
+        self.assertIn("21 files", verdict["reason"])
+
+    def test_a_child_over_the_600_line_target_warns_and_keeps_going(self):
+        # The line target is advisory everywhere the factory measures a whole pull request
+        # (ADR-0070), so the pilot must not split or pause on line count alone.
+        verdict = pilot.check_child(child(lines=601), parent())
+        self.assertEqual(verdict["action"], "hold")
+        self.assertIn("advisory", verdict["warning"])
+        verdict = pilot.check_child(child(lines=601),
+                                    parent(status="merged", merged="p" * 40))
+        self.assertEqual(verdict["action"], "merge")
+        self.assertIn("advisory", verdict["warning"])
+        verdict = pilot.check_child(child(lines=601), parent(status="failed"))
+        self.assertEqual(verdict["action"], "pause")
+        self.assertIn("advisory", verdict["warning"])
 
     def test_a_failed_parent_pauses_the_child(self):
         self.assertEqual(pilot.check_child(child(), parent(status="failed"))["action"], "pause")
@@ -63,21 +77,32 @@ class PolicyTest(unittest.TestCase):
         verdict = pilot.check_child(child(), parent(status="merged", merged="p" * 40))
         self.assertEqual(verdict["action"], "merge")
 
+    def test_a_merge_verdict_over_the_600_line_target_carries_the_advisory(self):
+        verdict = pilot.check_child(child(lines=601),
+                                    parent(status="merged", merged="p" * 40))
+        self.assertEqual(verdict["action"], "merge")
+        self.assertIn("advisory", verdict["warning"])
+
     def test_the_integrated_stack_fits_one_pull_request_budget(self):
         verdict = pilot.check_stack([parent(status="merged", merged="p" * 40), child()])
         self.assertTrue(verdict["fits"])
         self.assertEqual((verdict["lines"], verdict["files"]), (90, 4))
 
-    def test_an_open_stack_over_the_budget_is_split(self):
-        verdict = pilot.check_stack([parent(), child(lines=560)])
+    def test_an_open_stack_over_the_file_count_is_split(self):
+        verdict = pilot.check_stack([parent(), child(files=18)], limits=(600, 20))
         self.assertFalse(verdict["fits"])
-        self.assertIn("620 lines", verdict["reason"])
+        self.assertIn("file budget", verdict["reason"])
+
+    def test_an_open_stack_over_the_600_line_target_warns_but_fits(self):
+        verdict = pilot.check_stack([parent(), child(lines=560)])
+        self.assertTrue(verdict["fits"])
 
     def test_merged_layers_leave_the_budget_to_the_open_layers(self):
         verdict = pilot.check_stack([parent(status="merged", lines=60, merged="p" * 40),
-                                     child(files=17)])
+                                     child(lines=560, files=8)])
         self.assertTrue(verdict["fits"])
-        self.assertEqual((verdict["lines"], verdict["files"]), (90, 17))
+        self.assertEqual((verdict["lines"], verdict["files"]), (560, 8))
+        self.assertIn("budget", verdict["reason"])
 
 
 class FixtureTest(unittest.TestCase):
