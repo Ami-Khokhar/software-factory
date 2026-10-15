@@ -509,8 +509,7 @@ class Foreman:
 
     @staticmethod
     def _attempt_findings(wi):
-        attempts = wi.get("attempts") or []
-        return [{"fingerprint": "previous-attempt", "problem": attempts[-1]}] if attempts else []
+        return diagnostics.attempt_findings(wi.get("attempts") or [])
 
     def _order(self, wi):
         return next(o for o in self.store.workorders(wi["id"]) if o["id"] == wi["activeWorkOrderId"])

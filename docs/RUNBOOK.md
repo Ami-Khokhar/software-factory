@@ -564,9 +564,12 @@ and that the `factory-update` job names: `/usr/bin/python3 -m pip install -r req
 - **Blocked: each attempt ran out of time.** A pass that ran out of time is not by itself the issue
   being too big: the cause stays unknown until a `Result.diagnostics` phase names it (ADR-0050).
   factory_status shows each attempt's cause — checkout or setup, harness timeout, empty patch,
-  failing test, or none — with a redacted, bounded context. Retry for a cause a retry can fix, and
-  ask Day Desk to split only when the cause is scope (a harness timeout that reached the budget) and
-  the issue reads like more than one pass holds; a timed-out pass keeps none of its work.
+  failing test, or none — with a redacted, bounded context. A verification failure is the runner's
+  post-harness run of the gate's `verify`, not a test the harness chose to run in its own session,
+  and its bounded digest of failing/error test identities and tracebacks is carried beside a later
+  empty timeout, so the next pass still sees what to fix (ADR-0078). Retry for a cause a retry can
+  fix, and ask Day Desk to split only when the cause is scope (a harness timeout that reached the
+  budget) and the issue reads like more than one pass holds; a timed-out pass keeps none of its work.
 - **Stuck in `dispatching` with `relay 401`.** The relay refused factory-mcp's token. factory-mcp
   sends `AGENT_RELAY_TOKEN` from its settings or secrets, else `~/.config/agent-relay/token`;
   make it match the relay's (`AGENT_RELAY_TOKEN` in the relay's environment, else that file).

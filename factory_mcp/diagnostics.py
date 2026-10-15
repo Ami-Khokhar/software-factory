@@ -22,6 +22,10 @@ MAX_CONTEXT = 300
 TIME_SHARE = 0.9
 TIMEOUT_EXIT = 124
 SETUP_PHASES = ("checkout", "preparation", "environment setup")
+# The one cause the next pass must still see after a later pass with no actionable diagnosis: a
+# failing test names code to fix, and an intervening timeout must not bury it (#271).
+ACTIONABLE = "failing test"
+PREVIOUS_FINGERPRINT = "previous-attempt"
 
 # An environment value as an exporter writes it: a name in caps, then = and the value. Lowercase
 # word=word, as "(failures=2)" reads in a test tail, is not a value to hide.
@@ -96,6 +100,24 @@ def diagnose(order, result):
             return {"cause": None, "context": sanitize(diagnostics["tail"])}
         return {"cause": None, "context": ""}
     return {"cause": None, "context": ""}
+
+
+def attempt_findings(attempts):
+    """The `findingsToAddress` entries a retry carries: the latest attempt, and when that attempt is
+    not an actionable failing-test finding, the most recent earlier one that is, so an intervening
+    empty timeout still leaves the test failures a later pass has to fix. Chronological and bounded
+    by the attempts themselves (#271)."""
+    entries = [a for a in (attempts or []) if isinstance(a, str) and a]
+    if not entries:
+        return []
+    latest = entries[-1]
+    findings = [{"fingerprint": PREVIOUS_FINGERPRINT, "problem": latest}]
+    marker = f"diagnosis: {ACTIONABLE}:"
+    if marker not in latest:
+        carried = next((a for a in reversed(entries[:-1]) if marker in a), None)
+        if carried and carried != latest:
+            findings.insert(0, {"fingerprint": PREVIOUS_FINGERPRINT, "problem": carried})
+    return findings
 
 
 def environment_fault(cause):

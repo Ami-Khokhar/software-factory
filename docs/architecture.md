@@ -77,7 +77,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/foreman.py` | The Foreman: intake, rebuild, tick, dispatch, poll a task, open a PR, and the person's acts (resolve, approve an issue, start a plan, add a repo, bootstrap a repo, approve or retire a lesson) |
 | `factory_mcp/workitem.py` | Intake from an issue, observing GitHub, and `reconcile`: the fact-driven half of the state machine |
 | `factory_mcp/documents.py` | WorkOrders (with the repo's lessons), the worker input, the Result check, the PR body |
-| `factory_mcp/diagnostics.py` | What a failed attempt means, read from the Result's optional diagnostics (ADR-0050): one evidence-backed cause, or an unknown one, with sanitized bounded context |
+| `factory_mcp/diagnostics.py` | What a failed attempt means, read from the Result's optional diagnostics (ADR-0050): one evidence-backed cause, or an unknown one, with sanitized bounded context. The next WorkOrder carries the latest attempt and, when that one is not actionable, the last failing-test finding an intervening timeout would otherwise bury (ADR-0078) |
 | `factory_mcp/verdict.py` | Reading the gate's verdict marker; finding fingerprints and blockers |
 | `factory_mcp/store.py` | SQLite: WorkItems with optimistic concurrency, WorkOrders, the durable request journal, pause barriers holding a recovery graph until released, the audit log, leases, migrations |
 | `factory_mcp/github.py` | The GitHub REST client |
@@ -187,6 +187,11 @@ The states are the enum in `schemas/workitem.schema.json`.
   follows — and checks an oversized one before the gate's `verify` command from the base commit runs
   in the same sandbox: over the file count it refuses the pass; over the line target it warns
   (advisory, ADR-0070) and continues. It then prints the Result as its last line.
+- The harness's own test runs are its session's business; the runner's `verification` phase is the
+  post-harness run of the same `verify` command the gate uses. When that verify fails, the runner
+  keeps a bounded digest of the failing/error test identities and a representative traceback line
+  each — not the deployment preamble at the head of the log — redacted and bounded, so the next
+  pass sees what to fix even after a later pass times out with no output (ADR-0078).
 - For a repo in `FACTORY_REMOTE_VERIFY_REPOS` the WorkOrder has `remoteVerify: true` and the runner
   skips that verify step: the Linux container cannot run it. factory-mcp pushes the patch to
   `factory-verify/<issue>-<n>`, where the repo's `factory-verify` workflow runs the same verify
