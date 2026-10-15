@@ -316,16 +316,23 @@ def build(store, foreman, agent=False):
              "each one. One approval per plan id; nothing unlimited. Safety stops (a HUMAN verdict, "
              "protected paths, access) and confirmed environment faults still need a person, and the "
              "per-item pass budget stays as it is.",
-             {"type": "object", "required": ["planId", "actions", "remaining", "by"],
+             {"type": "object", "required": ["planId", "actions", "remaining", "by", "repo"],
               "additionalProperties": False,
               "properties": {"planId": {"type": "string", "minLength": 1,
                                         "description": "the plan this allowance is bound to"},
                              "actions": {"type": "array", "minItems": 1, "uniqueItems": True,
                                          "items": {"enum": list(RECOVERY_ACTIONS)}},
                              "remaining": {"type": "integer", "minimum": 1, "maximum": MAX_ALLOWANCE},
-                             "by": {"type": "string", "minLength": 1, "description": "who approved"}}},
+                             "by": {"type": "string", "minLength": 1, "description": "who approved"},
+                             "repo": {"type": "string", "minLength": 1, "description":
+                                      "the repo the plan covers; no use spends outside it"},
+                             "items": {"type": "array", "minItems": 1, "uniqueItems": True,
+                                       "items": {"type": "string", "minLength": 1},
+                                       "description": "the exact WorkItem members of the plan, like "
+                                                      "[\"o/r#1\"]; omit for every WorkItem of repo"}}},
              "write", lambda args: foreman.approve_plan_allowance(
-                 args["planId"], args["actions"], args["remaining"], args["by"])),
+                 args["planId"], args["actions"], args["remaining"], args["by"], args["repo"],
+                 args.get("items"))),
         Tool("factory_use_allowance",
              "Day Desk's recovery decision inside the owner-approved plan allowance (ADR-0069): retry "
              "a waiting WorkItem on the decision evidence, without ownerAsked and without spending "

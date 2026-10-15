@@ -18,6 +18,7 @@ from tests.fakes import ISSUE_BODY, FakeGitHub, FakeRelay, workitem
 
 REPO, ORIGINAL, REPLACEMENT = "o/r", "o/r#201", 300
 PLAN = "plan/factory#239"
+SCOPE = {"repo": REPO, "items": []}
 
 
 class AllowanceTest(unittest.TestCase):
@@ -28,9 +29,10 @@ class AllowanceTest(unittest.TestCase):
         self.agent, self.owner = tools.build(self.store, self.foreman, agent=True), tools.build(self.store, self.foreman)
         self.store.put(workitem(state="blocked", blockedOn="verify exited 1"))
 
-    def approve(self, remaining=2, actions=("retry",), plan_id=PLAN):
+    def approve(self, remaining=2, actions=("retry",), plan_id=PLAN, **kw):
         return self.owner["factory_approve_plan_allowance"].fn(
-            {"planId": plan_id, "actions": list(actions), "remaining": remaining, "by": "Ami-Khokhar"})
+            {"planId": plan_id, "actions": list(actions), "remaining": remaining, "by": "Ami-Khokhar",
+             "repo": REPO, **kw})
 
     def allow(self):  # within one test, each subTest's use keeps its own plan id
         self.approve(remaining=1, plan_id=f"{PLAN}/{len(self.store.allowances()) + 1}")
@@ -45,21 +47,27 @@ class AllowanceTest(unittest.TestCase):
         """The owner approves once; a second approval of the same plan refuses, the remaining count
         survives a restart of the store, and status shows what was authorized."""
         approved = self.approve(remaining=2)
-        self.assertEqual(approved, {"planId": PLAN, "actions": ["retry"], "remaining": 2})
+        self.assertEqual(approved, {"planId": PLAN, "actions": ["retry"], "remaining": 2,
+                                    "scope": SCOPE})
         with self.assertRaisesRegex(ToolError, "already approved"):
             self.approve(remaining=5)
         self.assertEqual(self.store.allowance(PLAN)["remaining"], 2)
+        self.assertEqual(self.store.allowance(PLAN)["scope"], SCOPE)
         with tempfile.TemporaryDirectory() as dir:
             path = str(Path(dir) / "factory.sqlite3")
             durable = Store(path)
-            durable.approve_allowance(PLAN, ["retry"], 2, "Ami-Khokhar")
+            durable.approve_allowance(PLAN, ["retry"], 2, "Ami-Khokhar",
+                                      scope={"repo": REPO, "items": ["o/r#1"]})
             durable.close()
             reopened = Store(path)  # a fresh open of the same file after a restart
             self.assertEqual(reopened.allowance(PLAN)["remaining"], 2)
+            self.assertEqual(reopened.allowance(PLAN)["scope"],
+                             {"repo": REPO, "items": ["o/r#1"]})  # membership survives a restart
             reopened.close()
         summary = self.owner["factory_status"].fn({})["planAllowances"]
         self.assertEqual(summary, [{"planId": PLAN, "actions": ["retry"], "remaining": 2,
-                                    "approvedBy": "Ami-Khokhar", "approvedAt": summary[0]["approvedAt"]}])
+                                    "approvedBy": "Ami-Khokhar", "approvedAt": summary[0]["approvedAt"],
+                                    "scope": SCOPE}])
 
     def test_an_allowance_retry_moves_the_workitem_without_a_fresh_budget_or_ownerAsked(self):
         """Day Desk retries on the evidence; the per-item pass budget stays as it is, nothing marks
@@ -112,6 +120,66 @@ class AllowanceTest(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertEqual(Store(":memory:").allowance(PLAN), None)  # untouched stores stay untouched
         self.assertEqual(self.store.allowance(PLAN)["remaining"], 0)
+
+    def test_a_use_outside_the_approved_membership_refuses(self):
+        """The scope is enforced at the spend itself: a WorkItem of another repo, or one outside the
+        named exact members, nothing spends, nothing moves; an exact member of the same repo does."""
+        self.approve(remaining=1)  # repo-level: every WorkItem of o/r is a member
+        self.assertEqual(self.use()["workItem"]["state"], "ready")
+        self.approve(remaining=1, plan_id=f"{PLAN}/exact", items=[REPO + "#1"])
+        self.store.put(dict(self.store.get("o/r#1"), state="blocked", blockedOn="failing again"))
+        self.assertEqual(self.use(planId=f"{PLAN}/exact")["workItem"]["state"], "ready")
+        self.approve(remaining=1, plan_id=f"{PLAN}/other", items=["o/r#7"])
+        self.store.put(dict(self.store.get("o/r#1"), state="blocked", blockedOn="failing again"))
+        with self.assertRaisesRegex(ToolError, "covers members o/r#7, not 'o/r#1'"):
+            self.use(planId=f"{PLAN}/other", note="it is close, but not a member")
+        self.approve(remaining=1, plan_id=f"{PLAN}/far")
+        self.store.put(dict(self.store.get("o/r#1"), repo="other/repo", state="blocked",
+                            blockedOn="failing again"))
+        with self.assertRaisesRegex(ToolError, f"covers repo {REPO}"):
+            self.use(planId=f"{PLAN}/far")
+        self.assertEqual(self.store.allowance(f"{PLAN}/exact")["remaining"], 0)  # only members spent
+        self.assertEqual(self.store.allowance(f"{PLAN}/other")["remaining"], 1)
+        self.assertEqual(self.store.allowance(f"{PLAN}/far")["remaining"], 1)
+
+    def test_an_unscoped_legacy_allowance_refuses_by_default(self):
+        """An approval the older factory stored carries no membership, so nothing spends against it;
+        the explicit approved binding is a new scoped plan id, which then works."""
+        self.store.approve_allowance(PLAN, ["retry"], 1, "Ami-Khokhar")
+        self.assertIsNone(self.store.allowance(PLAN)["scope"])
+        with self.assertRaisesRegex(ToolError, "predates scoped membership"):
+            self.use()
+        self.assertEqual(self.store.get("o/r#1")["state"], "blocked")
+        self.assertEqual(self.store.allowance(PLAN)["remaining"], 1)  # nothing was charged
+        self.approve(remaining=1, plan_id=f"{PLAN}/scoped")  # the explicit approved binding
+        self.assertEqual(self.use(planId=f"{PLAN}/scoped")["workItem"]["state"], "ready")
+
+    def test_an_approval_names_the_repo_and_only_its_own_members(self):
+        with self.assertRaisesRegex(ToolError, "needs the repo the plan covers"):
+            self.approve(repo="")
+        with self.assertRaisesRegex(ToolError, "non-empty list"):
+            self.approve(items=[], plan_id=f"{PLAN}/empty")
+        with self.assertRaisesRegex(ToolError, "WorkItem id of " + REPO):
+            self.approve(items=["other/repo#1"], plan_id=f"{PLAN}/alien")
+        self.assertEqual(self.store.allowance(PLAN), None)  # a refused approval stores nothing
+
+    def test_a_spent_budget_refuses_before_any_allowance_use_or_state_mutation(self):
+        """An allowance recovers an attempt, never buys fresh budget: an item that used its passes
+        goes back to the owner, and the refusal happens before the count moves or the state does."""
+        foreman = Foreman(self.store, self.foreman.github,
+                          Config(mcp_token="t", repos=frozenset({REPO}), max_passes=2), FakeRelay())
+        agent = tools.build(self.store, foreman, agent=True)
+        for number in (1, 2):  # the item used its two passes; the store records the orders
+            self.store.save_workorder({"id": f"wo/{number}", "workItemId": "o/r#1",
+                                       "schemaVersion": "factory.workorder/v1"})
+        self.approve(remaining=1)
+        self.store.put(dict(self.store.get("o/r#1"), state="blocked", blockedOn="spent"))
+        with self.assertRaisesRegex(ToolError, "used its .* passes of budget"):
+            agent["factory_use_allowance"].fn(
+                {"id": "o/r#1", "planId": PLAN, "action": "retry", "note": "evidence",
+                 "by": "day-desk"})
+        self.assertEqual(self.store.allowance(PLAN)["remaining"], 1)
+        self.assertEqual(self.store.get("o/r#1")["state"], "blocked")  # nothing moved
 
     def test_a_safety_stop_needs_the_owner_and_spends_nothing(self):
         for blocked_on in ("pr-gatekeeper decided HUMAN; read the latest gate comment",
@@ -170,9 +238,15 @@ class AllowanceReplacementTest(unittest.TestCase):
         self.foreman.store.put(dict(self.foreman.store.get(ORIGINAL), state="human_waiting",
                                     blockedOn="two attempts failed"))
 
+    def approve(self, remaining=2, actions=("retry", "replace"), plan_id=PLAN, **kw):
+        return self.owner["factory_approve_plan_allowance"].fn(
+            {"planId": plan_id, "actions": list(actions), "remaining": remaining, "by": "Ami-Khokhar",
+             "repo": REPO, **kw})
+
     def test_day_desk_may_replace_open_issues_through_the_allowance(self):
         self.owner["factory_approve_plan_allowance"].fn(
-            {"planId": PLAN, "actions": ["retry", "replace"], "remaining": 2, "by": "Ami-Khokhar"})
+            {"planId": PLAN, "actions": ["retry", "replace"], "remaining": 2, "by": "Ami-Khokhar",
+             "repo": REPO})
         result = self.agent["factory_replace_issue"].fn(
             {"id": ORIGINAL, "replacements": [REPLACEMENT], "by": "day-desk",
              "note": "the owner's plan covers this; evidence: both attempts failed on the timeout",
@@ -186,7 +260,8 @@ class AllowanceReplacementTest(unittest.TestCase):
     def test_an_allowance_replacement_of_planned_scope_needs_the_owner(self):
         """Title-and-body items open new work the owner never saw: that changes the material scope."""
         self.owner["factory_approve_plan_allowance"].fn(
-            {"planId": PLAN, "actions": ["retry", "replace"], "remaining": 2, "by": "Ami-Khokhar"})
+            {"planId": PLAN, "actions": ["retry", "replace"], "remaining": 2, "by": "Ami-Khokhar",
+             "repo": REPO})
         with self.assertRaisesRegex(ToolError, "material scope"):
             self.agent["factory_replace_issue"].fn(
                 {"id": ORIGINAL, "replacements": [{"title": "Fresh", "body": ISSUE_BODY}],
@@ -199,7 +274,8 @@ class AllowanceReplacementTest(unittest.TestCase):
         """The first run spends one use and journals it; a replay, even one that refuses, resumes
         the journal and never pays a second use for the same request."""
         self.owner["factory_approve_plan_allowance"].fn(
-            {"planId": PLAN, "actions": ["replace"], "remaining": 1, "by": "Ami-Khokhar"})
+            {"planId": PLAN, "actions": ["replace"], "remaining": 1, "by": "Ami-Khokhar",
+             "repo": REPO})
         args = {"id": ORIGINAL, "replacements": [REPLACEMENT], "by": "day-desk",
                 "note": "evidence", "requestId": f"req/{ORIGINAL}", "allowancePlanId": PLAN}
         self.agent["factory_replace_issue"].fn(args)

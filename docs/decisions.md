@@ -1715,3 +1715,35 @@ owner granted it, and both normal-PR merging, the worker sandbox and the repo's 
 protection stay untouched. Readiness is a readback fact, so Day Desk never dispatches against an
 incomplete setup; whether it may drive this path at all stays the deployment's decision, not the
 model's.
+
+## ADR-0075 — A plan allowance spends only inside its approved membership, and never past a spent budget
+
+**Context.** ADR-0069 recorded a plan approval under an opaque store key the callers quote back:
+the approval named actions and a count, but never which repo or which WorkItems it covers. A
+spend checked the key, the action and the count, so an approval of one plan could quietly back
+recovery of an unrelated repo or a WorkItem the owner never approved, and `factory_use_allowance`
+charged the allowance and marked a WorkItem `ready` without checking the per-item pass budget —
+dispatch then stopped the item for spent budget while one allowance use was gone. Older stored
+approvals carry none of this membership at all.
+
+**Decision.** One approval per plan id names its membership explicitly: the repo the plan covers,
+and optionally the exact WorkItems it allows (`factory_approve_plan_allowance` now requires
+`repo`). The scope is stored with the approval, shown in `factory_status`, and checked at the
+spend itself, in the spend's transaction, for both routes — `factory_use_allowance` and
+`factory_replace_issue` with `allowancePlanId` — so a use of one WorkItem cannot pay for recovery
+outside the membership. A stored approval without a scope is legacy and refuses every spend until
+the owner approves a new scoped plan id: there is no default widening, no one silently aliased to
+a legacy record. `factory_use_allowance` also refuses, before the allowance count moves or any
+state does, a WorkItem that already used its pass budget: the allowance recovers an attempt,
+never buys fresh budget (ADR-0035), and an exhausted item goes back to the owner. A stores
+migration widens `allowances` with the nullable scope, writing nothing else and changing no
+WorkItem. Nothing in this adds a new grant, a wider include list or any live activation: the
+owner still approves every allowance live, per ADR-0069, and the broad chat permission is never
+read as fresh budget (ADR-0041, ADR-0046).
+
+**Consequence.** The owner approves a bounded policy that cannot reach beyond what they named, and
+Day Desk's spend refuses across repos or members instead of discovering it after the count. An
+allowance use is never swallowed by an item no pass could ever dispatch to; the refusal happens
+before the token, so a retry of the decision costs nothing already spent. Legacy rows fail loudly
+with what to do next, and the two-phase budget — allowance and per-item passes — keeps its old
+meaning on every other route.
