@@ -11,7 +11,8 @@ AGENT_TOOLS = frozenset({"factory_status", "factory_repo_check", "factory_lesson
                          "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
                          "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
                          "factory_use_allowance", "factory_merge_setup_pr",
-                         "factory_docker_status", "factory_docker_control"})
+                         "factory_docker_status", "factory_docker_control",
+                         "factory_set_worker", "factory_register_worker"})
 WAITING = ("human_waiting", "blocked")
 
 
@@ -257,6 +258,35 @@ def build(store, foreman, agent=False):
                              "by": {"type": "string", "minLength": 1, "description": "who asked"}}},
              "write", lambda args: {"workItem": foreman.set_dependencies(
                  args["id"], args["dependsOn"], args["by"], agent=agent)}),
+        Tool("factory_set_worker",
+             "Choose which sandboxed worker (and so which pinned model) runs a WorkItem: replaces its "
+             "issue's 'Worker: <id>' lines with the agent ids given, and [] falls back to "
+             "FACTORY_WORKERS order. Only agents in FACTORY_WORKERS may be named; an unknown id is "
+             "refused before the edit. Use it to steer work to a model on request. Refused while a "
+             "worker is running or on a closed, cancelled or exhausted WorkItem.",
+             {"type": "object", "required": ["id", "workers", "by"], "additionalProperties": False,
+              "properties": {"id": {"type": "string", "description": "owner/repo#issue"},
+                             "workers": {"type": "array",
+                                         "description": "relay agent ids from FACTORY_WORKERS, in "
+                                                        "order; [] for the default order",
+                                         "items": {"type": "string"}},
+                             "by": {"type": "string", "minLength": 1, "description": "who asked"}}},
+             "write", lambda args: {"workItem": foreman.set_worker(
+                 args["id"], args["workers"], args["by"], agent=agent)}),
+        Tool("factory_register_worker",
+             "Register a new sandboxed factory worker in the relay registry: it copies the approved "
+             "template's command, credential mount, env, cwd, allowedRoots, image and timeout, and "
+             "pins only the model given. It is NOT added to FACTORY_WORKERS, so it runs nothing "
+             "until the owner lists it there and its provider-health pilot is green. The registry is "
+             "the relay's agents.json; the relay is reloaded when it answers. Returns the new agent "
+             "and whether the running relay reloaded it.",
+             {"type": "object", "required": ["worker", "model", "by"], "additionalProperties": False,
+              "properties": {"worker": {"type": "string", "description": "new relay agent id"},
+                             "model": {"type": "string", "minLength": 1,
+                                       "description": "the model this worker pins"},
+                             "by": {"type": "string", "minLength": 1, "description": "who asked"}}},
+             "write", lambda args: foreman.register_worker(
+                 args["worker"], args["model"], args["by"], agent=agent)),
         Tool("factory_replace_issue",
              "The owner's replacement of a WorkItem that is waiting on recovery (human_waiting or "
              "blocked) with ordered "

@@ -57,3 +57,8 @@ class Relay:
     def get(self, task_id):
         """The task, or None when the relay no longer knows it (it keeps tasks in memory)."""
         return self._call("GET", f"/v1/tasks/{task_id}")
+
+    def reload(self):
+        """POST /v1/admin/reload: the relay re-reads agents.json, so a worker registered since it
+        started is discovered without a restart. Localhost-only in the relay."""
+        return self._call("POST", "/v1/admin/reload")

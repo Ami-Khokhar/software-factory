@@ -85,6 +85,16 @@ def with_dependencies(body, numbers):
     return "\n".join(lines) + ("\n\n" if lines and rest else "\n" if lines else "") + rest
 
 
+def with_workers(body, agents):
+    """`body` with its `Worker: <id>` lines replaced by one for each of `agents`, as
+    factory_set_worker writes them: at the top, then a blank line (ADR-0029). Each old line goes
+    whole, with any text after the id. An empty `agents` leaves no Worker line, so routing falls
+    back to FACTORY_WORKERS order."""
+    rest = re.sub(WORKER.pattern + r".*\n?", "", body or "", flags=re.I | re.M).lstrip("\n")
+    lines = [f"Worker: {agent}" for agent in agents]
+    return "\n".join(lines) + ("\n\n" if lines and rest else "\n" if lines else "") + rest
+
+
 def replacement_plan(graph, original, replacements):
     """The dependency changes that replace `original` with the ordered `replacements` (ADR-0059): the
     first replacement inherits the original's upstream dependencies, each next one depends on the one

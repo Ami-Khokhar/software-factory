@@ -1790,3 +1790,41 @@ Telegram, settings, secrets and every other profile are untouched, and #271/#273
 until the owner explicitly retries; no new pass or allowance is extended to them by this change.
 A worker whose sandboxed probe answers with the wrong text fails the pilot loudly
 (`unexpected_response`), because a valid response from the wrong model is not a pass either.
+
+---
+
+## ADR-0077 — Day Desk chooses the factory worker and registers one by copying an approved template
+
+**Context.** Each factory worker pins one model in its relay agent args (ADR-0028), so the model is
+chosen by which agent runs. The only chooser is a `Worker: <id>` line in the issue body (ADR-0029),
+which the owner writes by hand with `factory new -w` or an edit; Day Desk has no tool to pick a
+worker, so it cannot steer work to a model the owner asks for in chat. Nor is there any sanctioned
+way to add a worker: the relay has no API to register an agent (`POST /v1/agents` is refused), so a
+new model means the owner hand-editing `~/.config/agent-relay/agents.json` and reloading the relay.
+
+**Decision.** Two write tools on Day Desk's driving token (ADR-0030), each inside the existing
+allowlist and credential boundary:
+
+- `factory_set_worker(id, workers, by)` replaces a WorkItem's issue `Worker:` lines with the agent
+  ids given, in order; `[]` clears them so `FACTORY_WORKERS` order decides. Only agents in
+  `FACTORY_WORKERS` may be named — an unknown id is refused before the edit, because it would be
+  refused at dispatch and the relay holds unsandboxed agents an issue must never reach. It is
+  refused while a worker is live and on a terminal WorkItem; unlike dependencies it may change
+  between attempts, which is how a retry is steered to another model. The order lives in the issue
+  body, so this edits the issue and the next tick reads it.
+- `factory_register_worker(worker, model, by)` adds a worker to the relay's `agents.json` by copying
+  the approved template (`FACTORY_WORKER_TEMPLATE`, default `pi-glm-factory`) and pinning only
+  `model`. The command, credential mount, env, cwd, allowedRoots, image and timeout are the
+  template's, and the provider stays the template's, so a registered worker cannot reach anything a
+  factory worker could not already reach. It refuses a duplicate id and an id or model outside a
+  safe name, writes the registry atomically, and reloads the relay. It needs `FACTORY_AGENTS_FILE`
+  set; without it the tool is refused rather than guessing a path.
+
+**Consequence.** Registering is not promoting: `factory_register_worker` never writes
+`FACTORY_WORKERS`, so a registered worker receives no WorkOrder until the owner lists it there and
+its provider-health pilot (ADR-0076) is green. The registry file is the relay's own, so factory-mcp
+now writes one file outside its own state; that write is constrained to a template copy and an
+atomic replace, and a relay that does not answer the reload discovers the worker at its next start.
+The GLM workers, Day Desk's model, Telegram settings, secrets and every other profile are untouched,
+and no budget, pass or allowance changes. A model still never merges: these tools choose and
+register workers, and every merge still goes through pr-gatekeeper's verdict.

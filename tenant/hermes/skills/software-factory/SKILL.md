@@ -89,6 +89,14 @@ standard in the repo's AGENTS.md ask:
 - When the owner names a worker, put a `Worker: <relay agent id>` line in each issue body it
   is for, before `## Acceptance`; several lines give an order. Use only an agent the owner named.
   If the agent is not in FACTORY_WORKERS, the issue waits for the owner with that reason.
+- To steer an existing WorkItem to a model, call factory_set_worker with the WorkItem id, the agent
+  ids from FACTORY_WORKERS as `workers` in order (`[]` falls back to FACTORY_WORKERS order) and the
+  owner's name as `by`. It refuses an agent outside FACTORY_WORKERS, a running worker, and a closed,
+  cancelled or exhausted WorkItem: give the reason word for word.
+- To add a new model, call factory_register_worker with a new agent id as `worker` and the model as
+  `model`. It copies the sandboxed template and pins only the model; the new worker is NOT in
+  FACTORY_WORKERS and runs nothing until the owner lists it there and its provider-health pilot
+  passes. Tell the owner both steps are theirs.
 
 Show the owner the whole plan in chat: each issue in order, with its title and acceptance. When the
 owner asked for the work, call factory_start_plan once, with the repo, all the issues in order as

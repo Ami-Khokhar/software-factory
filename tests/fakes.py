@@ -232,6 +232,13 @@ class FakeRelay:
     def get(self, task_id):
         return self.tasks.get(task_id)
 
+    def reload(self):
+        from factory_mcp.relay import RelayError
+        if self.down:
+            raise RelayError("relay unreachable: connection refused")
+        self.reloads = getattr(self, "reloads", 0) + 1
+        return {"ok": True, "agents": 0}
+
     def finish(self, task_id, status="completed", output="", error=None):
         self.tasks[task_id].update(status=status, output=output, error=error)
 

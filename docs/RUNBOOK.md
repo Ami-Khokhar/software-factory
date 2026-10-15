@@ -225,6 +225,24 @@ registry if it is already running. Deploying this configuration is a step on the
 from the implementation that lands in this repository; the existing GLM workers stay, so a
 DeepSeek outage falls back to them.
 
+### Choosing and registering a worker from Day Desk (ADR-0077)
+
+Day Desk steers two worker decisions itself, within the same allowlist and credential boundary:
+
+- `factory_set_worker` (`id`, `workers`, `by`) replaces a WorkItem's issue `Worker:` lines with the
+  agent ids given, in order; `[]` falls back to `FACTORY_WORKERS` order. Only agents in
+  `FACTORY_WORKERS` may be named — an unknown id is refused before the edit. It is refused while a
+  worker is running and on a closed, cancelled or exhausted WorkItem. The next tick reads the new
+  lines, so this is how a retry is steered to another model.
+- `factory_register_worker` (`worker`, `model`, `by`) adds a worker to the relay's `agents.json` by
+  copying the approved template (`FACTORY_WORKER_TEMPLATE`, default `pi-glm-factory`) and pinning
+  only `model`: the command, credential mount, env, cwd, allowedRoots, image and timeout are the
+  template's, and the provider stays the template's too. It refuses a duplicate id and an id or
+  model outside a safe name, then reloads the relay. It needs `FACTORY_AGENTS_FILE` set to the
+  relay's registry path, and it never adds the worker to `FACTORY_WORKERS` — a registered worker
+  runs nothing until you list it there and its pilot (below) is green. Both tools are write tools on
+  Day Desk's driving token, so Hermes asks you before each call.
+
 ### Provider health pilot (ADR-0076)
 
 Before any production WorkOrder goes to a new model, send one short synthetic, non-WorkOrder
