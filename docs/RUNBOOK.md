@@ -117,6 +117,31 @@ title-and-body issues, and an exhausted plan or per-item allowance. Make the fir
 use explicit: pick one waiting WorkItem, ask Day Desk to recover it through the allowance, and
 read the audit entry and the remaining count before asking for more.
 
+`factory-drive`, the runtime consumer of this rollout, reads that same approval through
+factory_status's `planAllowances` and retries through factory_use_allowance on evidence — and the
+only thing that changed for it is the shipped skill, which `factory update` deploys. After a
+deploy that touches it, verify the runtime job, not only the source checkout:
+
+```bash
+hermes -p day-desk cron list                 # factory-drive still exists, its prompt unchanged
+hermes -p day-desk mcp test factory_drive    # factory_use_allowance is among the discovered tools
+hermes -p day-desk config get mcp_servers.factory_drive --json  # no include list hides the tool
+```
+
+Read back the deployed skill itself, from the profile, not the checkout you merged:
+`~/.hermes/profiles/day-desk/skills/software-factory/SKILL.md` must carry the same 'Drive the
+factory' section — `planAllowances`, the factory_use_allowance route and the factory_status
+readback of the one usage.
+
+A green scheduler is not success. The evidence is the representative run on the live host: one
+owner-approved, in-scope WorkItem recovered by the driving job, then `factory_status` for it read
+back from the host's own factory-mcp — the history carries the `allowance_retry` line,
+`allowanceUse` names the planId with a remaining one lower, and no `ownerAsked` was set. Read that
+history from the host, never from a mock, a replay or another checkout. When the job is not
+reachable — the gateway is down, `FACTORY_AGENT_TOKEN` is missing, the tool is undiscovered, no
+in-scope WorkItem is waiting — name that exact blocker; the rollback is the same as before this
+feature: with no allowance approved, driving answers once via factory_resolve_human only.
+
 ## Workers
 
 Any agent registered in agent-relay can be a factory worker. Each one runs `worker/runner.py`,
@@ -477,10 +502,12 @@ and that the `factory-update` job names: `/usr/bin/python3 -m pip install -r req
 
 Day Desk is one Hermes agent you talk to in Telegram (ADR-0013), and it drives the factory for
 you (ADR-0030). Through factory-mcp's tools it shows what needs you, plans and starts issues, and
-answers the escalations a worker can fix: it retries with a note or sends a PR back to the gate,
+answers the escalations a worker can fix: it sends a PR back to the gate, or retries with a note,
 once per WorkItem, and never closes one. With an owner-approved plan allowance (ADR-0070) it may
 also retry on evidence and replace with open issues of the same repo, counted against the
-allowance and audited, without one approval per recovery — see Rollout below. It calls those tools with its own token,
+allowance and audited, without one approval per recovery — see Rollout below — and the driving
+job routes a WorkItem a current scoped allowance covers through factory_use_allowance itself,
+reading the spend back from factory_status before it reports it. It calls those tools with its own token,
 `FACTORY_AGENT_TOKEN`, for which factory-mcp lists only them. Setting up a repo and approving or
 retiring a lesson still go through your token, and Hermes asks you to approve each of those calls
 with buttons in Telegram; no answer in 15 minutes is a no. Its settings, skill and manner are the Hermes profile
@@ -535,7 +562,8 @@ hermes -p day-desk cron create "every 10m" --no-agent --script factory-update.sh
 ```
 
 `factory-drive` runs the model only when the escalations Day Desk may answer change, and tells you
-what it chose for each. `factory-watch` tells you of an escalation Day Desk may not answer, or one
+what it chose for each: through the plan allowance when one covers the WorkItem, reading the
+`allowanceUse` spend back before it answers, else through its own factory_resolve_human answer. `factory-watch` tells you of an escalation Day Desk may not answer, or one
 it left for 30 minutes, and of an exhausted WorkItem either way; without `FACTORY_AGENT_TOKEN` it
 tells you of every one at once. To retry an exhausted WorkItem, reply to the alert in Telegram:
 Day Desk retries it with a fresh budget, as `factory retry` does (ADR-0043).
