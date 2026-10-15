@@ -271,6 +271,23 @@ class WorkerTest(unittest.TestCase):
         wi = foreman.tick(ID)["workItem"]
         self.assertEqual(self.relay.tasks[wi["providerTaskId"]]["agentId"], "codex")
 
+    def test_set_worker_refuses_while_a_worker_is_running(self):
+        """The choice may not change under a live pass: the dispatch already sent the WorkOrder,
+        and the issue body it read is the order in force."""
+        foreman = self.foreman(workers=THREE)
+        wi = foreman.tick(ID)["workItem"]
+        self.assertEqual(wi["state"], "implementing")
+        with self.assertRaisesRegex(ToolError, "worker running now"):
+            foreman.set_worker(ID, ["pi-glm"], "day-desk")
+        self.assertEqual(self.github.issue(REPO, 7)["body"], ISSUE_BODY)  # unchanged
+
+    def test_set_worker_refuses_a_terminal_workitem(self):
+        """A closed, cancelled or exhausted WorkItem's worker no longer matters."""
+        foreman = self.foreman(workers=THREE)
+        foreman.store.put(dict(foreman.store.get(ID), state="closed"))
+        with self.assertRaisesRegex(ToolError, "its worker no longer matters"):
+            foreman.set_worker(ID, ["pi-glm"], "day-desk")
+
 
 if __name__ == "__main__":
     unittest.main()

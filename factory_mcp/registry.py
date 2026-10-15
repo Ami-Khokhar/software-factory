@@ -13,6 +13,7 @@ receives no WorkOrder until the owner lists it there and its provider-health pil
 import json
 import os
 import re
+import stat
 import tempfile
 from pathlib import Path
 
@@ -49,6 +50,7 @@ def register(path, template_id, worker_id, model):
     check runs before the file is touched, and the write is atomic, so a reload never reads a
     half-written registry."""
     try:
+        mode = stat.S_IMODE(os.stat(path).st_mode)  # mkstemp would leave the replacement 0600
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise ValueError(f"the relay registry at {path} cannot be read: {exc}") from None
@@ -69,6 +71,7 @@ def register(path, template_id, worker_id, model):
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(data, handle, indent=2)
             handle.write("\n")
+        os.chmod(tmp, mode)  # the relay reads this file; keep the permissions it was created with
         os.replace(tmp, path)
     except BaseException:
         try:

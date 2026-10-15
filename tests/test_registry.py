@@ -1,6 +1,7 @@
 """Registering a sandboxed factory worker by copying an approved template (ADR-0077)."""
 import json
 import os
+import stat
 import tempfile
 import unittest
 
@@ -103,6 +104,13 @@ class RegisterWorkerTest(unittest.TestCase):
         self.assertEqual(wi["state"], "human_waiting")
         self.assertIn("names pi-qwen-factory, which is not in FACTORY_WORKERS", wi["blockedOn"])
         self.assertEqual(self.relay.tasks, {})  # nothing was dispatched
+
+    def test_register_keeps_the_registry_files_permissions(self):
+        """mkstemp creates 0600; the registry is replaced atomically, so the mode must be carried
+        over or a relay running as another user loses every agent at once."""
+        os.chmod(self.agents_file, 0o644)
+        self.foreman.register_worker("pi-qwen-factory", "qwen-3-max", "day-desk")
+        self.assertEqual(stat.S_IMODE(os.stat(self.agents_file).st_mode), 0o644)
 
     def test_register_refuses_a_duplicate_id_and_leaves_the_registry_alone(self):
         with self.assertRaisesRegex(ToolError, "already a worker"):
