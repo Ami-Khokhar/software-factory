@@ -7,8 +7,8 @@ import time
 import threading
 import uuid
 
-from . import (diagnostics, documents, gate_secrets, jev_rank, lessons, patches, repos, routing,
-               setup_merge, workitem)
+from . import (diagnostics, documents, gate_secrets, jev_rank, lessons, patches, registry, repos,
+               routing, setup_merge, workitem)
 from .github import GitHubError
 from .mcp import ToolError
 from .relay import RelayError
@@ -1056,6 +1056,86 @@ class Foreman:
             return wi
         finally:
             self.store.release(workitem_id, self.holder)
+
+    def set_worker(self, workitem_id, workers, by, agent=False):
+        """Choose which of the allowlisted workers run a WorkItem (ADR-0029): replaces its issue's
+        `Worker:` lines. The choice lives in the issue body, so this edits the issue; the next tick
+        reads it, as it reads any edit. Only agents in FACTORY_WORKERS may be named — a name outside
+        it would be refused at dispatch, so it is refused here too, before the edit. Refused while a
+        worker is live or on a terminal WorkItem; unlike dependencies, the worker may change between
+        attempts, which is how an owner or Day Desk steers a retry to another model."""
+        if not isinstance(by, str) or not by.strip():
+            raise ToolError("choosing a worker needs the name of the person who asked")
+        allowed = [agent_id for agent_id, _ in self.config.workers]
+        if not isinstance(workers, list) or any(not isinstance(a, str) or not a for a in workers):
+            raise ToolError(f"workers is a list of relay agent ids from FACTORY_WORKERS "
+                            f"({', '.join(allowed)}), like [\"pi-deepseek-factory\"]; [] falls back "
+                            "to FACTORY_WORKERS order")
+        if len(workers) > len(allowed):
+            raise ToolError(f"workers names {len(workers)} agents but FACTORY_WORKERS has "
+                            f"{len(allowed)}")
+        if len(set(workers)) != len(workers):
+            raise ToolError("workers names an agent twice")
+        unknown = [agent_id for agent_id in workers if agent_id not in allowed]
+        if unknown:  # the relay also holds agents with no sandbox; an issue must not reach them
+            raise ToolError(f"{', '.join(unknown)} is not in FACTORY_WORKERS ({', '.join(allowed)}); "
+                            "add the agent to FACTORY_WORKERS, or name one of those")
+        if not self.store.acquire(workitem_id, self.holder):
+            raise ToolError(f"{workitem_id} is being ticked; try again")
+        try:
+            wi = self.store.get(workitem_id)
+            if wi is None:
+                raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
+            if wi["state"] in workitem.TERMINAL:
+                raise ToolError(f"{workitem_id} is {wi['state']}; its worker no longer matters")
+            if self._worker_live(wi):
+                raise ToolError(f"{workitem_id} has a worker running now; wait for it to finish "
+                                "before choosing another")
+            repo = wi["repo"]
+            issue = self._issue(repo, wi["issueNumber"])
+            before = workitem.workers_named(issue.get("body"))
+            body = workitem.with_workers(issue.get("body"), workers)
+            if body != (issue.get("body") or ""):
+                self.github.edit_issue(repo, wi["issueNumber"], body)
+            self.store.log("worker_changed", {"by": by, "was": before, "now": workers,
+                                              **({"agent": True} if agent else {})}, workitem_id)
+            return wi
+        finally:
+            self.store.release(workitem_id, self.holder)
+
+    def register_worker(self, worker_id, model, by, agent=False):
+        """Register a new sandboxed factory worker in the relay registry (ADR-0077). It copies the
+        approved template — same command, credential mount, env, cwd, allowedRoots, image and
+        timeout — and pins only `model`, so it cannot reach anything a factory worker could not. The
+        registry is the relay's own agents.json, which the relay has no API to write, so this edits
+        that file and reloads the relay. It never touches FACTORY_WORKERS: a registered worker
+        receives no WorkOrder until the owner lists it there and its provider-health pilot is green.
+        Returns the new agent and whether the running relay reloaded it."""
+        if not isinstance(by, str) or not by.strip():
+            raise ToolError("registering a worker needs the name of the person who asked")
+        if not self.config.agents_file:
+            raise ToolError("FACTORY_AGENTS_FILE is not set, so the factory may not write the relay "
+                            "registry; register the worker by hand (RUNBOOK)")
+        try:
+            agent_def = registry.register(self.config.agents_file, self.config.worker_template,
+                                          worker_id, model)
+        except ValueError as exc:
+            raise ToolError(str(exc)) from None
+        reloaded, note = False, ""
+        if self.relay is not None:
+            try:
+                self.relay.reload()
+                reloaded = True
+            except RelayError as exc:  # registered on disk; the next relay start picks it up
+                note = (f"{worker_id} is registered on disk, but the running relay did not reload "
+                        f"({exc}); it will be discovered when agent-relay next restarts")
+        self.store.log("worker_registered", {"worker": worker_id, "model": model, "by": by,
+                                             "reloaded": reloaded,
+                                             **({"agent": True} if agent else {})})
+        return {"agent": agent_def, "reloaded": reloaded,
+                "note": note or (f"{worker_id} is registered but NOT in FACTORY_WORKERS; add it "
+                                 f"there and run scripts/provider_health.py before any WorkOrder "
+                                 f"goes to it")}
 
     def replace_issue(self, workitem_id, replacements, by, note, request_id, *, agent=False,
                       owner_asked=False, allowance_plan_id=None):

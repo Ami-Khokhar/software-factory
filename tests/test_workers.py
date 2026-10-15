@@ -7,6 +7,7 @@ import unittest
 from factory_mcp import patches
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
+from factory_mcp.mcp import ToolError
 from factory_mcp.routing import route
 from factory_mcp.store import Store
 from tests.fakes import ISSUE_BODY, FakeGitHub, FakeRelay, result_line
@@ -242,6 +243,33 @@ class WorkerTest(unittest.TestCase):
         wi = self.foreman(local_only_repos=frozenset({REPO})).tick(ID)["workItem"]
         self.assertEqual(wi["state"], "human_waiting")
         self.assertIn("no local worker", wi["blockedOn"])
+
+    def test_set_worker_edits_the_issue_and_the_next_tick_routes_to_it(self):
+        """factory_set_worker (ADR-0029) is Day Desk's sanctioned chooser: it writes the Worker:
+        lines the next tick reads, so a choice reaches the dispatch without a hand-edited issue."""
+        foreman = self.foreman(workers=THREE)
+        foreman.set_worker(ID, ["opencode-glm", "pi-glm"], "day-desk")
+        self.assertIn("Worker: opencode-glm\nWorker: pi-glm",
+                      self.github.issue(REPO, 7)["body"])
+        wi = foreman.tick(ID)["workItem"]
+        self.assertEqual(self.relay.tasks[wi["providerTaskId"]]["agentId"], "opencode-glm")
+
+    def test_set_worker_refuses_an_agent_not_in_factory_workers_before_editing(self):
+        """An unknown id would be refused at dispatch, so it is refused here too, before the edit:
+        the relay holds unsandboxed agents an issue must never reach."""
+        foreman = self.foreman(workers=THREE)
+        before = self.github.issue(REPO, 7)["body"]
+        with self.assertRaisesRegex(ToolError, "not in FACTORY_WORKERS"):
+            foreman.set_worker(ID, ["codex-unsandboxed"], "day-desk")
+        self.assertEqual(self.github.issue(REPO, 7)["body"], before)  # unchanged
+
+    def test_set_worker_falls_back_to_factory_workers_order_for_empty(self):
+        """[] clears the Worker: lines, so routing uses FACTORY_WORKERS order again."""
+        foreman = self.foreman(body=f"Worker: opencode-glm\n\n{ISSUE_BODY}", workers=THREE)
+        foreman.set_worker(ID, [], "day-desk")
+        self.assertNotIn("Worker:", self.github.issue(REPO, 7)["body"])
+        wi = foreman.tick(ID)["workItem"]
+        self.assertEqual(self.relay.tasks[wi["providerTaskId"]]["agentId"], "codex")
 
 
 if __name__ == "__main__":
