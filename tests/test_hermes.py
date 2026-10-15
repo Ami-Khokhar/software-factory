@@ -79,5 +79,44 @@ class ProfileTest(unittest.TestCase):
         self.assertRegex(dockerfile, r"\[init\]\n\tdefaultBranch = main\n")
 
 
+    def drive_section(self):
+        text = (PROFILE / "skills" / "software-factory" / "SKILL.md").read_text()
+        return text[text.index("## Drive the factory"):text.index("## Teach the factory a lesson")]
+
+    def test_the_drive_guidance_routes_a_scoped_remaining_item_through_the_allowance(self):
+        """ADR-0069/ADR-0075: the driving job reads the current scoped approved allowances first,
+        spends factory_use_allowance on an in-scope, actionable item with allowance and pass budget
+        left, and reports only the exact factory_status readback of that one usage."""
+        section = self.drive_section()
+        route = section.index("factory_use_allowance")
+        fallback = section.index("factory_resolve_human")
+        self.assertLess(route, fallback)  # the allowance is the route when the facts line up
+        for phrase in ("planAllowances", "planId", "`retry` ", "`remaining` at least 1",
+                       "pass budget", "day-desk", "allowanceUse", "longer waiting",
+                       "one lower", "readback of the one usage"):
+            self.assertIn(phrase, section)
+
+    def test_the_drive_guidance_sends_uncovered_and_unsafe_items_to_the_owner(self):
+        """Absent, legacy-unscoped, out-of-scope, exhausted-allowance and exhausted-budget items
+        cannot spend; safety/access/environment and unknown timeouts stay with the owner; a race
+        or an unclear answer is reconciled by reading the history, never by a second spend."""
+        section = self.drive_section()
+        for phrase in ("without a scope", "`remaining` is 0", "buys no\n   fresh budget",
+                       "environment limit", "protected path", "HUMAN verdict", "access trouble",
+                       "unknown cause", "ownerAsked", "factory_resolve_human"):
+            self.assertIn(phrase, section)
+        self.assertIn("times out", section)  # no repeat before the history is read back
+
+    def test_the_runbook_verifies_the_runtime_drive_job_and_representative_history(self):
+        """Rollout checks the installed prompt, the deployed skill and the live job state, and the
+        representative readback of the authorized history; scheduler ok alone is not success."""
+        runbook = (PROFILE.parent.parent / "docs" / "RUNBOOK.md").read_text()
+        for phrase in ("verify the runtime job, not only the source",
+                       "hermes -p day-desk cron list", "mcp test factory_drive",
+                       "factory_resolve_human", "allowanceUse", "allowance_retry",
+                       "A green scheduler is not success", "blocker"):
+            self.assertIn(phrase, runbook)
+
+
 if __name__ == "__main__":
     unittest.main()
