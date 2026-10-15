@@ -1747,3 +1747,46 @@ allowance use is never swallowed by an item no pass could ever dispatch to; the 
 before the token, so a retry of the decision costs nothing already spent. Legacy rows fail loudly
 with what to do next, and the two-phase budget — allowance and per-item passes — keeps its old
 meaning on every other route.
+
+---
+
+## ADR-0076 — DeepSeek V4.1 Flash joins the factory through a sandboxed pi worker, proven by a provider health pilot
+
+**Context.** The owner asked for DeepSeek V4.1 Flash instead of the current GLM workers (ADR-0026).
+Relay's discovery registers a generic `pi-deepseek` agent that runs outside the factory sandbox, and
+no confirmed sandboxed DeepSeek factory worker exists, so no production WorkOrder may go to it. The
+four restarted #271/#273 pi attempts all died at an inner deadline with exit 124 and no stdout,
+with no observed 429/402/quota signal and credits unknown; pi print mode buffers the final response
+until completion, so an empty stdout is not inactivity and must never be read as a quota or auth
+failure.
+
+**Decision.** A new relay agent `pi-deepseek-factory` runs the same restricted worker path as every
+factory worker — `worker/runner.py`'s preflight, its `docker run` sandbox, its credential copies
+(`~/.pi/agent/auth.json` mounted only into the container, `PI_CODING_AGENT_DIR` at it), the runner's
+patch handoff and the base-commit verify — with `pi --print --provider deepseek --model
+deepseek-flash --models deepseek/deepseek-flash`. The model ID is the provider-verified one: pi's
+official direct alias `deepseek-flash` for DeepSeek V4.1 Flash. The same ID is never assumed to
+hold through another provider; each provider's exact alias is verified with that provider before
+use. Nothing in this decision changes a credential boundary: model credentials stay outside coding
+workers.
+
+Before any dispatch, `scripts/provider_health.py` sends one short synthetic, non-WorkOrder probe
+through that same restricted path and reports `factory.health/v1`: `ok` only when the intended
+model answers `--expect`, with latency, exit status and byte counts recorded; provider errors
+classified as `provider_quota`, `provider_auth` or `provider_rate_limit`; a `timeout` boundary
+reported as `harness_deadline`, distinct from every provider error; and an unavailable access
+boundary reported honestly at its own preflight exit code, never bypassed through the host shell
+and never restyled into a pass. The report carries only allowlisted fields (timestamp, event type,
+tool name, status, exit code, retry count, byte counts); the prompt, response, harness text and any
+WorkOrder payload are never printed or archived, and the pilot makes one attempt with no retry and
+never grants a pass or budget as a side effect.
+
+**Consequence.** Implementation and deployment stay distinct facts: this repository lands the
+documented registration, the pilot and their tests, while adding the agent to `agents.json`, to
+`FACTORY_WORKERS`, restarting factory-mcp and running the pilot on the host are the owner's
+separate, live steps — and until the pilot returns `ok` once, no production WorkOrder is dispatched
+to DeepSeek. The GLM workers stay registered behind the DeepSeek agent, so chat model/provider,
+Telegram, settings, secrets and every other profile are untouched, and #271/#273 remain blocked
+until the owner explicitly retries; no new pass or allowance is extended to them by this change.
+A worker whose sandboxed probe answers with the wrong text fails the pilot loudly
+(`unexpected_response`), because a valid response from the wrong model is not a pass either.

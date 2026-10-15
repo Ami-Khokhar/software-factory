@@ -193,6 +193,65 @@ live pass on 2026-10-01, both GLM 5.3 Flash through OpenCode Go:
 }
 ```
 
+DeepSeek V4.1 Flash joins through the same restricted path, as an explicitly sandboxed factory
+worker — never through relay's generic, unsandboxed `pi-deepseek` agent, and no production
+WorkOrder is dispatched to DeepSeek until its pilot (below) is green:
+
+```json
+{
+  "id": "pi-deepseek-factory",
+  "name": "pi (DeepSeek V4.1 Flash), sandboxed factory worker",
+  "command": "python3",
+  "args": ["/absolute/path/to/software-factory/worker/runner.py",
+           "--credential", "/Users/you/.pi/agent/auth.json:/home/node/.pi/agent",
+           "--env", "PI_CODING_AGENT_DIR=/home/node/.pi/agent", "--",
+           "pi", "--print", "--provider", "deepseek", "--model", "deepseek-flash",
+           "--models", "deepseek/deepseek-flash"],
+  "cwd": "/absolute/path/to/factory-work",
+  "allowedRoots": ["/absolute/path/to/factory-work"],
+  "timeoutMs": 1500000,
+  "inheritEnv": ["HOME", "PATH"]
+}
+```
+
+The model ID is the provider-verified one: `deepseek-flash`, pi's official direct alias for
+DeepSeek V4.1 Flash. Do not reuse the same ID through another provider — verify each one's exact
+name with its own provider first.
+
+After registering an agent in `agents.json` (and only once its pilot has passed), add the agent
+before its more proven peers in `FACTORY_WORKERS`, for example
+`pi-deepseek-factory:local,pi-glm-factory:local`, restart factory-mcp, and reload agent-relay's
+registry if it is already running. Deploying this configuration is a step on the host, separate
+from the implementation that lands in this repository; the existing GLM workers stay, so a
+DeepSeek outage falls back to them.
+
+### Provider health pilot (ADR-0076)
+
+Before any production WorkOrder goes to a new model, send one short synthetic, non-WorkOrder
+request through the same restricted path the factory workers run — the runner's preflight and a
+`docker run` sandbox, whose only mounts are a scratch copy and whatever `--credential` names — and
+record that it answers:
+
+```bash
+python3 scripts/provider_health.py \\
+  --credential /Users/you/.pi/agent/auth.json:/home/node/.pi/agent \\
+  --env PI_CODING_AGENT_DIR=/home/node/.pi/agent \\
+  -- "pi" "--print" "--provider" "deepseek" "--model" "deepseek-flash" \\
+  "--models" "deepseek/deepseek-flash"
+```
+
+It prints one `factory.health/v1` line. `status: ok` means the intended model answered the probe
+(`--expect`, default `ok`) with its latency and byte counts recorded; `unavailable` names the access
+boundary honestly at its own exit code and is never restyled into a pass; `harness_deadline` is a
+`timeout` boundary with an unexpected empty stdout — pi print mode buffers the final response until
+completion, so empty stdout is not inactivity, and it says nothing about the provider at all.
+Quota/auth/rate errors are named (`provider_quota`, `provider_auth`, `provider_rate_limit`)
+without the harness's own text, because the report carries only allowlisted fields: for each event
+a timestamp, event type, tool name, status, exit code, retry count and byte counts. The prompt, the
+response, the WorkOrder payload (the pilot sends none) and any output text are never printed or
+archived. The pilot makes one attempt and no retry; it never resets a blocked item and never edits
+budgets or passes.
+
 For OpenCode, the same with `"id": "opencode-glm-factory"` and these args:
 
 ```json
