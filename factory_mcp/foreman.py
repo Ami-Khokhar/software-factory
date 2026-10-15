@@ -507,10 +507,26 @@ class Foreman:
             return [{"fingerprint": "human", "problem": last["detail"]["note"]}]
         return []
 
-    @staticmethod
-    def _attempt_findings(wi):
-        attempts = wi.get("attempts") or []
-        return [{"fingerprint": "previous-attempt", "problem": attempts[-1]}] if attempts else []
+    def _attempt_findings(self, wi):
+        """The `previous-attempt` findings a retry carries: the latest attempt and, when that one
+        is not an actionable failing test, the last one before it that is. The current `attempts`
+        list is cleared by the retry that unblocks a WorkItem, so the durable `attempt_failed`
+        audit is the record across that boundary; a successful push ends a round, so attempts
+        before it do not resurface. A retry with no actionable failure keeps the person's note as
+        the only finding, as before (ADR-0078)."""
+        history = self.store.history(wi["id"])
+        start = 1 + max((i for i, h in enumerate(history)
+                         if h["action"] in ("pushed", "pr_opened")), default=-1)
+        relevant = history[start:]
+        attempts = [diagnostics.entry(h["detail"].get("reason", ""),
+                                      {"cause": h["detail"].get("cause"),
+                                       "context": h["detail"].get("diagnosis") or ""})
+                    for h in relevant if h["action"] == "attempt_failed"]
+        marker = f"diagnosis: {diagnostics.ACTIONABLE}:"
+        if (relevant and relevant[-1]["action"] in ("human_resolved", "allowance_retry")
+                and not any(marker in attempt for attempt in attempts)):
+            return []
+        return diagnostics.attempt_findings(attempts)
 
     def _order(self, wi):
         return next(o for o in self.store.workorders(wi["id"]) if o["id"] == wi["activeWorkOrderId"])

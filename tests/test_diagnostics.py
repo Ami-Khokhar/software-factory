@@ -8,7 +8,7 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
-from factory_mcp import tools
+from factory_mcp import diagnostics, tools
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.store import Store
@@ -185,6 +185,53 @@ class DiagnosticsTest(unittest.TestCase):
         self.assertNotIn("very-secret-env-value", problem)
         self.assertNotIn(TOKEN_SENTINEL, task["input"])
         self.assertLess(len(problem), 400)  # bounded, even with a full tail underneath it
+        self.assertEqual(schema_errors("workorder", order), [])
+
+    def test_an_intervening_timeout_still_carries_the_last_failing_test_finding(self):
+        """#271: the attempt after a verify failure is useful; a later empty timeout must not bury
+        it. The carried failing test and the latest timeout ride together, chronologically."""
+        failing = "codex: worker reported failed: verify exited 1; diagnosis: failing test: exit 1: FAIL: test_x (m.C.test_x) AssertionError: 20 != 4"
+        timeout = "codex: worker reported failed: the harness timed out"
+        findings = diagnostics.attempt_findings([failing, timeout])
+        self.assertEqual([f["problem"] for f in findings], [failing, timeout])
+        self.assertEqual({f["fingerprint"] for f in findings}, {"previous-attempt"})
+
+    def test_an_actionable_latest_attempt_is_carried_alone(self):
+        failing = "codex: worker reported failed: verify exited 2; diagnosis: failing test: exit 2: FAIL"
+        older = "codex: worker reported failed: the harness timed out; diagnosis: harness timeout: exit 124: step one"
+        findings = diagnostics.attempt_findings([older, failing])
+        self.assertEqual([f["problem"] for f in findings], [failing])
+        self.assertEqual(diagnostics.attempt_findings([]), [])
+
+    def test_the_carried_finding_stays_bound_and_without_secrets(self):
+        failing = "codex: verify exited 1" + "; diagnosis: failing test: exit 1: " + "x" * 400
+        timeout = "codex: worker reported failed: the harness timed out"
+        findings = diagnostics.attempt_findings([failing, timeout])
+        self.assertLessEqual(len(findings[0]["problem"]), len(failing))
+        self.assertNotIn(TOKEN_SENTINEL, json.dumps(findings))
+
+    def test_the_next_workorder_carries_the_failing_test_beside_the_timeout_after_a_retry(self):
+        """The dispatch path through the real state machine: a verify failure followed by an empty
+        timeout blocks the WorkItem and clears `attempts` on the person's retry, but the next
+        WorkOrder still carries the failing test beside the latest timeout, chronologically."""
+        diagnostics_body = {"elapsedMs": 9000, "phases": [
+            {"phase": "harness execution", "elapsedMs": 1000, "exitCode": 0},
+            {"phase": "verification", "elapsedMs": 8000, "exitCode": 1, "tail":
+             "FAIL: test_x (m.C.test_x) AssertionError: expected 4 lines got 20"}]}
+        first = self.fail_with(diagnostics_body, error="verify exited 1")
+        self.assertEqual(first["state"], "ready")
+        failing = first["attempts"][0]
+        self.assertIn("diagnosis: failing test:", failing)
+        blocked = self.fail_with(diagnostics=None)  # the second attempt times out with no output
+        self.assertEqual(blocked["state"], "blocked")
+        self.assertEqual(blocked["attempts"][0], failing)
+        timeout = blocked["attempts"][1]
+        self.foreman.resolve_human(ID, "retry", "try again", "owner")
+        __, task = self.dispatch()
+        order = json.loads(task["input"].split("WorkOrder:\n", 1)[1])
+        previous = [f["problem"] for f in order["findingsToAddress"]
+                    if f["fingerprint"] == "previous-attempt"]
+        self.assertEqual(previous, [failing, timeout])
         self.assertEqual(schema_errors("workorder", order), [])
 
     def test_the_workorders_own_payload_is_never_carried_forward(self):

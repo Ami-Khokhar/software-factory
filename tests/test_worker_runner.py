@@ -30,12 +30,16 @@ def git(*args):
     subprocess.run(["git", *args], check=True, capture_output=True)
 if mode in ("fix", "nocommit", "plant"):
     open("app.txt", "w").write("fixed\n")
+if mode == "noisy":
+    open("app.txt", "w").write("noisy\n")
+if mode == "echo":
+    open("app.txt", "w").write("echo\n")
 if mode == "nocommit-broken":
     open("app.txt", "w").write("still broken\n")
 if mode == "cheat":
     open(".github/pr-gatekeeper.json", "w").write('{"verify": "true"}')
     open("app.txt", "w").write("still broken\n")
-if mode in ("fix", "cheat"):
+if mode in ("fix", "noisy", "echo", "cheat"):
     git("add", "-A")
     git("-c", "user.name=h", "-c", "user.email=h@h", "commit", "-qm", "harness work")
 if mode == "plant":  # a filter driver and hooks, which run wherever git touches this tree
@@ -91,7 +95,32 @@ class RunnerTest(unittest.TestCase):
         (seed / ".github").mkdir()
         (seed / ".github" / "pr-gatekeeper.json").write_text('{"verify": "python3 check.py"}')
         (seed / "check.py").write_text(
-            "import sys\nsys.exit(0 if open('app.txt').read().strip() == 'fixed' else 1)\n")
+            "import sys\n"
+            "if open('app.txt').read().strip() == 'noisy':\n"
+            "    print('deploying dependencies to /tmp/build ' + 'x' * 6000)\n"
+            "    for i in range(3):\n"
+            "        print('=' * 60)\n"
+            "        print(f'FAIL: test_fail_{i} (tests.test_mod.Case.test_fail_{i})')\n"
+            "        print('-' * 60)\n"
+            "        print('Traceback (most recent call last):')\n"
+            "        print(f'  File \"tests/test_mod.py\", line {i + 1}, in test_fail_{i}')\n"
+            "        print('AssertionError: expected 4 lines got 20 ghp_SENTINELTOKEN123456')\n"
+            "    for i in range(7):\n"
+            "        print('=' * 60)\n"
+            "        print(f'ERROR: test_err_{i} (tests.test_mod.Case.test_err_{i})')\n"
+            "        print('-' * 60)\n"
+            "        print('Traceback (most recent call last):')\n"
+            "        print(f'  File \"tests/test_mod.py\", line {i + 1}, in test_err_{i}')\n"
+            "        print(f'KeyError: \"missing_{i}\"')\n"
+            "    print('-' * 60)\n"
+            "    print('Ran 629 tests in 2.0s')\n"
+            "    print('FAILED (failures=3, errors=7)')\n"
+            "    sys.exit(1)\n"
+            "if open('app.txt').read().strip() == 'echo':\n"
+            "    print('deploying dependencies to /tmp/build ' + 'x' * 6000)\n"
+            "    print('FAILED (failures=1, errors=0)')\n"
+            "    sys.exit(1)\n"
+            "sys.exit(0 if open('app.txt').read().strip() == 'fixed' else 1)\n")
         (seed / "app.txt").write_text("broken\n")
         sh(seed, "add", "-A")
         sh(seed, "-c", "user.name=s", "-c", "user.email=s@s", "commit", "-qm", "seed")
@@ -449,6 +478,61 @@ class RunnerTest(unittest.TestCase):
         phase = self.phases_of(result)["verification"]
         self.assertEqual((result["status"], phase["exitCode"]), ("failed", 1))
         self.assertIn("python3 check.py", result["evidence"][0]["command"])
+
+    def test_a_noisy_failing_verify_keeps_the_failure_identities_not_the_prefix(self):
+        """#271: a deployment preamble must not push the failing tests out of the bounded tail; the
+        digest keeps each FAIL/ERROR identity and its representative traceback line, redacted."""
+        result, order = self.run_order("noisy")
+        self.assertEqual((result["status"], self.phases_of(result)["verification"]["exitCode"]),
+                         ("failed", 1))
+        for tail in (self.phases_of(result)["verification"]["tail"], result["evidence"][0]["tail"]):
+            for i in range(3):
+                self.assertIn(f"FAIL: test_fail_{i}", tail)
+            for i in range(7):
+                self.assertIn(f"ERROR: test_err_{i}", tail)
+            self.assertIn("AssertionError: expected 4 lines got 20", tail)
+            self.assertNotIn("deploying dependencies", tail)
+            self.assertNotIn("ghp_SENTINELTOKEN123456", tail)
+            self.assertLessEqual(len(tail), runner.DIAGNOSTIC_TAIL)
+        self.assertEqual(documents.check_result(result, order), [], result["diagnostics"])
+
+    def test_the_verification_summary_marks_what_it_drops_deterministically(self):
+        over = runner.MAX_SUMMARY_FAILURES + 3
+        output = "".join(
+            f"{'=' * 5}\nFAIL: test_{i} (m.C.test_{i})\n{'-' * 5}\nTraceback (most recent call last):\n"
+            f"AssertionError: {i}\n" for i in range(over))
+        first = runner.verification_summary(output)
+        second = runner.verification_summary(output)
+        self.assertEqual(first, second, "the digest is deterministic")
+        self.assertIn("FAIL: test_0", first)
+        self.assertIn(f"<truncated: {over - runner.MAX_SUMMARY_FAILURES} more failures/errors omitted>", first)
+        self.assertLessEqual(len(first), runner.DIAGNOSTIC_TAIL)
+
+    def test_the_verification_summary_falls_back_to_the_plain_output(self):
+        """An unknown runner still carries its own tail, so no failure is invented or lost."""
+        output = "pip install failed: no network\nretrying\n"
+        self.assertEqual(runner.verification_summary(output), "pip install failed: no network retrying")
+
+    def test_the_verification_summary_fallback_keeps_the_end_not_the_preamble(self):
+        """#273: with no FAIL/ERROR identity the fallback keeps the end of the output, where a
+        pytest or linter failure summary is, not the deployment preamble the base's last-2000 tail
+        also dropped."""
+        output = "deploying dependencies " + "x" * 3000 + " AssertionError: expected 4 lines got 20"
+        summary = runner.verification_summary(output, limit=200)
+        self.assertEqual(len(summary), 200)
+        self.assertTrue(summary.endswith("AssertionError: expected 4 lines got 20"), summary)
+        self.assertNotIn("deploying dependencies", summary)
+
+    def test_a_falling_back_verify_keeps_the_end_not_the_preamble(self):
+        """The integration path: a verify with no test identity prints a long preamble then its
+        failing summary, and the Result's evidence tail carries that end."""
+        result, __ = self.run_order("echo")
+        tail = result["evidence"][0]["tail"]
+        self.assertEqual((result["status"], self.phases_of(result)["verification"]["exitCode"]),
+                         ("failed", 1))
+        self.assertIn("FAILED (failures=1, errors=0)", tail)
+        self.assertNotIn("deploying dependencies", tail)
+        self.assertLessEqual(len(tail), runner.DIAGNOSTIC_TAIL)
 
     def test_a_failing_patch_collection_names_its_phase_and_exit(self):
         result, _ = self.run_order("nothing")

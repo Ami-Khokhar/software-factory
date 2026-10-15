@@ -1828,3 +1828,42 @@ atomic replace, and a relay that does not answer the reload discovers the worker
 The GLM workers, Day Desk's model, Telegram settings, secrets and every other profile are untouched,
 and no budget, pass or allowance changes. A model still never merges: these tools choose and
 register workers, and every merge still goes through pr-gatekeeper's verdict.
+
+---
+
+## ADR-0078 — A verification failure survives the timeout that follows it, bounded and redacted
+
+**Context.** #271 ran as timeout → verify with 629 tests, 3 failures and 7 errors → timeout →
+timeout. The Result's verification phase kept only the head of the log, which is the deployment
+preamble, so one assertion line survived and the other failures and errors did not; the next attempt
+then carried only the latest timeout. The original #271 patch is not accessible from this checkout,
+so its exact behaviour is unavailable and is recorded here rather than reproduced or guessed at.
+The loss has two causes: the runner truncates from the start of the verify output, and the retry
+finding keeps only the latest attempt, so an intervening timeout with no output buries a still-fixable
+test failure. The harness's own in-session test runs are not the runner's post-harness `verify`, and
+only the latter is the evidence the factory reads.
+
+**Decision.** Two narrow changes, with no orchestration rewrite:
+
+- On a failing verification, `worker/runner.py` builds a bounded, deterministic digest of the output:
+  one line per unittest-style `FAIL:`/`ERROR:` identity, in output order, each with the last
+  meaningful traceback line, an explicit `<truncated: n more failures/errors omitted>` marker when
+  more than a fixed number are dropped, and a fall back to the end of the whitespace-collapsed
+  output when no identity is found. It is redacted like every other tail before it is serialized,
+  and the same digest is used for the phase tail and the test evidence tail. The full verify output
+  is not archived: the fallback's end is where a pytest or linter summary is, not the deployment
+  preamble at the head.
+- On a retry, `diagnostics.attempt_findings` carries the latest attempt, and when that attempt is
+  not itself a failing-test finding, the most recent earlier attempt that is, chronologically, so
+  the last actionable verification finding rides beside a separate latest timeout. The Foreman
+  reads those attempts from the durable `attempt_failed` audit, not only the WorkItem's `attempts`
+  list: a person's retry clears that list to reset the pass count, and the finding must survive
+  that boundary. A successful push ends the round, so attempts before it do not resurface. The
+  control is the existing `diagnosis: failing test:` wording in the attempt string; nothing is
+  invented, and the carried text is the same bounded, already-sanitized attempt.
+
+**Consequence.** A later timeout no longer erases the test identities a pass has to fix, while the
+latest cause still names the current state. Existing Results and WorkOrders stay valid: the Result
+schema, the `diagnostics` shapes and the WorkOrder finding shape are unchanged. No pass budget,
+retry, merge or sandbox permission changes, no automatic resubmission is added, and the worker
+still exports no WorkOrder payload, environment, credential or repository source.

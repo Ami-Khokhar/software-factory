@@ -56,6 +56,14 @@ PREFLIGHT_TAILS = {NO_DOCKER: "preflight: the Docker daemon is not available",
                    NO_CREDENTIAL: "preflight: a configured credential-copy is missing or unreadable",
                    NO_VERIFY: "preflight: verify command missing from the base commit"}
 DIAGNOSTIC_TAIL = 4000  # the Result schema's cap for a diagnostic tail
+# A failing verification prints the deployment preamble first and the failing tests lower; the
+# runner keeps a bounded digest of the FAIL/ERROR identities instead of that preamble, so a retry
+# can still see what actually failed after an intervening timeout (#271).
+_UNITTEST_FAILURE = re.compile(r"^(?:FAIL|ERROR):\s+\S")
+_VERIFY_BLOCK = re.compile(r"^={5,}\s*$")
+_VERIFY_RULE = re.compile(r"^[=-]{5,}\s*$")
+MAX_SUMMARY_FAILURES = 12
+SUMMARY_ENTRY = 200
 
 
 class WorkerError(Exception):
@@ -132,6 +140,41 @@ def redact(text, secrets, limit=DIAGNOSTIC_TAIL):
     line = _ENV_VALUE.sub(r"\1=<redacted>", line)
     line = _CREDENTIAL.sub(r"\g<2>=<redacted>", line)
     return _TOKEN.sub("<redacted>", line)[:limit]
+
+
+def verification_summary(output, limit=DIAGNOSTIC_TAIL):
+    """A bounded digest of a failing verification run: one line per FAIL/ERROR identity in output
+    order, each with its last traceback line, and an explicit marker when identities are dropped.
+    No identity is found -> the end of the whitespace-collapsed output, where a pytest or linter
+    summary sits, so an unknown runner's own failing tail still rides along. The caller redacts the
+    digest against the pass's secrets before it serializes."""
+    blocks, current = [], []
+    for line in (output or "").splitlines():
+        if _VERIFY_BLOCK.match(line.strip()):
+            blocks.append(current)
+            current = []
+        else:
+            current.append(line)
+    blocks.append(current)
+    digest = []
+    for block in blocks:
+        header = next((line.strip() for line in block if _UNITTEST_FAILURE.match(line.strip())), None)
+        if not header:
+            continue
+        body = [line.strip() for line in block if line.strip()
+                and not _VERIFY_RULE.match(line.strip())
+                and not _UNITTEST_FAILURE.match(line.strip())]
+        entry = f"{header} {body[-1]}".strip() if body else header
+        if len(entry) > SUMMARY_ENTRY:
+            entry = entry[:SUMMARY_ENTRY - len("...<truncated>")] + "...<truncated>"
+        digest.append(entry)
+    if not digest:
+        return " ".join((output or "").split())[-limit:]
+    omitted = len(digest) - MAX_SUMMARY_FAILURES
+    shown = digest[:MAX_SUMMARY_FAILURES]
+    if omitted > 0:
+        shown.append(f"<truncated: {omitted} more failures/errors omitted>")
+    return " | ".join(shown)[:limit]
 
 
 def origin_repo(cwd):
@@ -478,11 +521,13 @@ def main(argv=None):
             code, out, err = sandbox.run(["sh", "-c", verify], seconds * 0.25, work)
             output = out + err
             echoed += output
-            record("verification", verify_start, code, output)
-            tail = output[-2000:].replace("```", "")
+            summary = verification_summary(output)
+            record("verification", verify_start, code, summary)
+            tail = redact(summary, secrets).replace("```", "")
             result["evidence"] = [{"kind": "test", "command": verify, "exit": code, "tail": tail}]
             if code != 0:
-                raise WorkerError(f"verify exited {code}: {' '.join(output[-400:].split())}")
+                detail = redact(output[-400:], secrets, limit=400)
+                raise WorkerError(f"verify exited {code}: {detail}")
         result.update(status="completed", patch={"format": "unified", "diff": diff, "baseSha": base})
     except WorkerError as exc:
         result["error"] = str(exc)
