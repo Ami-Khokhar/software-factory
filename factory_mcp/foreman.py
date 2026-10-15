@@ -158,6 +158,8 @@ class Foreman:
             raise ToolError(f"{repo}'s default branch changed during bootstrap; check the repo and try again")
         branch = BOOTSTRAP_PREFIX + plan["fingerprint"][:16]
         response = {"repo": repo, "ready": False, "needsHumanMerge": True, "changedPaths": sorted(files)}
+        if plan.get("updates"):
+            response["updatedPaths"] = plan["updates"]  # an upgrade, not a first install
         existing = self._open_setup_pr(repo, plan["default_branch"])
         if existing:  # a retry: the owner reviews one setup PR, brought up to date with the plan
             head = self._update_setup_pr(repo, existing, files, by)
@@ -212,13 +214,24 @@ class Foreman:
     def _setup_pr_body(repo, plan, secrets):
         """The setup PR's body in the gate's format: the plan's files and each secret's status."""
         paths = sorted(plan["files"])
+        updates = set(plan.get("updates", ()))
+        upgraded = bool(updates)
         return "\n".join([
-            "## Task", "", f"Owner-approved bootstrap for https://github.com/{repo}.", "",
-            "## Intent", "", "Install the missing controls required for this repository to join the factory.", "",
-            "## Why it was needed", "", "The factory cannot run reviewed PRs without its gate and written standard.", "",
-            "## Why this approach", "", "The factory prepared only the missing files from trusted templates.",
+            "## Task", "", f"Owner-approved {'control update' if upgraded else 'bootstrap'} for https://github.com/{repo}.", "",
+            "## Intent", "",
+            ("Update the installed gate caller to the approved gate revision, leaving its verify "
+             "command, permissions, secrets and unrelated files as they are." if upgraded else
+             "Install the missing controls required for this repository to join the factory."), "",
+            "## Why it was needed", "",
+            ("The installed gate caller pins an older gate revision than software-factory ships." if upgraded else
+             "The factory cannot run reviewed PRs without its gate and written standard."), "",
+            "## Why this approach", "",
+            ("The factory rewrote only the two gate revision pins in the installed workflow, "
+             "preserving every other line, and left the repo's verify command untouched." if upgraded else
+             "The factory prepared only the missing files from trusted templates."),
             "The owner must review and merge this setup PR; normal workers still cannot change these paths.", "",
-            "## What changed", "", *(f"- `{path}`: install the missing factory control" for path in paths), "",
+            "## What changed", "",
+            *(f"- `{path}`: {'update' if path in updates else 'install'} the factory control" for path in paths), "",
             "## Proof of work", "", "```text",
             f"$ git diff --name-only --no-renames -z {plan['base_sha']} HEAD", *paths, "```", "",
             "The factory set the gate's Actions secrets from the owner's Keychain:",

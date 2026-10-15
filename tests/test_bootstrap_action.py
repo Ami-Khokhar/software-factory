@@ -9,11 +9,18 @@ from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.github import GitHubError
 from factory_mcp.mcp import ToolError
-from factory_mcp.repos import GATE_CONFIG, GATE_WORKFLOW, TEMPLATE
+from factory_mcp.repos import GATE_CONFIG, GATE_WORKFLOW, TEMPLATE, GATE_WORKFLOW_SOURCE
 from factory_mcp.store import Store
 from tests.fakes import FakeBootstrapGit, FakeGitHub, FakeRelay
 
 KEY, READ = "opencode-value-7f3a", "read-token-value-91c2"  # test stand-ins, never real secrets
+CANONICAL_USES = "59540639b38a08733f7222adfdcde36d3a8552e1"
+CANONICAL_REF = "e9f2380fbb040a962ab3d888df578d0625415a70"
+
+
+def stale_workflow():
+    return (GATE_WORKFLOW_SOURCE.read_text().replace(CANONICAL_USES, "a" * 40)
+            .replace(CANONICAL_REF, "b" * 40))
 
 
 class FakeSecretCommands:
@@ -221,6 +228,41 @@ class BootstrapActionTest(unittest.TestCase):
                                      ("o/r", GATE_WORKFLOW): "workflow", ("o/r", "AGENTS.md"): TEMPLATE.read_text()})
         result = self.foreman.bootstrap_repo("o/r", None, "owner")
         self.assertEqual(result["repo"], "o/r")
+        self.assertFalse(result["needsHumanMerge"])
+        self.assertEqual((self.pushed, self.github.pulls), ([], []))
+
+    def test_a_stale_gate_caller_is_upgraded_on_a_narrow_owner_reviewed_setup_pr(self):
+        self.github.contents.update({("o/r", GATE_CONFIG): '{"verify":"make test"}',
+                                     ("o/r", GATE_WORKFLOW): stale_workflow(),
+                                     ("o/r", "AGENTS.md"): TEMPLATE.read_text()})
+
+        first = self.foreman.bootstrap_repo("o/r", None, "owner")
+        second = self.foreman.bootstrap_repo("o/r", None, "owner")  # a retry adopts the PR
+
+        self.assertEqual(first, second)
+        self.assertTrue(first["needsHumanMerge"])
+        self.assertEqual(first["changedPaths"], [GATE_WORKFLOW])
+        self.assertEqual(first["updatedPaths"], [GATE_WORKFLOW])
+        self.assertEqual(len(self.pushed), 1)
+        _, branch, base, files, _ = self.pushed[0]
+        self.assertEqual(set(files), {GATE_WORKFLOW})
+        self.assertEqual(base, "base0")
+        self.assertIn(CANONICAL_USES, files[GATE_WORKFLOW])
+        self.assertIn(CANONICAL_REF, files[GATE_WORKFLOW])
+        body = self.github.pulls[0]["body"]
+        self.assertIn("update the factory control", body)
+        self.assertIn("owner must review and merge", body.lower())
+        self.assertEqual(self.github.pulls[0]["head"]["ref"], branch)
+        audit = {call.args[0]: call.args[1] for call in self.log.call_args_list}
+        self.assertEqual(audit["bootstrap_pr"]["paths"], [GATE_WORKFLOW])
+
+    def test_a_gate_workflow_the_factory_did_not_write_is_left_alone(self):
+        self.github.contents.update({("o/r", GATE_CONFIG): '{"verify":"make test"}',
+                                     ("o/r", GATE_WORKFLOW): "on: pull_request\n",
+                                     ("o/r", "AGENTS.md"): TEMPLATE.read_text()})
+
+        result = self.foreman.bootstrap_repo("o/r", None, "owner")
+
         self.assertFalse(result["needsHumanMerge"])
         self.assertEqual((self.pushed, self.github.pulls), ([], []))
 

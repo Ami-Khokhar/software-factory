@@ -1913,3 +1913,32 @@ and pr-gatekeeper's `.github/pr-gatekeeper.json` still carries `max_changed_line
 branch: aligning the gate's own policy is a separate `.github/` change a person owns, and no
 source merge is claimed as a live rollout until the image, the profile template and the gate
 policy are deployed together.
+
+---
+
+## ADR-0080 — An installed gate caller is upgraded by its two revision pins, on the same reviewed setup PR
+
+**Context.** `factory_bootstrap_repo` wrote a control file only when the repo lacked it, so a repo
+that already had `.github/workflows/pr-gatekeeper.yml` kept whatever gate revision it pinned. The
+factory's own caller and self-maintaining-apis pinned an older wrapper and `gatekeeper_ref`, and
+their pull requests were reviewed under that stale policy. Editing the installed file by hand, or
+rewriting it wholesale from the checkout, would either bypass the owner's review or change
+permissions, secrets and the verify command that the repo chose.
+
+**Decision.** `repos.bootstrap_plan` reads the checkout's `.github/workflows/pr-gatekeeper.yml` as
+the canonical caller. When the repo already has a file that names both a
+`uses: .../gatekeeper.yml@<sha>` and a `gatekeeper_ref: <sha>`, `_upgraded_workflow` rewrites only
+those two 40-hex revisions to the canonical ones and keeps every other line (permissions, secrets,
+runner, comments) exactly as the repo wrote it. A file that is not such a caller, or already
+current, is left alone, so a repo with its own workflow is never silently replaced. The upgrade
+rides the existing owner-reviewed setup PR (`factory_bootstrap_repo`), whose idempotent adoption,
+stale-head refusal and digest-checked authorization (ADR-0074) already guard it, and `repos.check`
+now fails a stale caller and names that fix. The canonical revision is whatever a person merged
+into this checkout's `.github/`; the factory never invents or pins a gate revision of its own.
+
+**Consequence.** A stale caller becomes a two-line, reviewable update that cannot widen a
+permission or change the verify command, and it can merge only by the owner's hand or an explicit
+setup-merge grant. Until the owner ships the corrected gate revision to this repo's protected
+`.github/`, the upgrade moves a repo to the revision this checkout carries, not to a 700/1000
+policy that does not exist yet; that `.github/` change, and regating an existing pull request after
+it, stay with the owner.

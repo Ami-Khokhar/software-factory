@@ -348,6 +348,16 @@ the tool adds one commit with them to that PR and returns it as `updatedSha`. Wh
 or the secret statuses change, it rewrites the PR body to match (ADR-0023). It never force-pushes,
 and it refuses a repo with several open setup PRs: close all but one.
 
+A repo the factory already set up can still pin an older gate. When the installed caller names
+a `uses: .../gatekeeper.yml@<sha>` and a `gatekeeper_ref: <sha>` older than the revision this
+checkout ships in `.github/workflows/pr-gatekeeper.yml`, `factory_repo_check` reports the caller
+as stale and the same bootstrap PR rewrites only those two pins, leaving the repo's `verify`
+command, permissions, secrets, runner and every other line exactly as they are (ADR-0080). A
+workflow the factory did not write, or one already at the current revision, is left alone. The
+update merges only by your hand or an explicit setup-merge grant, like any setup PR, and it can
+move a repo only to the revision a person has merged into this checkout; correcting that revision
+to the 700/1000 policy is a protected `.github/` change you own.
+
 The merge stays manual unless you grant it. To let Day Desk merge this repo's setup PR itself,
 say so to the owner's tool `factory_authorize_setup_merge` (with the verify command when the
 PR is made in place of `.github/pr-gatekeeper.json`): it pins the digest of exactly what you

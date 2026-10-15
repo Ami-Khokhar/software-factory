@@ -45,11 +45,14 @@ detail of factory_repo_check. If the command needs a platform or tool the worker
    owner that fix word for word and stop: the owner pushes a first commit to that branch by hand.
    factory_bootstrap_repo refuses this repo, and the shell does not push that commit, because
    `git ls-remote` prints refs for it. Call factory_repo_check again when the owner says it is done.
-2. If gate files or the factory-standard block are missing, call factory_bootstrap_repo with the
+2. If gate files or the factory-standard block are missing, or factory_repo_check reports the
+   installed gate caller as stale, call factory_bootstrap_repo with the
    repo and the owner's name as `by`. When the gate config is missing, ask the owner for its
-   test/verify command and pass it as `verify`. The tool opens a setup PR containing only the
-   missing controls. Tell the owner to review and merge that PR; do not start work before it is
-   merged. If the result has `initialCommit`, the repo was empty: tell the owner that the tool
+   test/verify command and pass it as `verify`. The tool opens a setup PR containing the missing
+   controls, and rewrites only the two gate revision pins of an installed caller that pins an
+   older gate, leaving its verify command, permissions and secrets as they are. Tell the owner
+   to review and merge that PR; do not start work before it is merged. If the result has
+   `initialCommit`, the repo was empty: tell the owner that the tool
    also pushed that one commit, which holds only a `README.md`, to the default branch. If the
    result has `updatedSha`, the tool added the current setup files to the open setup PR: tell
    the owner to review that PR again. The tool
