@@ -145,8 +145,9 @@ def redact(text, secrets, limit=DIAGNOSTIC_TAIL):
 def verification_summary(output, limit=DIAGNOSTIC_TAIL):
     """A bounded digest of a failing verification run: one line per FAIL/ERROR identity in output
     order, each with its last traceback line, and an explicit marker when identities are dropped.
-    No identity is found -> the whitespace-collapsed output, so an unknown runner's own tail still
-    rides along. The caller redacts the digest against the pass's secrets before it serializes."""
+    No identity is found -> the end of the whitespace-collapsed output, where a pytest or linter
+    summary sits, so an unknown runner's own failing tail still rides along. The caller redacts the
+    digest against the pass's secrets before it serializes."""
     blocks, current = [], []
     for line in (output or "").splitlines():
         if _VERIFY_BLOCK.match(line.strip()):
@@ -168,7 +169,7 @@ def verification_summary(output, limit=DIAGNOSTIC_TAIL):
             entry = entry[:SUMMARY_ENTRY - len("...<truncated>")] + "...<truncated>"
         digest.append(entry)
     if not digest:
-        return " ".join((output or "").split())[:limit]
+        return " ".join((output or "").split())[-limit:]
     omitted = len(digest) - MAX_SUMMARY_FAILURES
     shown = digest[:MAX_SUMMARY_FAILURES]
     if omitted > 0:
@@ -522,7 +523,7 @@ def main(argv=None):
             echoed += output
             summary = verification_summary(output)
             record("verification", verify_start, code, summary)
-            tail = redact(summary, secrets, limit=2000).replace("```", "")
+            tail = redact(summary, secrets).replace("```", "")
             result["evidence"] = [{"kind": "test", "command": verify, "exit": code, "tail": tail}]
             if code != 0:
                 detail = redact(output[-400:], secrets, limit=400)

@@ -210,19 +210,28 @@ class DiagnosticsTest(unittest.TestCase):
         self.assertLessEqual(len(findings[0]["problem"]), len(failing))
         self.assertNotIn(TOKEN_SENTINEL, json.dumps(findings))
 
-    def test_the_next_workorder_carries_the_failing_test_beside_the_timeout(self):
-        """The dispatch path, not only the helper: a stored verify failure survives a later empty
-        timeout in the next WorkOrder's findingsToAddress."""
-        failing = "codex: worker reported failed: verify exited 1; diagnosis: failing test: exit 1: " \
-                  "FAIL: test_x (m.C.test_x) AssertionError: expected 4 lines got 20"
-        timeout = "codex: worker reported failed: the harness timed out"
-        wi = self.foreman.store.get(ID)
-        wi["attempts"] = [failing, timeout]
-        self.foreman.store.put(wi)
-        wi, task = self.dispatch()
+    def test_the_next_workorder_carries_the_failing_test_beside_the_timeout_after_a_retry(self):
+        """The dispatch path through the real state machine: a verify failure followed by an empty
+        timeout blocks the WorkItem and clears `attempts` on the person's retry, but the next
+        WorkOrder still carries the failing test beside the latest timeout, chronologically."""
+        diagnostics_body = {"elapsedMs": 9000, "phases": [
+            {"phase": "harness execution", "elapsedMs": 1000, "exitCode": 0},
+            {"phase": "verification", "elapsedMs": 8000, "exitCode": 1, "tail":
+             "FAIL: test_x (m.C.test_x) AssertionError: expected 4 lines got 20"}]}
+        first = self.fail_with(diagnostics_body, error="verify exited 1")
+        self.assertEqual(first["state"], "ready")
+        failing = first["attempts"][0]
+        self.assertIn("diagnosis: failing test:", failing)
+        blocked = self.fail_with(diagnostics=None)  # the second attempt times out with no output
+        self.assertEqual(blocked["state"], "blocked")
+        self.assertEqual(blocked["attempts"][0], failing)
+        timeout = blocked["attempts"][1]
+        self.foreman.resolve_human(ID, "retry", "try again", "owner")
+        __, task = self.dispatch()
         order = json.loads(task["input"].split("WorkOrder:\n", 1)[1])
-        problems = [f["problem"] for f in order["findingsToAddress"]]
-        self.assertEqual(problems, [failing, timeout])
+        previous = [f["problem"] for f in order["findingsToAddress"]
+                    if f["fingerprint"] == "previous-attempt"]
+        self.assertEqual(previous, [failing, timeout])
         self.assertEqual(schema_errors("workorder", order), [])
 
     def test_the_workorders_own_payload_is_never_carried_forward(self):

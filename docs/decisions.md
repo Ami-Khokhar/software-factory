@@ -1848,15 +1848,19 @@ only the latter is the evidence the factory reads.
 - On a failing verification, `worker/runner.py` builds a bounded, deterministic digest of the output:
   one line per unittest-style `FAIL:`/`ERROR:` identity, in output order, each with the last
   meaningful traceback line, an explicit `<truncated: n more failures/errors omitted>` marker when
-  more than a fixed number are dropped, and a fall back to the whitespace-collapsed output when no
-  identity is found. It is redacted like every other tail before it is serialized, and the same
-  digest is used for the phase tail and the test evidence tail. The full verify output is not
-  archived.
+  more than a fixed number are dropped, and a fall back to the end of the whitespace-collapsed
+  output when no identity is found. It is redacted like every other tail before it is serialized,
+  and the same digest is used for the phase tail and the test evidence tail. The full verify output
+  is not archived: the fallback's end is where a pytest or linter summary is, not the deployment
+  preamble at the head.
 - On a retry, `diagnostics.attempt_findings` carries the latest attempt, and when that attempt is
   not itself a failing-test finding, the most recent earlier attempt that is, chronologically, so
-  the last actionable verification finding rides beside a separate latest timeout. The control is
-  the existing `diagnosis: failing test:` wording in the attempt string; nothing is invented, and
-  the carried text is the same bounded, already-sanitized attempt.
+  the last actionable verification finding rides beside a separate latest timeout. The Foreman
+  reads those attempts from the durable `attempt_failed` audit, not only the WorkItem's `attempts`
+  list: a person's retry clears that list to reset the pass count, and the finding must survive
+  that boundary. A successful push ends the round, so attempts before it do not resurface. The
+  control is the existing `diagnosis: failing test:` wording in the attempt string; nothing is
+  invented, and the carried text is the same bounded, already-sanitized attempt.
 
 **Consequence.** A later timeout no longer erases the test identities a pass has to fix, while the
 latest cause still names the current state. Existing Results and WorkOrders stay valid: the Result

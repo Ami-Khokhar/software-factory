@@ -32,12 +32,14 @@ if mode in ("fix", "nocommit", "plant"):
     open("app.txt", "w").write("fixed\n")
 if mode == "noisy":
     open("app.txt", "w").write("noisy\n")
+if mode == "echo":
+    open("app.txt", "w").write("echo\n")
 if mode == "nocommit-broken":
     open("app.txt", "w").write("still broken\n")
 if mode == "cheat":
     open(".github/pr-gatekeeper.json", "w").write('{"verify": "true"}')
     open("app.txt", "w").write("still broken\n")
-if mode in ("fix", "noisy", "cheat"):
+if mode in ("fix", "noisy", "echo", "cheat"):
     git("add", "-A")
     git("-c", "user.name=h", "-c", "user.email=h@h", "commit", "-qm", "harness work")
 if mode == "plant":  # a filter driver and hooks, which run wherever git touches this tree
@@ -113,6 +115,10 @@ class RunnerTest(unittest.TestCase):
             "    print('-' * 60)\n"
             "    print('Ran 629 tests in 2.0s')\n"
             "    print('FAILED (failures=3, errors=7)')\n"
+            "    sys.exit(1)\n"
+            "if open('app.txt').read().strip() == 'echo':\n"
+            "    print('deploying dependencies to /tmp/build ' + 'x' * 6000)\n"
+            "    print('FAILED (failures=1, errors=0)')\n"
             "    sys.exit(1)\n"
             "sys.exit(0 if open('app.txt').read().strip() == 'fixed' else 1)\n")
         (seed / "app.txt").write_text("broken\n")
@@ -506,6 +512,27 @@ class RunnerTest(unittest.TestCase):
         """An unknown runner still carries its own tail, so no failure is invented or lost."""
         output = "pip install failed: no network\nretrying\n"
         self.assertEqual(runner.verification_summary(output), "pip install failed: no network retrying")
+
+    def test_the_verification_summary_fallback_keeps_the_end_not_the_preamble(self):
+        """#273: with no FAIL/ERROR identity the fallback keeps the end of the output, where a
+        pytest or linter failure summary is, not the deployment preamble the base's last-2000 tail
+        also dropped."""
+        output = "deploying dependencies " + "x" * 3000 + " AssertionError: expected 4 lines got 20"
+        summary = runner.verification_summary(output, limit=200)
+        self.assertEqual(len(summary), 200)
+        self.assertTrue(summary.endswith("AssertionError: expected 4 lines got 20"), summary)
+        self.assertNotIn("deploying dependencies", summary)
+
+    def test_a_falling_back_verify_keeps_the_end_not_the_preamble(self):
+        """The integration path: a verify with no test identity prints a long preamble then its
+        failing summary, and the Result's evidence tail carries that end."""
+        result, __ = self.run_order("echo")
+        tail = result["evidence"][0]["tail"]
+        self.assertEqual((result["status"], self.phases_of(result)["verification"]["exitCode"]),
+                         ("failed", 1))
+        self.assertIn("FAILED (failures=1, errors=0)", tail)
+        self.assertNotIn("deploying dependencies", tail)
+        self.assertLessEqual(len(tail), runner.DIAGNOSTIC_TAIL)
 
     def test_a_failing_patch_collection_names_its_phase_and_exit(self):
         result, _ = self.run_order("nothing")
