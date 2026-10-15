@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS allowances (
   actions TEXT NOT NULL,
   remaining INTEGER NOT NULL,
   approved_by TEXT NOT NULL,
-  approved_at TEXT NOT NULL
+  approved_at TEXT NOT NULL,
+  scope TEXT
 );
 CREATE TABLE IF NOT EXISTS setup_merges (
   repo TEXT PRIMARY KEY,
@@ -110,8 +111,18 @@ def _migrate_6(wi):
     return wi
 
 
+# Migration 7: the allowance scope (#274). It widens `allowances` with the approved membership;
+# no stored WorkItem changes and no allowance row changes meaning (an old row's scope reads as
+# NULL, which refuses spends until the owner approves a scoped plan id).
+TABLE_MIGRATIONS = {7: "ALTER TABLE allowances ADD COLUMN scope TEXT"}
+
+
+def _migrate_7(wi):
+    return wi
+
+
 MIGRATIONS = {1: _migrate_1, 2: _migrate_2, 3: _migrate_3, 4: _migrate_4, 5: _migrate_5,
-              6: _migrate_6}
+              6: _migrate_6, 7: _migrate_7}
 
 
 def canonical_inputs(inputs):
@@ -157,6 +168,10 @@ class Store:
         version = self._db.execute("PRAGMA user_version").fetchone()[0]
         while version < max(MIGRATIONS):
             version += 1
+            if TABLE_MIGRATIONS.get(version):
+                columns = [row[1] for row in self._db.execute("PRAGMA table_info(allowances)")]
+                if "scope" not in columns:  # a fresh store already has it from SCHEMA
+                    self._db.execute(TABLE_MIGRATIONS[version])
             for workitem_id, doc in self._db.execute("SELECT id, doc FROM workitems").fetchall():
                 wi = MIGRATIONS[version](json.loads(doc))
                 self._db.execute("UPDATE workitems SET doc = ? WHERE id = ?",
@@ -433,14 +448,17 @@ class Store:
         return (dict(zip(("repo", "fingerprint", "verify", "approvedBy", "approvedAt"), row))
                 if row else None)
 
-    def approve_allowance(self, plan_id, actions, remaining, approved_by):
+    def approve_allowance(self, plan_id, actions, remaining, approved_by, scope=None):
         """Record one owner approval of a plan recovery allowance (#239). One approval per plan id:
-        another call for the same plan refuses, so an allowance is never quietly topped up."""
+        another call for the same plan refuses, so an allowance is never quietly topped up.
+        `scope` is the approved membership the owner named: None only for a record the older
+        factory wrote, which refuses spends until the owner approves a scoped plan id (#274)."""
         with self._lock:
             try:
-                self._db.execute("INSERT INTO allowances VALUES (?, ?, ?, ?, ?)",
+                self._db.execute("INSERT INTO allowances VALUES (?, ?, ?, ?, ?, ?)",
                                  (plan_id, json.dumps(actions, sort_keys=True), remaining,
-                                  approved_by, now()))
+                                  approved_by, now(),
+                                  json.dumps(scope, sort_keys=True) if scope is not None else None))
             except sqlite3.IntegrityError:
                 raise Conflict(f"a plan allowance for {plan_id!r} is already approved") from None
 
@@ -448,7 +466,7 @@ class Store:
         """The approved plan allowance, or None."""
         with self._lock:
             row = self._db.execute(
-                "SELECT plan_id, actions, remaining, approved_by, approved_at FROM allowances "
+                "SELECT plan_id, actions, remaining, approved_by, approved_at, scope FROM allowances "
                 "WHERE plan_id = ?", (plan_id,)).fetchone()
         return self._allowance_row(row) if row else None
 
@@ -456,14 +474,15 @@ class Store:
         """Every approved plan allowance, oldest approval first."""
         with self._lock:
             rows = self._db.execute(
-                "SELECT plan_id, actions, remaining, approved_by, approved_at FROM allowances "
+                "SELECT plan_id, actions, remaining, approved_by, approved_at, scope FROM allowances "
                 "ORDER BY approved_at, plan_id").fetchall()
         return [self._allowance_row(row) for row in rows]
 
     @staticmethod
     def _allowance_row(row):
-        return dict(zip(("planId", "actions", "remaining", "approvedBy", "approvedAt"),
-                        (row[0], json.loads(row[1]), row[2], row[3], row[4])))
+        return dict(zip(("planId", "actions", "remaining", "approvedBy", "approvedAt", "scope"),
+                        (row[0], json.loads(row[1]), row[2], row[3], row[4],
+                         json.loads(row[5]) if row[5] else None)))
 
     def spend_allowance(self, plan_id, action, workitem_id=None, evidence=""):
         """Count one recovery use against an approved plan allowance (#239), and audit it.
@@ -471,17 +490,33 @@ class Store:
         Read, check and write sit in one committed transaction, so two callers racing on the
         same use cannot both spend it, and the audit line lands with the count. Raises Conflict
         when no allowance is approved for the plan, when `action` is outside its scope, or when
-        the remaining allowance is gone or changed under this spend.
+        the remaining allowance is gone or changed under this spend. The membership the approval
+        named is checked here too (#274): a scoped allowance spends only on a WorkItem of its repo
+        and, when it names exact members, of those members; a record without a scope is legacy and
+        refuses by default until the owner approves a new scoped plan id.
         """
         with self._lock, self._transaction():
-            row = self._db.execute("SELECT actions, remaining FROM allowances WHERE plan_id = ?",
+            row = self._db.execute("SELECT actions, remaining, scope FROM allowances WHERE plan_id = ?",
                                    (plan_id,)).fetchone()
             if not row:
                 raise Conflict(f"no plan allowance for {plan_id!r} is approved; the owner approves "
                                "one with factory_approve_plan_allowance")
-            actions, remaining = json.loads(row[0]), row[1]
+            actions, remaining, scope_row = json.loads(row[0]), row[1], row[2]
             if action not in actions:
                 raise Conflict(f"the plan allowance {plan_id!r} permits {actions}, not {action!r}")
+            scope = json.loads(scope_row) if scope_row else None
+            if scope is None:
+                raise Conflict(f"the plan allowance {plan_id!r} predates scoped membership, so it "
+                               "refuses beyond the owner's own hands; the owner approves a new "
+                               "scoped plan id with factory_approve_plan_allowance, naming the repo "
+                               "the plan covers")
+            doc = self._db.execute("SELECT doc FROM workitems WHERE id = ?",
+                                   (workitem_id,)).fetchone()
+            wi = json.loads(doc[0]) if doc else {}
+            if wi.get("repo") != scope["repo"] or (scope["items"] and workitem_id not in scope["items"]):
+                raise Conflict(f"the plan allowance {plan_id!r} covers {'members ' + ', '.join(scope['items']) if scope['items'] else 'repo ' + scope['repo']}, "
+                               f"not {workitem_id!r}; the owner decides that with "
+                               "factory_resolve_human or a new scoped plan id")
             if remaining < 1:
                 raise Conflict(f"the plan allowance {plan_id!r} is exhausted; the owner decides any "
                                "further recovery, for example with factory_resolve_human")

@@ -825,18 +825,36 @@ class Foreman:
                               REGATE_MARKER.sub(marker, body) if seen else f"{body.rstrip()}\n\n{marker}\n")
         return True
 
-    def approve_plan_allowance(self, plan_id, actions, remaining, by):
+    def approve_plan_allowance(self, plan_id, actions, remaining, by, repo, items=None):
         """The owner's one approval of bounded plan-level recovery (ADR-0069): within the plan's
         scope, Day Desk may spend the allowance on evidence-based retries and on replacements that
         name open issues of the same repo, up to `remaining` uses, without the owner answering each
         one and without falsely setting ownerAsked. The approval is durable in the store and one per
         plan id: a second approval of the same plan refuses, and
-        nothing unlimited is approved. Safety stops and confirmed environment faults stay with a
-        person whatever the allowance says.
+        nothing unlimited is approved. The approval names its membership too (#274): the repo the
+        plan covers, and optionally the exact WorkItem members it allows; a spend outside that
+        membership refuses, and an approval without one cannot happen. Safety stops and confirmed
+        environment faults stay with a person whatever the allowance says.
         """
         if not isinstance(by, str) or not by.strip() or not isinstance(plan_id, str) or not plan_id.strip():
             raise ToolError("approving a plan allowance needs its plan identity and the name of the "
                             "person who approved it")
+        if not isinstance(repo, str) or not repo.strip():
+            raise ToolError("approving a plan allowance needs the repo the plan covers, so no "
+                            "allowance spends outside its owner-approved membership")
+        if items is not None and (not isinstance(items, list) or not items
+                                  or any(not isinstance(item, str) for item in items)):
+            raise ToolError("items, when named, is a non-empty list of the plan's WorkItem ids, "
+                            f"like {[f'{repo}#1']}; a repo-level approval omits it")
+        scope_repo = repo.strip()
+        if items and any(not item.startswith(f"{scope_repo}#") or not item[len(scope_repo) + 1:].isdigit()
+                         for item in items):
+            raise ToolError(f"each member of the plan is a WorkItem id of {scope_repo}, like "
+                            f"{scope_repo}#1; the membership binds the members, not another repo's")
+        scope = {"repo": scope_repo, "items": sorted(set(items)) if items else []}
+        if len(scope["items"]) > MAX_PLAN_ISSUES:
+            raise ToolError(f"a plan allowance names at most {MAX_PLAN_ISSUES} exact members; "
+                            "scope the rest to the repo")
         if (not isinstance(actions, list) or not all(isinstance(a, str) for a in actions)
                 or not actions or len(set(actions)) != len(actions)
                 or any(a not in RECOVERY_ACTIONS for a in actions)):
@@ -846,12 +864,12 @@ class Foreman:
                             "is approved")
         plan_id = plan_id.strip()
         try:
-            self.store.approve_allowance(plan_id, actions, remaining, by)
+            self.store.approve_allowance(plan_id, actions, remaining, by, scope=scope)
         except Conflict as exc:
             raise ToolError(str(exc)) from None
         self.store.log("allowance_approved", {"planId": plan_id, "actions": actions,
-                                              "remaining": remaining, "by": by})
-        return {"planId": plan_id, "actions": actions, "remaining": remaining}
+                                              "remaining": remaining, "by": by, "scope": scope})
+        return {"planId": plan_id, "actions": actions, "remaining": remaining, "scope": scope}
 
     def use_allowance(self, workitem_id, plan_id, action, note, by):
         """Day Desk's recovery decision inside an owner-approved plan allowance (ADR-0069): a retry
@@ -882,6 +900,14 @@ class Foreman:
             if action == "replace":
                 raise ToolError("an allowance replacement runs through factory_replace_issue, with "
                                 "this planId as allowancePlanId")
+            # Budget preflight (#274): an owner-approved allowance recovers an attempt, never buys
+            # fresh budget; an item that used its passes must go back to the owner, so the refusal
+            # happens before the count could be charged for a state nothing could ever reach.
+            used = len(self.store.workorders(workitem_id)) - (wi.get("passesBefore") or 0)
+            if used >= self.config.max_passes:
+                raise ToolError(f"{workitem_id} used its {used} passes of budget, the allowance buys "
+                                f"none fresh, dispatch would stop it, so the owner decides: "
+                                f"factory retry|close {workitem_id} <note>")
             try:
                 spent = self.store.spend_allowance(plan_id, action, workitem_id=workitem_id,
                                                    evidence=diagnostics.sanitize(note))

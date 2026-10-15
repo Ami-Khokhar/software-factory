@@ -269,6 +269,16 @@ must hold before the controller is allowed to write:
    the same replace call is the way out of any other interrupted run too: a partly run journal is
    replayed, or — when a person moved a member meanwhile — ends the operation where it stands and
    releases what it held (ADR-0063).
+10. **A plan allowance recovers only its approved members, and only before the budget is
+   spent** (ADR-0069, extended by ADR-0075). One approval per plan id names the repo the plan
+   covers and, optionally, the exact WorkItem members it allows; that membership is checked at
+   the spend itself, inside the count's transaction, so a use of one WorkItem can never pay for
+   recovery of an unrelated repo or an unapproved member, and a stored record without a scope —
+   one the older factory wrote — refuses every spend until the owner approves a new scoped plan
+   id. The approval is durable and survives a restart. A use of `factory_use_allowance` also
+   refuses an item that already used its per-item pass budget before any count moves or any
+   state does: the allowance recovers an attempt, never buys fresh budget, and an exhausted item
+   goes back to the owner.
 
 ## Versioning
 
