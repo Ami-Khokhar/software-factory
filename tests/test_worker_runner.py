@@ -176,12 +176,18 @@ class RunnerTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
 
     def run_order(self, mode, kind="implement", repo="o/r", head=None, remote_verify=False,
-                  max_lines=600):
+                  max_lines=600, ceiling=None, omit_ceiling=False):
         wi = workitem(id="o/r#7", repo=repo, issueNumber=7, goal="Fix the app", headSha=head)
         config = Config(mcp_token="t", repos=frozenset(),
                         remote_verify_repos=frozenset({repo}) if remote_verify else frozenset())
         order = documents.workorder(wi, kind, 0, config, self.base)
         order["constraints"]["maxChangedLines"] = max_lines
+        order["constraints"]["maxSourceChangedLines"] = max_lines
+        if omit_ceiling:
+            order["constraints"].pop("maxSourceChangedLinesCeiling", None)
+        else:
+            order["constraints"]["maxSourceChangedLinesCeiling"] = (
+                max_lines + 1_000_000 if ceiling is None else ceiling)
         text = documents.worker_input(order, "factory/7")
         out = io.StringIO()
         cwd = os.getcwd()
@@ -324,6 +330,69 @@ class RunnerTest(unittest.TestCase):
                                if argv[:2] == ["sh", "-c"] and "check.py" in argv[2]]
                 self.assertTrue(verify_runs, "the verify did not run on the advisory-sized PR")
 
+    def test_tests_and_docs_do_not_count_against_the_source_target(self):
+        """ADR-0079: the target counts source additions and deletions only. A whole pull request far
+        over the old all-lines target is still accepted when its source fits, because test and doc
+        lines are retained evidence reported separately."""
+        branch = Path(self.tmp.name) / "mixed"
+        sh(self.tmp.name, "clone", "-q", str(self.origin), str(branch))
+        sh(branch, "checkout", "-q", "-b", "factory/7")
+        (branch / "app.py").write_text("x = 1\n" * 650)
+        (branch / "tests").mkdir()
+        (branch / "tests" / "test_app.py").write_text("assert True  # test\n" * 400)
+        (branch / "docs").mkdir()
+        (branch / "docs" / "guide.md").write_text("note\n" * 100)
+        sh(branch, "add", "-A")
+        sh(branch, "-c", "user.name=w", "-c", "user.email=w@w", "commit", "-qm", "round 1")
+        sh(branch, "push", "-q", "-f", "origin", "factory/7")
+        head = sh(branch, "rev-parse", "HEAD")
+        err = io.StringIO()
+        stdout, sys.stderr = sys.stderr, err
+        try:
+            result, _ = self.run_order("fix", kind="fix", head=head, max_lines=700, ceiling=1000)
+        finally:
+            sys.stderr = stdout
+        self.assertEqual(result["status"], "completed", result.get("error"))
+        self.assertNotIn("factory advisory", err.getvalue())
+
+    def test_a_target_only_workorder_warns_over_the_target_and_still_runs(self):
+        """The ceiling defaults to the reviewable 1000 when a WorkOrder names only the source
+        target: 701 source lines is advisory, not a size-only recovery. Without the default the
+        target acted as the ceiling and refused the pass (finding a391ed41)."""
+        branch = Path(self.tmp.name) / "target-only"
+        sh(self.tmp.name, "clone", "-q", str(self.origin), str(branch))
+        sh(branch, "checkout", "-q", "-b", "factory/7")
+        (branch / "notes.txt").write_text("note\n" * 701)
+        sh(branch, "add", "-A")
+        sh(branch, "-c", "user.name=w", "-c", "user.email=w@w", "commit", "-qm", "round 1")
+        sh(branch, "push", "-q", "-f", "origin", "factory/7")
+        head = sh(branch, "rev-parse", "HEAD")
+        err = io.StringIO()
+        stdout, sys.stderr = sys.stderr, err
+        try:
+            result, _ = self.run_order("fix", kind="fix", head=head, max_lines=700, omit_ceiling=True)
+        finally:
+            sys.stderr = stdout
+        self.assertEqual(result["status"], "completed", result.get("error"))
+        self.assertIn("factory advisory", err.getvalue())
+
+    def test_a_source_total_over_the_ceiling_is_a_size_only_recovery(self):
+        """ADR-0079: a source total over the reviewable ceiling is refused with the stable
+        size-only marker, so the Foreman routes it to a decomposition rather than a failed verify."""
+        branch = Path(self.tmp.name) / "huge"
+        sh(self.tmp.name, "clone", "-q", str(self.origin), str(branch))
+        sh(branch, "checkout", "-q", "-b", "factory/7")
+        (branch / "app.py").write_text("x = 1\n" * 1000)
+        sh(branch, "add", "-A")
+        sh(branch, "-c", "user.name=w", "-c", "user.email=w@w", "commit", "-qm", "round 1")
+        sh(branch, "push", "-q", "-f", "origin", "factory/7")
+        head = sh(branch, "rev-parse", "HEAD")
+        result, order = self.run_order("fix", kind="fix", head=head, max_lines=700, ceiling=1000)
+        self.assertEqual(result["status"], "failed", result)
+        self.assertIn("source-size-ceiling", result["error"])
+        self.assertIn("1002 source lines", result["error"])
+        self.assertNotIn("verification", self.phases_of(result))
+
     def test_a_hard_line_bound_still_refuses_when_the_workorder_names_it(self):
         """ADR-0070: an old WorkOrder's migration path — maxChangedLinesAdvisory false — keeps the
         old refusal, with the actual size and what remains."""
@@ -339,6 +408,8 @@ class RunnerTest(unittest.TestCase):
         config = Config(mcp_token="t", repos=frozenset())
         order = documents.workorder(wi, "fix", 0, config, self.base)
         order["constraints"]["maxChangedLinesAdvisory"] = False
+        for key in ("maxSourceChangedLines", "maxSourceChangedLinesAdvisory", "maxSourceChangedLinesCeiling"):
+            order["constraints"].pop(key, None)  # an older WorkOrder: the all-lines bound is hard
         text = documents.worker_input(order, "factory/7")
         out = io.StringIO()
         cwd = os.getcwd()

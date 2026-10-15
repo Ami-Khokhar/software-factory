@@ -75,7 +75,9 @@ detail of factory_repo_check. If the command needs a platform or tool the worker
 Turn the owner's goal into issues the factory can finish, as the Plan rules of the factory
 standard in the repo's AGENTS.md ask:
 
-- Each issue fits one PR: at most 600 changed lines and 20 files. Split a bigger goal into issues
+- Each issue fits one PR: at most 700 changed source lines (tests and docs count separately) and 20
+  files. A source total over the 1000-line reviewable ceiling is proposed for decomposition, not
+  pushed. Split a bigger goal into issues
   that each make sense alone, and aim for about half that size: a worker finishes a small issue in
   one pass, and an issue near the limit can run out of time.
 - Each body ends with an `## Acceptance` heading and bullets of the form

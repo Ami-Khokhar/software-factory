@@ -42,6 +42,7 @@ if ! git diff --cached --quiet; then git -c core.hooksPath=/dev/null commit -q -
 git merge-base --is-ancestor "$FACTORY_BASE" HEAD || exit 3
 git diff --binary "$FACTORY_BASE" HEAD
 echo "FACTORY_PR_SIZE: $(git diff --shortstat "$(git merge-base "$FACTORY_DEFAULT" HEAD)" HEAD)" >&2
+git diff --numstat "$(git merge-base "$FACTORY_DEFAULT" HEAD)" HEAD | sed 's/^/FACTORY_PR_NUMSTAT: /' >&2
 """
 MAX_PATCH_BYTES = 2_000_000
 CONTAINER_HOME = "/tmp/factory-home"
@@ -341,16 +342,61 @@ def preflight(order, image, harness_argv, credential_specs, env_specs, scratch, 
 
 
 PR_SIZE = re.compile(r"(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?")
+SIZE_CEILING_MARKER = "source-size-ceiling"  # matches factory_mcp/sizing.py
+SOURCE_CEILING = 1000  # matches factory_mcp/sizing.py SOURCE_CEILING
+_DOC_SUFFIXES = (".md", ".rst", ".adoc", ".mdx")
+
+
+def change_kind(path):
+    """`source`, `tests` or `docs` for a repository path (factory_mcp/sizing.py)."""
+    parts = (path or "").split("/")
+    name = parts[-1] if parts else ""
+    lowered = [part.lower() for part in parts[:-1]]
+    if parts and parts[0].lower() == "docs" or name.lower().endswith(_DOC_SUFFIXES):
+        return "docs"
+    if (lowered and any(part in ("tests", "test") for part in lowered)
+            or name.lower().startswith("test_") or name.lower().endswith("_test.py")):
+        return "tests"
+    return "source"
+
+
+def change_totals(files):
+    """Source/tests/docs/total lines for ``(path, added, deleted)`` records."""
+    totals = {"source": 0, "tests": 0, "docs": 0}
+    for path, added, deleted in files:
+        totals[change_kind(path)] += (added or 0) + (deleted or 0)
+    totals["total"] = totals["source"] + totals["tests"] + totals["docs"]
+    totals["files"] = len(files)
+    return totals
+
+
+def numstat_totals(err):
+    """The per-file source/tests/docs totals the extract printed on stderr."""
+    files = []
+    for line in (err or "").splitlines():
+        marker = "FACTORY_PR_NUMSTAT: "
+        if not line.startswith(marker):
+            continue
+        parts = line[len(marker):].split("\t")
+        if len(parts) != 3:
+            continue
+        added, deleted, path = parts
+        try:
+            files.append((path, int(added), int(deleted)))
+        except ValueError:
+            files.append((path, 0, 0))  # a binary change: zero lines, still a file
+    return change_totals(files)
 
 
 def collect(sandbox, work, base, default, goal, limits):
     """The harness's work as one unified diff against `base`, computed in the sandbox. Uncommitted
     changes are committed first, so a harness that forgot to commit still hands its work over.
     Refuses the work when the whole pull request — every commit on the branch against the default
-    branch's merge base, so a fix is measured with the attempt it follows (ADR-0040). Over the line
-    target warns: the small-PR line count stays guidance, not a wall (ADR-0069). Over the file count
-    refuses the work: that stands in for an expensive verify, and factory-mcp's own prepush check
-    stays for a base that advanced under the pass."""
+    branch's merge base, so a fix is measured with the attempt it follows (ADR-0040). The size
+    counts source additions and deletions only; tests and docs are reported separately (ADR-0079).
+    Over the source target warns, over the source ceiling refuses as a size-only excess the Foreman
+    routes to decomposition, and over the file count refuses: that stands in for an expensive verify,
+    and factory-mcp's own prepush check stays for a base that advanced under the pass."""
     code, diff, err = sandbox.run(["sh", "-c", EXTRACT], 300, work,
                                   env={"FACTORY_BASE": base, "FACTORY_DEFAULT": default,
                                        "FACTORY_GOAL": goal})
@@ -366,11 +412,37 @@ def collect(sandbox, work, base, default, goal, limits):
     files, added, deleted = (int(n or 0) for n in (stat.groups() if stat else (None, None, None)))
     lines = added + deleted
     max_lines, max_files = limits["maxChangedLines"], limits["maxChangedFiles"]
-    # Line count is advisory (maxChangedLinesAdvisory, default true for WorkOrders without the
-    # field): a modest exceedance warns and the pass continues. Only the line count warns; the file
-    # count, the patch-byte ceiling and the protected paths stay binding (ADR-0069).
-    advisory = limits.get("maxChangedLinesAdvisory", True)
-    if lines > max_lines:
+    # The source metric (ADR-0079) counts source additions and deletions, tests and docs separately.
+    # An old WorkOrder without maxSourceChangedLines keeps the all-lines target.
+    source_target = limits.get("maxSourceChangedLines")
+    if source_target is not None:
+        totals = numstat_totals(err)
+        source = totals["source"]
+        # The ceiling defaults to the reviewable one, not the advisory target, so a WorkOrder that
+        # names only the target does not turn a target+1 into a size-only recovery (ADR-0079).
+        ceiling = limits.get("maxSourceChangedLinesCeiling", SOURCE_CEILING)
+        advisory = limits.get("maxSourceChangedLinesAdvisory", True)
+        if source > ceiling:
+            raise WorkerError(
+                f"{SIZE_CEILING_MARKER}: the whole pull request changes {source} source lines "
+                f"({totals['tests']} test, {totals['docs']} doc) in {totals['files']} files, over the "
+                f"{ceiling}-line reviewable ceiling; this is a size-only excess, not a failed verify")
+        if source > source_target and not advisory:
+            raise WorkerError(
+                f"the proposed pull request changes {source} source lines "
+                f"({totals['tests']} test, {totals['docs']} doc) in {totals['files']} files; the "
+                f"WorkOrder allows {source_target} source lines")
+        if source > source_target:
+            print(f"factory advisory: the whole pull request is {source} source lines "
+                  f"({totals['tests']} test, {totals['docs']} doc) in {totals['files']} files, over "
+                  f"the WorkOrder's {source_target}-source-line target with "
+                  f"{source_target - source} lines left; this is advisory, not a rejection",
+                  file=sys.stderr, flush=True)
+    elif lines > max_lines:
+        # Line count is advisory (maxChangedLinesAdvisory, default true for WorkOrders without the
+        # field): a modest exceedance warns and the pass continues. Only the line count warns; the file
+        # count, the patch-byte ceiling and the protected paths stay binding (ADR-0069).
+        advisory = limits.get("maxChangedLinesAdvisory", True)
         if not advisory:
             raise WorkerError(
                 f"the proposed pull request is {lines} lines in {files} files; the WorkOrder allows "

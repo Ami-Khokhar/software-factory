@@ -112,6 +112,21 @@
           "default": true,
           "description": "A small pull request stays guidance, not a wall: when true (or absent, as it is in older WorkOrders, which read as advisory), the runner and factory-mcp report exceeding maxChangedLines as a size warning and push anyway. Setting false restores a hard line rejection. The file count and the patch-byte and protected-path bounds are independent and stay binding in both modes (ADR-0070)."
         },
+        "maxSourceChangedLines": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The small-PR target for source lines only, tests and docs reported separately (ADR-0079). When present it is the target the runner, the pusher and factory-mcp compare against; when absent the older all-lines maxChangedLines stands, so stored WorkOrders keep their meaning."
+        },
+        "maxSourceChangedLinesAdvisory": {
+          "type": "boolean",
+          "default": true,
+          "description": "When true (or absent) a source total over maxSourceChangedLines warns and the pass continues; false restores a hard source-line rejection. Independent of the ceiling and of the file count."
+        },
+        "maxSourceChangedLinesCeiling": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The reviewable source ceiling (ADR-0079). A source total over it is a size-only excess: the pass does not push and the Foreman routes it to a bounded, acceptance-preserving decomposition instead of a generic owner question. When maxSourceChangedLines is present but this is absent, the ceiling defaults to 1000 (factory_mcp/sizing.py SOURCE_CEILING); a WorkOrder without maxSourceChangedLines keeps the older all-lines maxChangedLines meaning."
+        },
         "maxChangedFiles": { "type": "integer", "minimum": 1 },
         "protectedPaths": {
           "type": "array",

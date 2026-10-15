@@ -2,12 +2,11 @@
 pushed commit on the WorkItem branch."""
 import base64
 import os
-import re
 import subprocess
 import sys
 import tempfile
 
-SHORTSTAT = re.compile(r"(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?")
+from . import sizing
 
 
 class PatchError(Exception):
@@ -196,7 +195,10 @@ def apply(url, token, branch, base_sha, patch, message, force, protected=(), lim
     (default branch, lines, files, advisory): a push that takes the branch over the file count is
     refused, and over the line count refused too unless `advisory` — the 4th element; absent, the
     old hard bound stands — in which case the size is reported as a warning and the push proceeds
-    (ADR-0070). A push to an
+    (ADR-0070). A 5th element, a source spec
+    (``{"target", "ceiling", "advisory"}`` or None, ADR-0079) switches the line metric to source
+    only: over the ceiling is refused as a size-only excess the Foreman routes to decomposition,
+    over the target warns (or refuses when its advisory flag is false). A push to an
     open PR stays on it, and the next fix builds on it (ADR-0040)."""
     env = _env(token)
     with tempfile.TemporaryDirectory() as tmp:
@@ -221,27 +223,49 @@ def apply(url, token, branch, base_sha, patch, message, force, protected=(), lim
         if refused:
             raise PatchError(f"changes protected path {', '.join(refused)}")
         if limits:
-            lines, files = _size(work, env, f"origin/{limits[0]}")
-            advisory = limits[3] if len(limits) > 3 else False  # a caller without the flag keeps hard
-            if files > limits[2]:
-                raise PatchError(f"{lines} lines in {files} files exceeds the WorkOrder constraint of "
-                                 f"{limits[2]} files")
-            if lines > limits[1]:
-                if not advisory:
-                    raise PatchError(f"{lines} lines in {files} files exceeds the WorkOrder constraint "
-                                     f"of {limits[1]} lines")
-                print(f"factory advisory: the whole pull request is {lines} lines in {files} files, "
-                      f"over the WorkOrder's {limits[1]}-line target with {limits[1] - lines} lines "
-                      "left; this is advisory, not a rejection", file=sys.stderr, flush=True)
+            source = limits[4] if len(limits) > 4 else None
+            totals = _totals(work, env, f"origin/{limits[0]}")
+            if totals["files"] > limits[2]:
+                raise PatchError(f"{totals['total']} lines in {totals['files']} files exceeds the "
+                                 f"WorkOrder constraint of {limits[2]} files")
+            if source:
+                _check_source(totals, source)
+            else:
+                advisory = limits[3] if len(limits) > 3 else False  # a caller without the flag keeps hard
+                if totals["total"] > limits[1]:
+                    if not advisory:
+                        raise PatchError(f"{totals['total']} lines in {totals['files']} files exceeds "
+                                         f"the WorkOrder constraint of {limits[1]} lines")
+                    print(f"factory advisory: the whole pull request is {totals['total']} lines in "
+                          f"{totals['files']} files, over the WorkOrder's {limits[1]}-line target with "
+                          f"{limits[1] - totals['total']} lines left; this is advisory, not a rejection",
+                          file=sys.stderr, flush=True)
         _git(["push", "-q", *(["--force"] if force else []), "origin", f"HEAD:refs/heads/{branch}"], work, env)
         return _git(["rev-parse", "HEAD"], work, env)
 
 
-def _size(work, env, default):
-    """(changed lines, changed files) from where HEAD left `default` to HEAD, as GitHub counts a PR."""
-    stat = SHORTSTAT.search(_git(["diff", "--shortstat", _git(["merge-base", default, "HEAD"], work, env),
-                                  "HEAD"], work, env))
-    if not stat:
-        return 0, 0
-    files, added, deleted = (int(n or 0) for n in stat.groups())
-    return added + deleted, files
+def _check_source(totals, source):
+    """Refuse a source total over the reviewable ceiling (size-only, recoverable), or over the
+    target when it is not advisory; warn over an advisory target (ADR-0079)."""
+    verdict = sizing.boundary(totals["source"], source)
+    if verdict == sizing.SIZE_CEILING:
+        raise PatchError(
+            f"{sizing.SIZE_CEILING_MARKER}: the whole pull request changes {totals['source']} source "
+            f"lines ({totals['tests']} test, {totals['docs']} doc) in {totals['files']} files, over the "
+            f"{source['ceiling']}-line reviewable ceiling; this is a size-only excess, not a failed verify")
+    if verdict == sizing.SIZE_REFUSED:
+        raise PatchError(f"the proposed pull request changes {totals['source']} source lines "
+                         f"({totals['tests']} test, {totals['docs']} doc) in {totals['files']} files; "
+                         f"the WorkOrder allows {source['target']} source lines")
+    if verdict == sizing.SIZE_ADVISORY:
+        print(f"factory advisory: the whole pull request is {totals['source']} source lines "
+              f"({totals['tests']} test, {totals['docs']} doc) in {totals['files']} files, over the "
+              f"WorkOrder's {source['target']}-source-line target with "
+              f"{source['target'] - totals['source']} lines left; this is advisory, not a rejection",
+              file=sys.stderr, flush=True)
+
+
+def _totals(work, env, default):
+    """The source/tests/docs/total line totals from where HEAD left `default` to HEAD."""
+    base = _git(["merge-base", default, "HEAD"], work, env)
+    return sizing.measure(sizing.parse_numstat(_git(["diff", "--numstat", base, "HEAD"], work, env)))

@@ -42,8 +42,10 @@ last steps, and what it needs from you.
 
 ### Writing issues the factory can finish
 
-- One issue is one PR: about 600 changed lines (advisory, ADR-0070: going over warns, it never
-  rejects on line count alone) and at most 20 files. Split larger work into issues that
+- One issue is one PR: about 700 changed SOURCE lines (advisory, ADR-0079: over the target warns,
+  over the 1000-line reviewable ceiling becomes a decomposition proposal; it never rejects on source
+  count alone) and at most 20 files. Test and doc lines are reported separately and never count
+  against the source target. Split larger work into issues that
   each make sense alone, and aim for about half the size: a worker finishes a small issue in one
   pass, and an issue near the limit can run out of time.
 - Make each check readable from the result: a test that must pass, a command that must print
@@ -57,6 +59,35 @@ last steps, and what it needs from you.
   uses `FACTORY_WORKERS` in order (ADR-0029).
 - Only you (`FACTORY_TRUSTED_AUTHORS`) can open issues the factory acts on. Issues from other
   people are skipped, even with the label.
+
+### Rollout: source-line sizing (ADR-0079)
+
+The size metric counts changed source lines: 700 is the target, 1000 the reviewable ceiling, and
+`tests/`/`test_*` and markdown/docs lines are reported separately and never count against the
+target. A source total over the ceiling becomes a proposed decomposition, not a failed attempt and
+not a fabricated success.
+
+Deploy the pieces together, and do not call the source merge a live rollout until all of them are
+verified on the host:
+
+- `worker/runner.py` in the worker image: the image must be rebuilt (`docker build -t
+  factory-worker:latest worker/`) and its `collect` re-read before any pass can see the ceiling.
+- `factory_mcp/sizing.py` plus `factory_mcp/patches.py` and `factory_mcp/foreman.py` in the running
+  factory-mcp service (restart the service, not only merge the branch).
+- `templates/AGENTS.md`: the standard block is the only place the shared guidance is edited, and
+  this branch does not edit it. The owner ships that revision (700 source lines, 1000 ceiling, tests
+  and docs separate) through the normal template-copy route, then copies it to this repo's protected
+  root `AGENTS.md`; both are protected-path changes, so until that separate change lands the shipped
+  standard still says 600 and the code here is ahead of the guidance.
+- The gate's own policy: `.github/pr-gatekeeper.json` still carries `max_changed_lines: 600` on
+  this branch. Aligning pr-gatekeeper to the same source metric is a separate `.github/` change
+  the owner ships to that repository; until it is deployed, the gate's line policy and the
+  factory's source metric disagree and the gate's number is the review standard.
+
+Verify with the size command the worker's rules name, from the host checkout:
+`git diff --shortstat $(git merge-base source/HEAD HEAD) HEAD`, and with a source total that
+crosses 1001 (a `human_waiting` WorkItem whose `blockedOn` names the decomposition, an empty
+`attempts` list and no PR).
 
 ## Commands
 
