@@ -27,6 +27,8 @@ class Config:
     max_passes: int = 4
     passes_per_repo: int = 2  # worker passes of one repo that run at once (ADR-0036)
     wall_ms: int = 20 * 60 * 1000
+    source_target: int = 700  # source-only small-PR target (ADR-0079)
+    source_ceiling: int = 1000  # source-only reviewable ceiling; over it: decomposition, not a wall
     protected_paths: tuple = (".github/", "AGENTS.md")
     checkout_root: str = ""  # worker checkouts live at <root>/<owner>/<repo>; empty: the agent's cwd
     trusted_authors: frozenset = frozenset()  # issue authors a worker may act for; empty: repo owner
@@ -87,6 +89,13 @@ class Config:
         if remote_verify_seconds < 1:
             raise ValueError("FACTORY_REMOTE_VERIFY_SECONDS must be 1 or more")
         rank_lessons = env.get("FACTORY_JEV_LESSON_RANKING", "") in ("1", "true", "yes")
+        source_target = int(env.get("FACTORY_SOURCE_CHANGED_LINES") or defaults.source_target)
+        if source_target < 1:
+            raise ValueError("FACTORY_SOURCE_CHANGED_LINES must be 1 or more")
+        source_ceiling = int(env.get("FACTORY_SOURCE_CHANGED_LINES_CEILING") or defaults.source_ceiling)
+        if source_ceiling < source_target:
+            raise ValueError("FACTORY_SOURCE_CHANGED_LINES_CEILING must be at least "
+                             "FACTORY_SOURCE_CHANGED_LINES")
         if rank_lessons and not env.get("TYPESAFE_API_KEY", ""):
             # A flag without a key would rank nothing on every dispatch: say what is missing.
             raise ValueError("FACTORY_JEV_LESSON_RANKING is on, but TYPESAFE_API_KEY is not set; "
@@ -113,6 +122,8 @@ class Config:
             max_passes=int(env.get("FACTORY_MAX_PASSES") or defaults.max_passes),
             passes_per_repo=passes_per_repo,
             wall_ms=int(env.get("FACTORY_WALL_MS") or defaults.wall_ms),
+            source_target=source_target,
+            source_ceiling=source_ceiling,
             checkout_root=env.get("FACTORY_CHECKOUT_ROOT", ""),
             trusted_authors=frozenset(a.strip() for a in env.get("FACTORY_TRUSTED_AUTHORS", "").split(",")
                                       if a.strip()),

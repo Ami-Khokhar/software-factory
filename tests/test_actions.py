@@ -127,16 +127,65 @@ class ActionsTest(unittest.TestCase):
                     self.assertIn("exceeds the WorkOrder constraint of 20 files", wi["attempts"][0])
 
     def test_an_advisory_lines_exceedance_is_recorded_not_failed(self):
-        """ADR-0070: a whole-PR lines exceedance over the opened pull request is noted in the audit
-        log, never as an attempt failure: no rejection solely for line count."""
+        """ADR-0079: a source-line exceedance over the opened pull request is noted in the audit
+        log, never as an attempt failure: no rejection for source count alone under the ceiling."""
         wi, task = self.dispatched()
-        self.git.files = (("src/app.py", 591, 10),)  # 601 changed lines, over the 600 target
+        self.git.files = (("src/app.py", 691, 10),)  # 701 source lines, over the 700 target
         self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
         wi = self.tick()
         self.assertEqual(wi["state"], "pr_open", wi.get("attempts"))
         noted = [row["detail"] for row in self.foreman.store.history(ID)
                  if row["action"] == "pr_size_advisory"]
-        self.assertEqual(noted, [{"lines": 601, "target": 600, "files": 1}])
+        self.assertEqual(noted, [{"source": 701, "tests": 0, "docs": 0, "total": 701,
+                                  "target": 700, "files": 1}])
+
+    def test_a_target_only_workorder_uses_the_reviewable_ceiling(self):
+        """A WorkOrder with maxSourceChangedLines but no ceiling keeps the documented default of
+        1000: 701 source lines is advisory and pushes, while 1001 is a size-only recovery. Without
+        the default a target+1 became a ceiling error instead of the advisory (finding a391ed41)."""
+        wi, _ = self.dispatched()
+        order = self.foreman.store.workorders(ID)[0]
+        order["constraints"].pop("maxSourceChangedLinesCeiling")
+        self.github.push(REPO, wi["branch"], "c701", files=(("src/app.py", 691, 10),))
+        errors, _ = self.foreman.check_pushed(wi, order, "c701")
+        self.assertEqual(errors, [])
+        noted = [row["detail"] for row in self.foreman.store.history(ID)
+                 if row["action"] == "pr_size_advisory"]
+        self.assertEqual(noted[-1]["source"], 701)
+        self.github.push(REPO, wi["branch"], "c1001", files=(("src/big.py", 1001, 0),))
+        errors, _ = self.foreman.check_pushed(wi, order, "c1001")
+        self.assertTrue(any("source-size-ceiling" in e for e in errors), errors)
+
+    def test_a_source_ceiling_excess_routes_to_a_decomposition_not_an_attempt(self):
+        """ADR-0079: a size-only source excess makes no attempt failure and opens no PR: the
+        Foreman records an acceptance-preserving decomposition and asks the owner to activate it."""
+        wi, task = self.dispatched()
+        self.git.files = (("src/big.py", 1001, 0),)  # 1001 source lines, over the 1000 ceiling
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
+        wi = self.tick()
+        self.assertEqual(wi["state"], "human_waiting", wi.get("attempts"))
+        self.assertIn("acceptance-preserving", wi["blockedOn"])
+        self.assertEqual(wi["attempts"], [])
+        self.assertEqual(self.github.pulls, [])
+        rows = [row for row in self.foreman.store.history(ID) if row["action"] == "size_recovery"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual([s["claim"] for s in rows[0]["detail"]["slices"]],
+                         ["default_config_path() raises when the user registry is missing",
+                          "README names the registry path"])
+
+    def test_an_allowance_never_buys_a_planned_decomposition_without_the_owner(self):
+        """ADR-0079 with ADR-0069: an approved replacement allowance is recorded, not spent; new
+        issue bodies are a material scope change, so the owner still activates the plan."""
+        wi, task = self.dispatched()
+        self.foreman.approve_plan_allowance("plan-1", ["replace"], 3, "owner", REPO, items=[ID])
+        self.git.files = (("src/big.py", 1001, 0),)
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
+        wi = self.tick()
+        self.assertEqual(wi["state"], "human_waiting")
+        self.assertEqual(self.foreman.store.allowance("plan-1")["remaining"], 3)
+        self.assertEqual(len(self.github.issues), 1)  # no replacement issue was opened
+        rows = [row for row in self.foreman.store.history(ID) if row["action"] == "size_recovery"]
+        self.assertTrue(rows[0]["detail"]["authorized"])
 
     def test_a_result_that_reports_failed_is_an_attempt(self):
         """How worker/runner.py reports a failing verify: the task completes, and its Result says failed."""

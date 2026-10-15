@@ -8,7 +8,7 @@ import threading
 import uuid
 
 from . import (diagnostics, documents, gate_secrets, jev_rank, lessons, patches, registry, repos,
-               routing, setup_merge, workitem)
+               routing, setup_merge, sizing, workitem)
 from .github import GitHubError
 from .mcp import ToolError
 from .relay import RelayError
@@ -644,6 +644,8 @@ class Foreman:
                 errors = [f"patch not pushed: {exc}"]
         if not errors:
             errors, files = self.check_pushed(wi, order, sha)
+        if errors and all(sizing.is_ceiling_error(e) for e in errors):
+            return self._size_recovery(wi, order, errors)
         if errors:
             return self.fail(wi, order, f"{task['agentId']}: " + "; ".join(errors), diagnosis=diagnosis)
         self.store.log("result", {"workOrder": order["id"], "commitSha": sha}, wi["id"])
@@ -723,7 +725,13 @@ class Foreman:
                              protected=limits["protectedPaths"],
                              limits=(self._default_branch(wi["repo"]), limits["maxChangedLines"],
                                      limits["maxChangedFiles"],
-                                     limits.get("maxChangedLinesAdvisory", True)))
+                                     limits.get("maxChangedLinesAdvisory", True),
+                                     self._source_spec(limits)))
+
+    @staticmethod
+    def _source_spec(limits):
+        """The source-only sizing spec a WorkOrder carries, or None for an older all-lines one."""
+        return sizing.source_spec(limits)
 
     def check_pushed(self, wi, order, sha):
         """Guards on what GitHub holds after the push, never on what the worker says it did."""
@@ -735,16 +743,73 @@ class Foreman:
         errors = [f"changes protected path {name}" for f in files  # a rename moves the old path too
                   for name in (f["filename"], f.get("previous_filename")) if name
                   and patches.is_protected(name, limits["protectedPaths"])]
-        lines = sum(f["additions"] + f["deletions"] for f in files)
         if len(files) > limits["maxChangedFiles"]:
-            errors.append(f"{lines} lines in {len(files)} files exceeds the WorkOrder constraint of "
-                          f"{limits['maxChangedFiles']} files")
-        elif lines > limits["maxChangedLines"]:
+            errors.append(f"{self._changed_lines(files)} lines in {len(files)} files exceeds the "
+                          f"WorkOrder constraint of {limits['maxChangedFiles']} files")
+            return errors, files
+        source = self._source_spec(limits)
+        totals = self._changed_totals(files)
+        if source:
+            if totals["source"] > source["ceiling"]:
+                errors.append(
+                    f"{sizing.SIZE_CEILING_MARKER}: the whole pull request changes {totals['source']} "
+                    f"source lines ({totals['tests']} test, {totals['docs']} doc) in {totals['files']} "
+                    f"files, over the {source['ceiling']}-line reviewable ceiling; this is a size-only "
+                    "excess, not a failed verify")
+            elif totals["source"] > source["target"] and not source["advisory"]:
+                errors.append(f"the proposed pull request changes {totals['source']} source lines "
+                              f"({totals['tests']} test, {totals['docs']} doc); the WorkOrder allows "
+                              f"{source['target']} source lines")
+            elif totals["source"] > source["target"]:
+                self.store.log("pr_size_advisory", {"source": totals["source"], "tests": totals["tests"],
+                                                    "docs": totals["docs"], "total": totals["total"],
+                                                    "target": source["target"], "files": totals["files"]},
+                               wi["id"])
+        elif totals["total"] > limits["maxChangedLines"]:
             # Advisory (ADR-0070): recorded, not failed. The file count, protected paths and the
             # runner's patch-byte ceiling stay binding.
-            self.store.log("pr_size_advisory", {"lines": lines, "target": limits["maxChangedLines"],
-                                                "files": len(files)}, wi["id"])
+            self.store.log("pr_size_advisory", {"lines": totals["total"],
+                                                "target": limits["maxChangedLines"],
+                                                "files": totals["files"]}, wi["id"])
         return errors, files
+
+    @staticmethod
+    def _changed_totals(files):
+        return sizing.measure((f["filename"], f.get("additions"), f.get("deletions")) for f in files)
+
+    @classmethod
+    def _changed_lines(cls, files):
+        return cls._changed_totals(files)["total"]
+
+    def _size_recovery(self, wi, order, errors):
+        """A size-only excess becomes a bounded, acceptance-preserving decomposition, never a
+        fabricated success and never a fresh budget (ADR-0079). The plan is pure; creating the
+        replacement issues is a material scope change, so it still needs the owner's approval, and
+        an approved allowance never buys new titles-and-bodies. The journal, graph and dependent
+        cleanup run only when the owner activates the plan through factory_replace_issue."""
+        plan = workitem.decomposition_plan(order)
+        limits = order["constraints"]
+        source = self._source_spec(limits) or {}
+        self.store.log("size_recovery", {
+            "sourceCeiling": source.get("ceiling"), "slices": plan, "errors": list(errors),
+            "authorized": self._replacement_authorized(wi),
+        }, wi["id"])
+        reason = (f"the whole pull request is over the {source.get('ceiling')}-source-line reviewable "
+                  f"ceiling; this is size-only, so the factory proposes {len(plan)} acceptance-preserving "
+                  "sequential slice(s). Creating the replacement issues is a scope change, so the owner "
+                  "approves it: call factory_replace_issue with the slices (ownerAsked), or "
+                  "factory_resolve_human to retry or close. No worker pass or budget was spent.")
+        new = dict(wi, state="human_waiting", blockedOn=reason, activeWorkOrderId=None,
+                   providerTaskId=None, remoteVerify=None)
+        return self._write(wi, new, "size_recovery_escalated", slices=plan)
+
+    def _replacement_authorized(self, wi):
+        """Whether an owner-approved scoped allowance already covers a replacement for `wi`. The
+        plan still needs ownerAsked to open issues, so this only records that the allowance exists."""
+        return any("replace" in entry["actions"] and entry["remaining"] >= 1
+                   and entry.get("scope") and entry["scope"]["repo"] == wi["repo"]
+                   and (not entry["scope"]["items"] or wi["id"] in entry["scope"]["items"])
+                   for entry in self.store.allowances())
 
     def open_pr(self, wi, order, files, evidence, worker):
         """Adopt the open PR on the branch if there is one (ADR-0003), else open it."""

@@ -59,11 +59,15 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
 - **`human_waiting` is not terminal.** `closed`, `cancelled` and `exhausted`
   are; `merged` waits for the issue to close. HUMAN is an action queue with a
   path back.
-- **The line target is advisory (ADR-0070).** `constraints.maxChangedLines` is the WorkOrder's
-  small-PR target: its consumers warn and continue past it, and never reject on line count alone.
-  `constraints.maxChangedLinesAdvisory` (optional boolean) makes it explicit — true, or absent in
-  older WorkOrders, is advisory; false restores a hard line rejection. `maxChangedFiles` and the
-  worker's patch-byte ceiling bind in both modes.
+- **The size target counts source (ADR-0079, over ADR-0070).** `constraints.maxSourceChangedLines`
+  (optional, default 700) is the WorkOrder's small-PR target for source additions and deletions
+  only; `constraints.maxSourceChangedLinesCeiling` (optional, default 1000) is the reviewable
+  ceiling. Test and doc lines are reported separately and never count against the target. Over the
+  target warns and continues (unless `maxSourceChangedLinesAdvisory` is false); over the ceiling is
+  a size-only refusal the Foreman routes to a bounded, acceptance-preserving decomposition, never a
+  fabricated success and never a fresh budget. A WorkOrder without the source fields (older, or
+  `maxChangedLinesAdvisory` false) keeps the all-lines `maxChangedLines` meaning, so stored
+  documents stay valid. `maxChangedFiles` and the worker's patch-byte ceiling bind in every mode.
 - **Acceptance is checkable.** Each `acceptance` item has a `claim` and a
   `doneWhen`: a check read back from the produced artifact, never from effort.
 - **`blocked` carries evidence.** A WorkItem in `blocked` must have `blockedOn`

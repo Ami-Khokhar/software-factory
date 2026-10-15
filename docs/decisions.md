@@ -1867,3 +1867,49 @@ latest cause still names the current state. Existing Results and WorkOrders stay
 schema, the `diagnostics` shapes and the WorkOrder finding shape are unchanged. No pass budget,
 retry, merge or sandbox permission changes, no automatic resubmission is added, and the worker
 still exports no WorkOrder payload, environment, credential or repository source.
+
+---
+
+## ADR-0079 — Changed-code size counts source lines: 700 target, 1000 reviewable ceiling, excess routes to decomposition
+
+**Context.** ADR-0070 made the 600 all-lines count advisory, but every line still counted the
+same: a change of 650 source lines with 400 test lines and 100 doc lines was measured as 1150 and
+warned as though it were three times the size. The owner asked for one metric the worker
+producer, the pusher, factory-mcp and the gate all agree on: 700 changed **source** additions and
+deletions as the target, 1000 as the reviewable ceiling, with test and doc lines retained as
+separate evidence rather than size. An excess of source over the ceiling is not a failed
+implementation; it is a signal that the work must be decomposed, and the owner wants that
+recovery proposed rather than a bare question.
+
+**Decision.** `factory_mcp/sizing.py` is the one metric source: `kind(path)` classifies a path as
+source, tests or docs, and `measure` returns `source`, `tests`, `docs`, `total` and `files`.
+Markdown/reStructuredText files and anything under `docs/` are docs; `tests/` and `test`/`tests`
+directories and `test_*`/`*_test` files are tests; everything else is source. The WorkOrder gains
+three optional constraints — `maxSourceChangedLines` (default 700, set from
+`FACTORY_SOURCE_CHANGED_LINES`), `maxSourceChangedLinesAdvisory` (default true) and
+`maxSourceChangedLinesCeiling` (default 1000, from `FACTORY_SOURCE_CHANGED_LINES_CEILING`) — while
+`maxChangedLines` keeps its old meaning for a WorkOrder without them, so stored WorkItems do not
+migrate. All three producers measure source with `sizing`: `worker/runner.py` `collect` before the
+verify, `patches.apply` at the push (including a base that advanced) and `Foreman.check_pushed`
+on what GitHub holds. Over the target warns (`pr_size_advisory` now carries the source, test, doc,
+total and file totals) and never rejects alone; over the ceiling is a size-only refusal carrying
+the stable `source-size-ceiling` marker, never a failing verify.
+
+Over the ceiling, `Foreman._size_recovery` records a pure, acceptance-preserving
+`workitem.decomposition_plan` — one ordered slice per acceptance criterion, each depending on the
+one before — and moves the WorkItem to `human_waiting` with that plan. Opening the replacement
+issues changes the material scope, so the existing recovery guards stand: `factory_replace_issue`
+still needs the owner (or an allowance naming open issues only), the journal, graph and dependent
+cleanup run only when it is activated, and `passesBefore` and the pass budget are untouched. A
+scope, budget, access or security finding never carries the marker and keeps its own fail-closed
+path.
+
+**Consequence.** A 659-source/384-test/77-doc pull request is accepted though its total is 1120;
+701 and 1000 source warn; 1001 becomes a decomposition proposal instead of a failed attempt. The
+20-file bound, the 2 MB patch ceiling, the protected paths, the secret controls, the test
+evidence and every merge authority are unchanged. The runner image and the factory standard must
+be updated together with this change (the image's `worker/runner.py` and `templates/AGENTS.md`),
+and pr-gatekeeper's `.github/pr-gatekeeper.json` still carries `max_changed_lines: 600` on this
+branch: aligning the gate's own policy is a separate `.github/` change a person owns, and no
+source merge is claimed as a live rollout until the image, the profile template and the gate
+policy are deployed together.

@@ -111,6 +111,23 @@ def replacement_plan(graph, original, replacements):
     return plan
 
 
+def decomposition_plan(order):
+    """An acceptance-preserving, ordered decomposition of an oversized WorkOrder (ADR-0079).
+
+    Pure and deterministic: one slice per acceptance criterion, in order, each depending on the one
+    before it, so running the slices in sequence delivers every check the original named. A
+    WorkOrder with no criteria keeps a single slice for its goal. The slices are a proposal only;
+    nothing here dispatches, replaces or spends budget."""
+    slices = []
+    for index, criterion in enumerate(order.get("acceptance") or [], 1):
+        slices.append({"position": index, "claim": criterion["claim"], "doneWhen": criterion["doneWhen"],
+                       "dependsOn": [index - 1] if index > 1 else []})
+    if not slices:
+        slices.append({"position": 1, "claim": order.get("goal") or "the goal",
+                       "doneWhen": "the goal's checks pass", "dependsOn": []})
+    return slices
+
+
 def cycle_in(graph):
     """A cycle in a dependency graph, as the path of issue numbers that closes on itself, or None.
     Pure: `graph` maps each issue number to the numbers its 'Depends on' lines name."""

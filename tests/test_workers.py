@@ -200,6 +200,16 @@ class WorkerTest(unittest.TestCase):
         with self.assertRaisesRegex(patches.PatchError, "exceeds the WorkOrder constraint of 3 lines"):
             patches.apply(self.bare, "", "factory/7", head, patch, "Fix", force=False,
                           limits=("main", 3, 2, False))
+        # ADR-0079: a 5th source spec switches the metric to source lines, whole PR included; over
+        # the ceiling is the size-only marker the Foreman routes to decomposition.
+        with self.assertRaisesRegex(patches.PatchError, "source-size-ceiling: .*4 source lines"):
+            patches.apply(self.bare, "", "factory/7", head, patch, "Fix", force=False,
+                          limits=("main", 600, 20, True,
+                                  {"target": 4, "ceiling": 3, "advisory": True}))
+        pushed = patches.apply(self.bare, "", "factory/7", head, patch, "Fix", force=False,
+                               limits=("main", 600, 20, True,
+                                       {"target": 4, "ceiling": 4, "advisory": True}))
+        self.assertEqual(git("rev-parse", "refs/heads/factory/7", cwd=self.bare), pushed)
 
     def test_a_change_over_the_workorders_limits_fails_the_attempt_before_the_push(self):
         git("checkout", "-q", "-B", "factory/7", "origin/main", cwd=self.work)
@@ -216,9 +226,10 @@ class WorkerTest(unittest.TestCase):
         self.assertIsNone(self.github.branch_head(REPO, "factory/7"))
 
     def test_an_advisory_lines_exceedance_is_pushed_and_the_pr_opens(self):
-        """ADR-0070: a patch 1 line over the 600 target is pushed; the whole pull request is noted."""
+        """ADR-0079: a patch 1 source line over the 700 target is pushed; the whole pull request is
+        noted, and tests and docs never count against the source target."""
         git("checkout", "-q", "-B", "factory/7", "origin/main", cwd=self.work)
-        self.write("big.py", "x = 1\n" * 601)
+        self.write("big.py", "x = 1\n" * 701)
         git("add", "-A", cwd=self.work)
         diff = git("diff", "--cached", "origin/main", cwd=self.work) + "\n"
         foreman = self.foreman()
@@ -227,8 +238,10 @@ class WorkerTest(unittest.TestCase):
         wi = foreman.tick(ID)["workItem"]
         self.assertEqual(wi["state"], "pr_open", wi.get("attempts"))
         self.assertTrue(self.github.branch_head(REPO, "factory/7"))
-        noted = [row["detail"] for row in foreman.store.history(ID) if row["action"] == "pr_size_advisory"]
-        self.assertEqual(noted, [{"lines": 601, "target": 600, "files": 1}])
+        noted = [row["detail"] for row in foreman.store.history(ID)
+                 if row["action"] == "pr_size_advisory"]
+        self.assertEqual(noted, [{"source": 701, "tests": 0, "docs": 0, "total": 701,
+                                  "target": 700, "files": 1}])
 
     def test_a_patch_that_is_not_text_is_a_patch_error(self):
         """poll turns a PatchError into a failed attempt; anything else leaves the WorkItem stuck."""
