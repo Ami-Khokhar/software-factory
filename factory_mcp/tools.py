@@ -125,7 +125,10 @@ def build(store, foreman, agent=False):
              "write", lambda args: foreman.add_repo(args["repo"], args["by"])),
         Tool("factory_bootstrap_repo",
              "Prepare an owner-reviewed setup PR containing only missing gate files and the "
-             "factory-standard block. Never merges or enables the repo. Requires a verify command "
+             "factory-standard block. An installed pr-gatekeeper caller whose gate revision pins "
+             "are older than the approved revision is upgraded on the same PR, changing only those "
+             "two pins and leaving its verify command, permissions, secrets and unrelated files as "
+             "they are. Never merges or enables the repo. Requires a verify command "
              "when the gate config is missing. An empty repo first gets one commit with only a "
              "README.md on its default branch; the result names it as initialCommit. An open setup "
              "PR is adopted; when its files differ from the plan, a commit is added to it (updatedSha), "

@@ -22,8 +22,13 @@ STANDARD = re.compile(r"<!-- factory-standard:begin -->.*?<!-- factory-standard:
 TEMPLATE = Path(__file__).resolve().parent.parent / "templates" / "AGENTS.md"  # ADR-0015
 ENTRY_KEYS = {"name", "added_by", "added_at"}
 GATE_CONFIG, GATE_WORKFLOW = ".github/pr-gatekeeper.json", ".github/workflows/pr-gatekeeper.yml"
+GATE_WORKFLOW_SOURCE = TEMPLATE.parent.parent / GATE_WORKFLOW
 LABELS = ((READY, "0E8A16", "software-factory may work on this issue"),
           (PROPOSED, "C5DEF5", "proposed by the Planner; add factory:ready to accept"))
+# The two lines that pin the gate revision in a pr-gatekeeper caller workflow. The wrapper's
+# `uses:` sha and the `gatekeeper_ref:` input are the only lines an upgrade rewrites.
+GATE_USES = re.compile(r"(uses:\s*\S+/\.github/workflows/gatekeeper\.yml@)([0-9a-fA-F]{40})")
+GATE_REF = re.compile(r"(gatekeeper_ref:\s*)([0-9a-fA-F]{40})")
 
 
 def standard_blocks(text):
@@ -35,6 +40,32 @@ def _fingerprint(plan):
     """A stable digest of exactly what a person reviews before bootstrap writes it."""
     encoded = json.dumps(plan, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _gate_pins(text):
+    """A pr-gatekeeper caller's two gate revision pins, or None when `text` is not a caller this
+    factory manages: the reusable workflow's `uses: .../gatekeeper.yml@<sha>` and its
+    `gatekeeper_ref: <sha>` input, both 40-hex."""
+    uses, ref = GATE_USES.search(text or ""), GATE_REF.search(text or "")
+    if uses is None or ref is None:
+        return None
+    return {"uses": uses.group(1), "usesSha": uses.group(2), "ref": ref.group(1), "refSha": ref.group(2)}
+
+
+def _upgraded_workflow(installed, canonical):
+    """`installed` with only its two gate revision pins set to `canonical`'s, or None when it is not
+    a managed caller or already current. Every other line of the installed file — permissions,
+    secrets, runner, comments — stays exactly as the repo wrote it, so a control update never
+    widens a permission or drops a setting the work did not review (ADR-0080)."""
+    have = _gate_pins(installed)
+    if have is None:
+        return None
+    want = _gate_pins(canonical)
+    if want is None:
+        raise ValueError("the software-factory gate workflow pins no gate revision")
+    updated = GATE_USES.sub(lambda _match: have["uses"] + want["usesSha"], installed, count=1)
+    updated = GATE_REF.sub(lambda _match: have["ref"] + want["refSha"], updated, count=1)
+    return None if updated == installed else updated
 
 
 def _standard_to_append(agents):
@@ -81,15 +112,23 @@ def bootstrap_plan(github, repo, verify=None):
                 or not config_doc["verify"].strip():
             raise ValueError(".github/pr-gatekeeper.json has no verify command")
 
-    if github.file(canonical, GATE_WORKFLOW) is None:
-        source = TEMPLATE.parent.parent / GATE_WORKFLOW
-        files[GATE_WORKFLOW] = source.read_text()
+    updates = []
+    workflow = github.file(canonical, GATE_WORKFLOW)
+    if workflow is None:
+        files[GATE_WORKFLOW] = GATE_WORKFLOW_SOURCE.read_text()
+    else:  # an installed caller: upgrade only a stale gate revision, never the rest of the file
+        updated = _upgraded_workflow(workflow, GATE_WORKFLOW_SOURCE.read_text())
+        if updated is not None:
+            files[GATE_WORKFLOW] = updated
+            updates.append(GATE_WORKFLOW)
 
     agents = _standard_to_append(github.file(canonical, "AGENTS.md"))
     if agents is not None:
         files["AGENTS.md"] = agents
 
     plan = {"repo": canonical, "default_branch": branch, "base_sha": base, "files": files}
+    if updates:  # only when something is upgraded, so an install keeps its stored fingerprint
+        plan["updates"] = updates
     if not base:  # a PR needs a base commit; the controls still go on the setup PR (ADR-0019)
         plan["initial_files"] = {"README.md": f"# {canonical.split('/')[1]}\n"}
     return dict(plan, fingerprint=_fingerprint(plan))
@@ -99,7 +138,7 @@ def plan_on(plan, base_sha):
     """The plan once an empty repo's default branch has its initial commit `base_sha`: the plan
     bootstrap_plan returns from then on, so a retry finds the same setup branch."""
     plan = {"repo": plan["repo"], "default_branch": plan["default_branch"], "base_sha": base_sha,
-            "files": plan["files"]}
+            "files": plan["files"], **({k: plan[k] for k in ("updates",) if k in plan})}
     return dict(plan, fingerprint=_fingerprint(plan))
 
 
@@ -140,7 +179,18 @@ def check(github, repo):
         gate = _result("gate_config", isinstance(verify, str) and bool(verify.strip()),
                        f"verify: {verify}" if verify else f"{GATE_CONFIG} has no verify command",
                        "Set verify to the command that runs the repo's tests: every worker pass must pass it.")
-    workflow = github.file(repo, GATE_WORKFLOW) is not None
+    workflow = github.file(repo, GATE_WORKFLOW)
+    if workflow is None:
+        gate_workflow = _result("gate_workflow", False, f"{repo} has no {GATE_WORKFLOW}",
+                                by_hand or "Call factory_bootstrap_repo: it opens a setup PR with the gate workflow "
+                                "for you to review and merge. Without the workflow no PR gets a verdict.")
+    else:
+        stale = _upgraded_workflow(workflow, GATE_WORKFLOW_SOURCE.read_text()) is not None
+        gate_workflow = _result("gate_workflow", not stale,
+                                "the gate workflow pins an older gate revision" if stale else
+                                "the gate workflow is installed",
+                                "Call factory_bootstrap_repo: it opens a setup PR that rewrites only the "
+                                "gate revision pins to the approved ones, for you to review and merge.")
     agents = github.file(repo, "AGENTS.md")
     found, wanted = standard_blocks(agents), standard_blocks(TEMPLATE.read_text())
     if agents is None:
@@ -161,10 +211,7 @@ def check(github, repo):
         agents_fix = by_hand or ("Call factory_bootstrap_repo: it opens a setup PR that adds the factory "
                                  "standard to AGENTS.md, for you to review and merge.")
     return [_result("repo", True, f"{repo} exists and the factory's token can push to it", None), gate,
-            _result("gate_workflow", workflow, "the gate workflow is installed" if workflow else
-                    f"{repo} has no {GATE_WORKFLOW}",
-                    by_hand or "Call factory_bootstrap_repo: it opens a setup PR with the gate workflow "
-                    "for you to review and merge. Without the workflow no PR gets a verdict."),
+            gate_workflow,
             _result("agents_md", bool(found) and found == wanted, detail, agents_fix)]
 
 
