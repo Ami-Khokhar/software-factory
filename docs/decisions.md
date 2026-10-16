@@ -1942,3 +1942,61 @@ setup-merge grant. Until the owner ships the corrected gate revision to this rep
 `.github/`, the upgrade moves a repo to the revision this checkout carries, not to a 700/1000
 policy that does not exist yet; that `.github/` change, and regating an existing pull request after
 it, stay with the owner.
+
+---
+
+## ADR-0081 — A worker running out of its clock never blocks the issue, and an escalation is an incident with one answer
+
+**Context.** An audit of the live factory (85 WorkItems, 74 failed attempts, 49 escalations) found
+that 35 failed attempts were harness timeouts, not code failures, and that routing cycled
+`pi-glm-factory` → `opencode-glm-factory` — one model family — so the third worker,
+`pi-deepseek-factory`, never ran (#271); a timed-out first attempt therefore landed on the same
+family again and two strikes blocked the WorkItem. 29 of the 49 escalations were such two-strike
+blocks. `agent_resolved` spent Day Desk's one answer for the lifetime of a WorkItem, so a
+materially new escalation — new causes, a dependency that changed — was refused, and about two
+thirds of escalations waited on the owner. And the relay keeps its tasks and its requestId
+idempotency in memory only: a relay restart lost accepted tasks, and the poll that found the task
+gone charged the attempt a strike, so infrastructure interruptions consumed implementation
+strikes.
+
+**Decision.** Four rules, all inside the existing Foreman state machine, the one-action-per-tick
+lease and the pass budget, audited per decision (`recovery`) with its outcome
+(`recovery_result`), so the audit says the category, the action, the previous and next worker, the
+budget as it stood, whether the recovery succeeded and whether it avoided a human escalation.
+
+- **A timeout moves families; it never widens the pool.** After a timeout-class failure (a
+  `harness timeout` cause, or a `timed out` / `the harness timed out` reason) the next attempt's
+  routing prefers a worker outside every model family that ran here; a family is the model token
+  in a worker id, so `pi-glm-factory` and `opencode-glm-factory` are one family
+  (`routing.route(..., avoid_families=...)`). The preference only reorders what the locality,
+  `Worker:` lines and failover already allow, and no worker may run that could run before.
+- **The block waits for the failover the policy covers.** When the attempt that would become the
+  second strike follows a timeout-class failure and routing would still choose a worker this
+  WorkItem has never tried, one further attempt is granted before the block — once per budget,
+  with no new passes and no strike reset; when the choice would be a worker that already failed
+  here, the block stands exactly as before.
+- **An escalation is an incident, answered once.** The WorkItem carries the incident's identity
+  (the action, its normalized reason and its facts); a write with the same identity keeps the
+  record and its one-answer flag, a material change (new causes, a differently ended dependency, a
+  new gate round) is a new incident and earns Day Desk one fresh answer
+  (`agent_may_resolve`). A WorkItem that escalated before this field keeps the once-ever rule
+  over its history. Gates stay out of reach: only real writes change an incident, a
+  `human_waiting` dependency is re-read on every tick — merged or open resumes the WorkItem with
+  no person, a differently ended one re-arms once, an unchanged one does nothing — and a HUMAN
+  verdict, the block and the owner's authority are never rewritten by a tick.
+- **A lost relay task is an infrastructure interruption.** When the relay no longer knows an
+  accepted task, the facts are reconciled first (the tick's own observation, no worker credential,
+  no pending remote-verify scratch branch), then the same WorkOrder is re-queued under the same
+  idempotency key, recording no attempt; the re-queue is bounded per budget
+  (`RELAY_RETRIES_MAX`, reset by every write that starts a fresh budget of passes), and beyond
+  the bound or with any uncertainty the ordinary failed attempt stands. A relay call that fails
+  mid-answer (a restart) is one `RelayError`, a clean no-op the next tick retries. Coding failures
+  keep their finite strikes.
+
+**Consequence.** A harness timeout no longer spends a strike on code it never judged, and the
+second attempt starts on another family before any block; an escalation that is genuinely new
+reaches Day Desk for one more answer, while an unresolved incident stays with the owner and one
+that a dependency change or recovery has made moot resolves itself from facts. The budget still
+ends a WorkItem in `exhausted`, the two-strike block still stops a failed budget, every merge,
+HUMAN and protected-path authority is untouched, and no new background orchestrator exists: the
+rules ride the existing tick, the existing audit and the existing tool calls.

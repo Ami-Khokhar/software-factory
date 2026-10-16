@@ -77,6 +77,49 @@
       "description": "Fingerprinted unresolved findings, for same-problem round counting.",
       "items": { "$ref": "#/$defs/blocker" }
     },
+    "incident": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "action", "reason", "since", "agentAnswered"],
+      "description": "The escalation this WorkItem is in, as one material identity (ADR-0081): the action that escalated it, the normalized reason and the action's own facts. A write with the same identity keeps the record and its one-answer flag; a materially changed incident is a new record and earns one fresh answer. A WorkItem escalated before this field falls back to the one-answer rule over its history.",
+      "properties": {
+        "id": { "type": "integer", "minimum": 1, "description": "1 for the first record; each material change adds one." },
+        "action": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1 },
+        "since": { "type": "string", "format": "date-time" },
+        "agentAnswered": { "type": "boolean", "description": "True once Day Desk has answered this exact incident." },
+        "causes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "For an attempt_failed incident: the diagnostics causes of the covered attempts, deduplicated and ordered."
+        },
+        "dependency": { "type": ["integer", "null"], "minimum": 1 },
+        "end": {
+          "type": ["string", "null"],
+          "description": "For a dependency_ended incident: how the dependency ended, or its status once the WorkItem resumed."
+        },
+        "gateRound": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "recovery": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["id", "action", "category", "fromWorker", "toWorker", "at"],
+      "description": "The autonomous recovery decision whose attempt is in flight (ADR-0081). The audit holds the decision `recovery` and its outcome `recovery_result`; this field links the two across ticks. Absent or null when none is open.",
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "action": { "enum": ["worker_swap", "block_deferred", "relay_lost"] },
+        "category": { "type": "string", "minLength": 1 },
+        "fromWorker": { "type": ["string", "null"] },
+        "toWorker": { "type": ["string", "null"] },
+        "at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "infraRetries": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Relay losses re-queued for this WorkItem against RELAY_RETRIES_MAX (ADR-0081). A successful Result resets it."
+    },
     "state": { "$ref": "#/$defs/state" },
     "stateVersion": {
       "type": "integer",

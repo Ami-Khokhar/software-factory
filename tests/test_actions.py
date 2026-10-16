@@ -280,10 +280,28 @@ class ActionsTest(unittest.TestCase):
         self.assertNotIn("split", wi["blockedOn"])
         self.assertIn("Fix the cause named in attempts", wi["blockedOn"])
 
-    def test_lost_relay_task(self):
+    def test_a_lost_relay_task_is_requeued_without_a_strike(self):
+        """ADR-0081: an accepted task the relay no longer knows is an infrastructure loss. The same
+        WorkOrder is re-queued under the same idempotency key, no attempt is recorded, and a
+        successful Result resets the count."""
         wi, task = self.dispatched()
-        del self.relay.tasks[task["id"]]
-        self.assertIn("no longer knows the task", self.tick()["attempts"][0])
+        order_id = wi["activeWorkOrderId"]
+        self.relay.restart()  # the relay's tasks and request ids live in memory only
+        wi = self.tick()
+        self.assertEqual(wi["state"], "dispatching")
+        self.assertEqual(wi["attempts"], [])
+        self.assertEqual(wi["infraRetries"], 1)
+        self.assertTrue(wi["recovery"]["action"] == "relay_lost")
+        wi = self.tick()  # the same WorkOrder goes out once more
+        self.assertEqual((wi["state"], wi["activeWorkOrderId"]), ("implementing", order_id))
+        self.assertEqual(list(self.relay.by_request), [order_id])
+        self.assertEqual([o["id"] for o in self.foreman.store.workorders(ID)], [order_id])
+        self.relay.finish(wi["providerTaskId"], output=result_line(order_id))
+        wi = self.tick()
+        self.assertEqual((wi["state"], wi["attempts"], wi["infraRetries"]), ("pr_open", [], 0))
+        results = [h for h in self.foreman.store.history(ID) if h["action"] == "recovery_result"]
+        self.assertEqual([(r["detail"]["action"], r["detail"]["succeeded"]) for r in results],
+                         [("relay_lost", True)])
 
     def test_budget_exhausts(self):
         self.foreman.config = Config(mcp_token="t", repos=frozenset({REPO}), max_passes=1)

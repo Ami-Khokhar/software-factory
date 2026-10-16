@@ -611,10 +611,19 @@ and that the `factory-update` job names: `/usr/bin/python3 -m pip install -r req
   empty timeout, across the person's retry, so the next pass still sees what to fix (ADR-0078).
   Retry for a cause a retry can fix, and ask Day Desk to split only when the cause is scope (a
   harness timeout that reached the budget) and the issue reads like more than one pass holds; a
-  timed-out pass keeps none of its work.
+  timed-out pass keeps none of its work. A timed-out attempt routes the next pass to another model
+  family and the block waits for the policy's failover, at most once per budget (ADR-0081): the
+  `recovery` audit rows say what was chosen, and `recovery_result` whether it held.
 - **Stuck in `dispatching` with `relay 401`.** The relay refused factory-mcp's token. factory-mcp
   sends `AGENT_RELAY_TOKEN` from its settings or secrets, else `~/.config/agent-relay/token`;
   make it match the relay's (`AGENT_RELAY_TOKEN` in the relay's environment, else that file).
+- **Ready or dispatched again after a relay restart.** The relay keeps its tasks and request ids in
+  memory, so a restart loses an accepted task. factory-mcp reconciles the facts, then re-queues the
+  same WorkOrder under the same idempotency key with no attempt recorded, up to `RELAY_RETRIES_MAX`
+  (2) times per budget — a person's retry or an allowance retry starts the count again; the
+  `recovery`/`recovery_result` rows of action `relay_lost` show each
+  re-queue and its outcome. Past the bound, or when a remote-verify scratch branch was pending, it
+  records an ordinary failed attempt instead — read its reason, fix the relay, then retry.
 - **HUMAN from the gate.** Read the gate's comment on the PR. `retry` sends its findings to the
   worker; `regate` re-reviews a fix you pushed yourself, or the same head when the gate failed
   itself ("reviewer verdict is invalid"): unless a gate run is going or a newer verdict is there,

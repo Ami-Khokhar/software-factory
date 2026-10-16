@@ -83,6 +83,23 @@ class RelayClientTest(unittest.TestCase):
         with self.assertRaisesRegex(RelayError, "relay unreachable"):
             Relay(f"http://127.0.0.1:{closed}").get("t1")
 
+    def test_a_relay_that_dies_mid_answer_is_a_relay_error(self):
+        """A restart can accept the connection and close it before answering (ADR-0081): the failure
+        is one retryable RelayError, never a raw OS error that would crash the tick."""
+        with socket.socket() as server:
+            server.bind(("127.0.0.1", 0))
+            server.listen(1)
+            port = server.getsockname()[1]
+
+            def die_on_touch():
+                server.accept()[0].close()
+
+            thread = threading.Thread(target=die_on_touch, daemon=True)
+            thread.start()
+            with self.assertRaises(RelayError):
+                Relay(f"http://127.0.0.1:{port}").get("t1")
+            thread.join(timeout=5)
+
     def submit_and_get(self):
         """The Authorization header of one submit and one get."""
         del Api.auth[:]
