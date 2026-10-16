@@ -1987,9 +1987,11 @@ budget as it stood, whether the recovery succeeded and whether it avoided a huma
 - **A lost relay task is an infrastructure interruption.** When the relay no longer knows an
   accepted task, the facts are reconciled first (the tick's own observation, no worker credential,
   no pending remote-verify scratch branch), then the same WorkOrder is re-queued under the same
-  idempotency key, recording no attempt; the re-queue is bounded per WorkItem
-  (`RELAY_RETRIES_MAX`), and beyond the bound or with any uncertainty the ordinary failed attempt
-  stands. Coding failures keep their finite strikes.
+  idempotency key, recording no attempt; the re-queue is bounded per budget
+  (`RELAY_RETRIES_MAX`, reset by every write that starts a fresh budget of passes), and beyond
+  the bound or with any uncertainty the ordinary failed attempt stands. A relay call that fails
+  mid-answer (a restart) is one `RelayError`, a clean no-op the next tick retries. Coding failures
+  keep their finite strikes.
 
 **Consequence.** A harness timeout no longer spends a strike on code it never judged, and the
 second attempt starts on another family before any block; an escalation that is genuinely new

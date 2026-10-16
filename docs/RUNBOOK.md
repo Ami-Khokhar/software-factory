@@ -620,7 +620,8 @@ and that the `factory-update` job names: `/usr/bin/python3 -m pip install -r req
 - **Ready or dispatched again after a relay restart.** The relay keeps its tasks and request ids in
   memory, so a restart loses an accepted task. factory-mcp reconciles the facts, then re-queues the
   same WorkOrder under the same idempotency key with no attempt recorded, up to `RELAY_RETRIES_MAX`
-  (2) times per WorkItem; the `recovery`/`recovery_result` rows of action `relay_lost` show each
+  (2) times per budget — a person's retry or an allowance retry starts the count again; the
+  `recovery`/`recovery_result` rows of action `relay_lost` show each
   re-queue and its outcome. Past the bound, or when a remote-verify scratch branch was pending, it
   records an ordinary failed attempt instead — read its reason, fix the relay, then retry.
 - **HUMAN from the gate.** Read the gate's comment on the PR. `retry` sends its findings to the

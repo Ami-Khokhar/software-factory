@@ -113,6 +113,7 @@ class WorkerFailoverTest(ForemanCase):
                          ("block_deferred", "opencode-glm-factory"))
         (decision,) = self.recoveries("block_deferred")
         self.assertEqual(decision["category"], "timeout (unknown cause)")
+        self.assertEqual(decision["budget"], {"passesUsed": 2, "maxPasses": 4, "strikes": 2})
         self.assertIsNone(decision["succeeded"])
         wi, task = self.dispatch()  # the deferred attempt runs on the third worker
         self.assertEqual(wi["worker"], "opencode-glm-factory")
@@ -139,6 +140,55 @@ class WorkerFailoverTest(ForemanCase):
         self.assertEqual(self.recoveries("block_deferred"), [])
         # the swap was asked for and was not available: one honest audit row
         self.assertEqual([r.get("swapped") for r in self.recoveries("worker_swap")], [False])
+
+    def test_a_deferred_attempt_the_owner_routes_away_concludes_its_record(self):
+        """The deferral's worker is a decision, not a binding: a Worker: line set before the deferred
+        attempt runs moves it, and the deferral's record concludes as never run."""
+        self.relay_timeout()  # pi-glm-factory
+        wi = self.relay_timeout()  # pi-deepseek-factory
+        self.assertEqual(wi["recovery"]["toWorker"], "opencode-glm-factory")
+        self.foreman.set_worker(ID, ["pi-deepseek-factory"], "day-desk")
+        wi = self.tick()
+        self.assertEqual((wi["state"], wi["worker"]), ("implementing", "pi-deepseek-factory"))
+        self.assertIsNone(wi["recovery"])  # nothing open survives into the attempt
+        self.assertEqual([(r["action"], r["succeeded"]) for r in self.results()],
+                         [("worker_swap", False), ("block_deferred", False)])
+        self.assertEqual([r.get("swapped") for r in self.recoveries("worker_swap")], [True, False])
+
+    def test_a_wait_that_ends_in_an_escalation_concludes_an_open_recovery_record(self):
+        """A deferral a dependency escalation interrupts never runs: its record concludes and
+        nothing pending is left on a person's queue."""
+        self.relay_timeout()
+        wi = self.relay_timeout()
+        self.assertEqual(wi["recovery"]["action"], "block_deferred")
+        self.github.add_issue(REPO, 200)  # the dependency, ended without a merge
+        self.foreman.intake(REPO, 200)
+        self.foreman.store.put(dict(self.foreman.store.get(f"{REPO}#200"), state="cancelled",
+                                    terminalReason="replaced by o/r#300"))
+        self.github.issues[(REPO, 7)]["body"] = "Depends on #200\n"
+        wi = self.tick()
+        self.assertEqual(wi["state"], "human_waiting")
+        self.assertIn("this issue depends on #200", wi["blockedOn"])
+        self.assertIsNone(wi["recovery"])
+        self.assertEqual([(r["action"], r["succeeded"]) for r in self.results()],
+                         [("worker_swap", False), ("block_deferred", False)])
+
+    def test_a_dispatch_that_finds_no_worker_concludes_an_open_recovery_record(self):
+        """A queue that ends in "no local worker" is not the attempt the deferral chose: the record
+        concludes and clears, so no open recovery is left behind on a person's queue."""
+        self.foreman.config = Config(mcp_token="t", repos=frozenset({REPO}),
+                                     workers=(("codex", "hosted"),), local_only_repos=frozenset({REPO}))
+        self.foreman.store.put(dict(self.foreman.store.get(ID), recovery={
+            "id": "r-pending", "action": "block_deferred", "category": "timeout (unknown cause)",
+            "fromWorker": "pi-glm-factory", "toWorker": "pi-deepseek-factory", "at": "2026-10-16T00:00:00Z"}))
+        wi = self.tick()
+        self.assertEqual((wi["state"], wi["recovery"]), ("human_waiting", None))
+        self.assertIn("no local worker", wi["blockedOn"])
+        self.assertEqual(self.results(), [{"recoveryId": "r-pending", "action": "block_deferred",
+                                           "category": "timeout (unknown cause)",
+                                           "fromWorker": "pi-glm-factory",
+                                           "toWorker": "pi-deepseek-factory",
+                                           "succeeded": False, "escalationAvoided": False}])
 
     def test_the_pass_budget_still_stops_the_recovery_attempt(self):
         """G: recovery never buys passes; the budget writes exhausted and the record concludes."""
@@ -311,6 +361,32 @@ class DependencyRecoveryTest(unittest.TestCase):
         self.assertEqual((wi["state"], wi["waitingOn"]), ("implementing", None))
 
 
+class LegacyDependencyTextTest(ForemanCase):
+    def test_only_the_factorys_own_escalation_text_names_a_dependency_to_re_check(self):
+        """A WorkItem that escalated before the incident field is re-checked only when its blockedOn
+        is the text the factory writes; a stray 'depends on #n' phrase re-arms nothing (ADR-0081)."""
+        self.github.add_issue(REPO, 12)  # open: a stray match would wrongly resume the WorkItem
+        self.foreman.store.put(dict(self.foreman.store.get(ID), state="human_waiting",
+                                    blockedOn="the fix depends on #12, which a person must land first"))
+        version = self.foreman.store.get(ID)["stateVersion"]
+        wi = self.tick()
+        self.assertEqual((wi["state"], wi["stateVersion"], wi.get("incident")),
+                         ("human_waiting", version, None))
+        self.assertEqual(self.recoveries(), [])
+        # the factory's own text still reaches the dependency, and an unchanged end does nothing
+        self.foreman.intake(REPO, 12)
+        self.foreman.store.put(dict(self.foreman.store.get(f"{REPO}#12"), state="cancelled",
+                                    terminalReason="replaced by o/r#9"))
+        self.foreman.store.put(dict(self.foreman.store.get(ID), blockedOn=(
+            "this issue depends on #12, which ended cancelled: replaced by o/r#9. Edit or remove its "
+            "'Depends on #12' line, then retry; or close it")))
+        version = self.foreman.store.get(ID)["stateVersion"]
+        wi = self.tick()
+        self.assertEqual((wi["state"], wi["stateVersion"], wi.get("incident")),
+                         ("human_waiting", version, None))  # unchanged: no record, no write
+        self.assertEqual(self.recoveries(), [])
+
+
 class RelayLossTest(ForemanCase):
     def test_a_relay_loss_never_charges_a_strike_and_is_bounded(self):
         """F: a verified relay loss re-queues the same WorkOrder, twice at most, without external writes."""
@@ -344,6 +420,12 @@ class RelayLossTest(ForemanCase):
         self.assertIn("re-queued 2 times already", wi["attempts"][0])
         self.assertEqual(len(self.recoveries("relay_lost")), 2)
         self.assertEqual(self.results()[-1]["succeeded"], False)
+        # a person's retry starts a fresh pass budget, and the infrastructure allowance with it
+        wi, task = self.dispatch()
+        self.relay.finish(task["id"], status="failed", error="the harness failed")
+        self.assertEqual(self.tick()["state"], "blocked")
+        wi = self.foreman.resolve_human(ID, "retry", "spend another budget", "Ami-Khokhar")
+        self.assertEqual((wi["state"], wi["infraRetries"]), ("ready", 0))
 
     def test_a_pending_remote_verify_falls_back_to_the_ordinary_attempt(self):
         """A scratch branch cannot be reconciled after a loss, so the recovery stands down."""

@@ -564,7 +564,8 @@ class Foreman:
             if status == "open":
                 return self._write(wi, dict(wi, waitingOn=number), "waiting", on=number)
             if status == "ended":
-                return self._write(wi, dict(wi, state="human_waiting", waitingOn=None,
+                self._finish_recovery(wi, False)  # a wait ending in an escalation concludes any open recovery
+                return self._write(wi, dict(wi, state="human_waiting", waitingOn=None, recovery=None,
                                             blockedOn=self._dependency_reason(number, how)),
                                    "dependency_ended", on=number, how=how)
         return self._write(wi, dict(wi, waitingOn=None), "dependency_merged") if wi.get("waitingOn") else wi
@@ -582,7 +583,7 @@ class Foreman:
         incident, or read from the escalation text for a WorkItem that escalated before the field."""
         incident = wi.get("incident")
         if incident is None:
-            match = re.search(r"depends on #(\d+)", wi.get("blockedOn") or "")
+            match = re.search(r"this issue depends on #(\d+)", wi.get("blockedOn") or "")
             number = int(match.group(1)) if match else None
         else:
             number = incident.get("dependency") if incident.get("action") == "dependency_ended" else None
@@ -591,8 +592,9 @@ class Foreman:
         status, how = self._dependency(wi["repo"], number)
         if status == "ended":
             reason = self._dependency_reason(number, how)
-            if reason == (wi.get("blockedOn") or "") and incident is not None:
-                return wi  # the same incident, unchanged
+            if reason == (wi.get("blockedOn") or ""):
+                return wi  # the same incident, unchanged: a legacy escalation gets its record
+                # (backfilled with the one-answer rule) when its facts first change, not per tick
             self.store.log("recovery", self._recovery_detail(
                 "incident_rearmed", "dependency", wi, wi.get("worker"), wi.get("worker"),
                 succeeded=True, escalation_avoided=False, dependency=number, end=how), wi["id"])
@@ -722,7 +724,8 @@ class Foreman:
         worker = routing.route(self.config.workers, self.config.local_only(wi["repo"]), failed, named,
                                avoid_families=avoid)
         if worker is None:
-            return self._write(wi, dict(wi, state="human_waiting", blockedOn=(
+            self._finish_recovery(wi, False)  # no attempt will run, so the open recovery finds no outcome
+            return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=(
                 f"{wi['repo']} is local-only and FACTORY_WORKERS has no local worker")), "no_worker")
         recovery = self._recovery_decision(wi, avoid, from_worker, category, worker)
         attempt = sum(1 for o in orders if o["round"] == wi.get("gateRound", 0) and o["kind"] == kind)
@@ -984,22 +987,24 @@ class Foreman:
                                        f"{wi['goal']} (#{wi['issueNumber']})",
                                        documents.pr_body(wi, order, files, evidence, worker))
 
-    def _recovery_budget(self, wi):
+    def _recovery_budget(self, wi, strikes=None):
         """What a recovery decision costs, for the audit (ADR-0081): the passes spent against the
-        budget and the strikes the attempts hold. A recovery decision charges neither."""
+        budget and the strikes the attempts hold. A recovery decision charges neither; `strikes`
+        overrides the document's count for a decision made on a failure the document does not hold
+        yet (a deferral, whose failure is being recorded by the same write)."""
         return {"passesUsed": len(self.store.workorders(wi["id"])) - (wi.get("passesBefore") or 0),
                 "maxPasses": self.config.max_passes,
-                "strikes": len(wi.get("attempts") or [])}
+                "strikes": len(wi.get("attempts") or []) if strikes is None else strikes}
 
     def _recovery_detail(self, action, category, wi, from_worker, to_worker, succeeded=None,
-                         escalation_avoided=None, **extra):
+                         escalation_avoided=None, strikes=None, **extra):
         """One autonomous recovery decision or outcome, as the audit stores it (ADR-0081): the
         failure category, the action, the worker before and after, the budget impact, whether the
         recovery succeeded and whether it spared a person. `succeeded` and `escalationAvoided` are
         null on a decision whose outcome is still open; _finish_recovery says it."""
         detail = {"recoveryId": uuid.uuid4().hex[:12], "action": action, "category": category,
                   "fromWorker": from_worker, "toWorker": to_worker,
-                  "budget": self._recovery_budget(wi),
+                  "budget": self._recovery_budget(wi, strikes),
                   "succeeded": succeeded, "escalationAvoided": escalation_avoided}
         detail.update(extra)
         return detail
@@ -1043,8 +1048,10 @@ class Foreman:
         deferral or relay loss already open for this very worker keeps its record — the dispatch is
         the attempt that recovery chose."""
         pending = wi.get("recovery")
-        if pending and pending.get("toWorker") == worker:
-            return pending
+        if pending:
+            if pending.get("toWorker") == worker:
+                return pending
+            self._finish_recovery(wi, False)  # the attempt it chose will not run as chosen
         if not avoid:
             return None
         swapped = routing.family(worker) not in avoid
@@ -1081,7 +1088,8 @@ class Foreman:
         if worker is None or worker in failed:
             return None  # nobody untried the policy would choose: the block stands
         category = diagnosis.get("cause") or "timeout (unknown cause)"
-        detail = self._recovery_detail("block_deferred", category, wi, wi.get("worker"), worker)
+        detail = self._recovery_detail("block_deferred", category, wi, wi.get("worker"), worker,
+                                       strikes=len(attempts))  # this failure is the second strike
         self.store.log("recovery", detail, wi["id"])
         return dict(wi, attempts=attempts, activeWorkOrderId=None, providerTaskId=None, remoteVerify=None,
                     state="changes_requested" if order["kind"] == "fix" else "ready", blockedOn=None,
@@ -1177,7 +1185,8 @@ class Foreman:
             if agent and not owner_asked and wi.get("incident") is not None:
                 # Day Desk's answer is spent on this incident; the next one it may answer is a new record
                 new = dict(new, incident=dict(wi["incident"], agentAnswered=True))
-            return self._write(wi, dict(new, blockedOn=None, attempts=[], recovery=None), "human_resolved",
+            return self._write(wi, dict(new, blockedOn=None, attempts=[], recovery=None,
+                                        infraRetries=0), "human_resolved",
                                resolution=resolution, note=note, by=by, **rerun, **({"agent": True} if agent else {}),
                                **({"ownerAsked": True} if owner_asked else {}))
         finally:
@@ -1289,7 +1298,7 @@ class Foreman:
             except Conflict as exc:
                 raise ToolError(str(exc)) from None
             new = dict(wi, state="changes_requested" if wi.get("prNumber") else "ready",
-                       blockedOn=None, attempts=[], terminalReason=None)
+                       blockedOn=None, attempts=[], recovery=None, infraRetries=0, terminalReason=None)
             return self._write(wi, new, "allowance_retry", planId=plan_id, evidence=note, by=by,
                                remaining=spent["remaining"])
         finally:

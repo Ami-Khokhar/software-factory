@@ -43,8 +43,12 @@ class Relay:
             if err.code == 404 and method == "GET":
                 return None
             raise RelayError(f"relay {err.code}: {err.read().decode('utf-8', 'replace')[:300]}") from None
-        except urllib.error.URLError as err:
-            raise RelayError(f"relay unreachable: {err.reason}") from None
+        except OSError as err:
+            # A refused connection, a read timeout, or the relay dying mid-answer (a restart).
+            # URLError is an OSError, and a failure while the answer is read is not wrapped in one:
+            # every transport failure is this one retryable error, never a raw OS error the caller
+            # would crash on. A submit is safe to retry: its request id is the idempotency key.
+            raise RelayError(f"relay unreachable: {getattr(err, 'reason', err)}") from None
 
     def submit(self, agent_id, text, request_id, timeout_ms, cwd=None):
         """POST /v1/tasks. A repeated request_id returns the existing task (relay idempotency).

@@ -124,8 +124,11 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   audit holds the decision (`recovery`) and its outcome (`recovery_result`) under
   the same id; the field links the two across ticks. `WorkItem.infraRetries` counts
   the relay losses re-queued for the WorkItem against `RELAY_RETRIES_MAX`, and a
-  successful Result resets it. Documents without either field read as no recovery
-  and no re-queue.
+  successful Result resets it. Every write that starts a fresh budget of passes (a
+  person's retry, an allowance retry) resets it too, so the bound is per budget,
+  not per lifetime. A relay call that fails mid-answer (a restart) surfaces as one
+  `RelayError`: the tick is a clean no-op that retries, never a crash. Documents
+  without either field read as no recovery and no re-queue.
 - **`WorkItem.description` is the issue's text outside its Acceptance section
   (ADR-0038).** Intake freezes it with `goal` and `acceptance`, and each
   WorkOrder carries it to the worker as data. WorkItems stored before this field
