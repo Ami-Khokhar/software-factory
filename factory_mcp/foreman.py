@@ -32,12 +32,38 @@ SAFETY_STOPS = ("pr-gatekeeper decided human", "protected path", "access denied"
 # the identity marker a replacement the factory opens carries: this request, at this position
 REPLACEMENT_MARKER = re.compile(r"<!-- factory replace (\S+) (\d+) -->")
 REMOTE_VERIFY_WORKFLOW = ".github/workflows/factory-verify.yml"  # the workflow's name there is `factory-verify`
+# An accepted relay task the relay no longer knows is an infrastructure loss, not the code's
+# (ADR-0081). The same WorkOrder is re-queued this many times per WorkItem before the ordinary
+# failed attempt stands; a successful Result resets the count.
+RELAY_RETRIES_MAX = 2
+# A pass that ran out of the clock: the harness's own timeout or the relay's `timed_out` status.
+# This is the worker-health signal recovery acts on; whether the cause is evidence-backed is the
+# attempt's business, never this one (ADR-0081).
+OUT_OF_TIME = re.compile(r"task timed_out|the harness timed out")
+# Reason text is incident identity (ADR-0081), and a commit sha or the attempt count a reason
+# narrates is not material: both read the same every time they are said again.
+SHA40 = re.compile(r"\b[0-9a-f]{40}\b")
+ATTEMPT_COUNT = re.compile(r"\b\d+ worker attempts\b")
+# The budget boundaries: the writes that reset `attempts` and start a fresh budget of passes. A
+# one-per-budget recovery is looked for after the last of these.
+BUDGET_RESETS = ("human_resolved", "allowance_retry", "result")
 
 
 def agent_resolved(history):
     """Whether Day Desk, driving, already resolved this WorkItem once (ADR-0030)."""
     return any(h["action"] == "human_resolved" and h["detail"].get("agent") and not h["detail"].get("ownerAsked")
                for h in history)
+
+
+def agent_may_resolve(wi, history):
+    """Whether Day Desk, driving, may answer this escalation (ADR-0030, ADR-0081): each incident —
+    the escalation and its material facts — gets one answer, and a materially changed incident gets
+    one fresh one. A WorkItem escalated before the incident field falls back to the one-answer rule
+    over its history."""
+    incident = wi.get("incident")
+    if incident is None:
+        return not agent_resolved(history)
+    return not incident.get("agentAnswered")
 
 
 class RepoNotReady(ToolError):
@@ -410,6 +436,9 @@ class Foreman:
             new = dict(new, waitingOn=None)  # the wait ends: say so, or status names a stale issue
         if new["state"] in ("human_waiting", "blocked") and not new.get("owner"):
             new = dict(new, owner=self.config.owner or new["repo"].split("/")[0])
+        incident = self._next_incident(old, new, action, detail)
+        if incident is not None:
+            new = dict(new, incident=incident)
         stored = self.store.put(new)
         detail = dict(detail, **{"from": old["state"], "to": stored["state"]})
         escalated = stored["state"] in ATTENTION and old["state"] != stored["state"]
@@ -424,6 +453,49 @@ class Foreman:
     def _reason(wi):
         """Why a WorkItem needs a person, on one line."""
         return " ".join(str(wi.get("blockedOn") or wi.get("terminalReason") or wi["state"]).split())
+
+    def _norm_reason(self, wi):
+        """The reason as incident identity (ADR-0081): one line, with commit shas and the attempt
+        count it narrates read as the same wherever they appear again."""
+        reason = self._reason(wi)
+        return ATTEMPT_COUNT.sub("<n> worker attempts", SHA40.sub("<sha>", reason))
+
+    @staticmethod
+    def _cause_of(entry):
+        """The diagnosis cause an attempt entry carries, or "unknown"."""
+        return next((cause for cause in diagnostics.CAUSES if f"diagnosis: {cause}" in entry), "unknown")
+
+    def _incident_identity(self, new, action, detail):
+        """The material facts an incident is about (ADR-0081): what escalated the WorkItem, its
+        normalized reason, and the action's own facts. Only these compare; a timestamp or the
+        one-answer flag never re-arms an incident by itself."""
+        identity = {"action": action, "reason": self._norm_reason(new)}
+        if action == "attempt_failed":
+            identity["causes"] = sorted({self._cause_of(entry) for entry in new.get("attempts") or []})
+        elif action == "dependency_ended":
+            identity["dependency"] = detail.get("on")
+            identity["end"] = detail.get("how")
+        elif action == "reconcile":
+            identity["gateRound"] = new.get("gateRound")
+        return identity
+
+    def _next_incident(self, old, new, action, detail):
+        """The incident record the write stores, or None to leave the stored one alone (ADR-0081).
+        A record with the same material identity keeps its one-answer flag — that is what stops a
+        tick or a repeat of the same facts from re-arming. A first record inherits the one-answer
+        rule over the history, so an escalation that predates this rule cannot be answered twice;
+        a materially changed incident is a new record, with one fresh evaluation."""
+        if new["state"] not in ATTENTION:
+            return None
+        identity = self._incident_identity(new, action, detail)
+        current = old.get("incident")
+        if current is not None:
+            if all(current.get(key) == value for key, value in identity.items()):
+                return None
+            number, answered = current.get("id", 0) + 1, False
+        else:
+            number, answered = 1, agent_resolved(self.store.history(old["id"]))
+        return dict(identity, id=number, since=now(), agentAnswered=answered)
 
     def _notify(self, wi):
         """Tell the owner on the issue. A failed comment is logged; it never blocks the transition."""
@@ -446,6 +518,8 @@ class Foreman:
             # a retry says why the last attempt failed, or what a person said
             return self.dispatch(wi, "implement", self._human_findings(wi) + self._attempt_findings(wi),
                                  facts["issue"]["workers"])
+        if wi["state"] == "human_waiting":
+            return self._recheck_dependency(wi)
         # GitHub runs no workflow on a PR that conflicts with its base, so the gate would never answer
         conflict = (wi["state"] in ("pr_open", "reviewing", "changes_requested") and facts["pr"] is not None
                     and facts["pr"]["mergeable"] is False)
@@ -483,16 +557,55 @@ class Foreman:
     def _wait_for(self, wi, numbers):
         """Hold a ready WorkItem until each issue its `Depends on #n` lines name has merged (ADR-0024).
         One that ended without a merge goes to a person, who may change the order with
-        factory_set_dependencies (ADR-0042)."""
+        factory_set_dependencies (ADR-0042); a dependency that changes materially re-arms that
+        incident (ADR-0081, _recheck_dependency)."""
         for number in numbers:
             status, how = self._dependency(wi["repo"], number)
             if status == "open":
                 return self._write(wi, dict(wi, waitingOn=number), "waiting", on=number)
             if status == "ended":
-                return self._write(wi, dict(wi, state="human_waiting", waitingOn=None, blockedOn=(
-                    f"this issue depends on #{number}, which {how}. Edit or remove its "
-                    f"'Depends on #{number}' line, then retry; or close it")), "dependency_ended", on=number)
+                return self._write(wi, dict(wi, state="human_waiting", waitingOn=None,
+                                            blockedOn=self._dependency_reason(number, how)),
+                                   "dependency_ended", on=number, how=how)
         return self._write(wi, dict(wi, waitingOn=None), "dependency_merged") if wi.get("waitingOn") else wi
+
+    @staticmethod
+    def _dependency_reason(number, how):
+        return (f"this issue depends on #{number}, which {how}. Edit or remove its "
+                f"'Depends on #{number}' line, then retry; or close it")
+
+    def _recheck_dependency(self, wi):
+        """A dependency that ended left this WorkItem waiting (ADR-0024). Each tick re-reads it
+        (ADR-0081): one that merged or opened again clears the wait and the WorkItem resumes, one
+        that ended differently re-arms the incident for one fresh evaluation, and an unchanged one
+        does nothing — a tick never re-arms anything by itself. The dependency is named by the
+        incident, or read from the escalation text for a WorkItem that escalated before the field."""
+        incident = wi.get("incident")
+        if incident is None:
+            match = re.search(r"depends on #(\d+)", wi.get("blockedOn") or "")
+            number = int(match.group(1)) if match else None
+        else:
+            number = incident.get("dependency") if incident.get("action") == "dependency_ended" else None
+        if number is None:
+            return wi
+        status, how = self._dependency(wi["repo"], number)
+        if status == "ended":
+            reason = self._dependency_reason(number, how)
+            if reason == (wi.get("blockedOn") or "") and incident is not None:
+                return wi  # the same incident, unchanged
+            self.store.log("recovery", self._recovery_detail(
+                "incident_rearmed", "dependency", wi, wi.get("worker"), wi.get("worker"),
+                succeeded=True, escalation_avoided=False, dependency=number, end=how), wi["id"])
+            return self._write(wi, dict(wi, blockedOn=reason), "dependency_ended", on=number, how=how)
+        resumed = {"id": (incident or {}).get("id", 0) + 1, "action": "dependency_ended",
+                   "reason": self._norm_reason(wi), "dependency": number, "end": status,
+                   "since": now(), "agentAnswered": True}
+        self.store.log("recovery", self._recovery_detail(
+            "dependency_resumed", "dependency", wi, wi.get("worker"), wi.get("worker"),
+            succeeded=True, escalation_avoided=True, dependency=number, end=status), wi["id"])
+        return self._write(wi, dict(wi, state="ready", blockedOn=None, incident=resumed,
+                                    waitingOn=number if status == "open" else None),
+                           "dependency_recovered", on=number, status=status)
 
     def _dependency(self, repo, number):
         """("merged" | "open" | "ended", how it ended) for issue #number. A merge is a GitHub fact; a
@@ -589,7 +702,8 @@ class Foreman:
         orders = self.store.workorders(wi["id"])
         used = len(orders) - (wi.get("passesBefore") or 0)  # a person's retry buys a fresh budget
         if used >= self.config.max_passes:
-            return self._write(wi, dict(wi, state="exhausted", terminalReason=(
+            self._finish_recovery(wi, False)  # the budget stopped the attempt the recovery chose
+            return self._write(wi, dict(wi, state="exhausted", recovery=None, terminalReason=(
                 f"{used} worker passes used; FACTORY_MAX_PASSES is {self.config.max_passes}")),
                 "exhausted")
         allowed = [agent for agent, _ in self.config.workers]
@@ -601,16 +715,23 @@ class Foreman:
                 "unknown_worker", workers=unknown)
         failed = {h["detail"].get("worker") for h in self.store.history(wi["id"])
                   if h["action"] == "attempt_failed"}
-        worker = routing.route(self.config.workers, self.config.local_only(wi["repo"]), failed, named)
+        # After a timeout-class failure the next attempt prefers another model family (ADR-0081): the
+        # family that just ran out of the clock is the suspect, and this preference runs before the
+        # two-strike block ever sees the case.
+        avoid, from_worker, category = self._timeout_causes(wi)
+        worker = routing.route(self.config.workers, self.config.local_only(wi["repo"]), failed, named,
+                               avoid_families=avoid)
         if worker is None:
             return self._write(wi, dict(wi, state="human_waiting", blockedOn=(
                 f"{wi['repo']} is local-only and FACTORY_WORKERS has no local worker")), "no_worker")
+        recovery = self._recovery_decision(wi, avoid, from_worker, category, worker)
         attempt = sum(1 for o in orders if o["round"] == wi.get("gateRound", 0) and o["kind"] == kind)
         base = self.github.branch_head(wi["repo"], self._default_branch(wi["repo"]))
         order = documents.workorder(wi, kind, attempt, self.config, base, findings,
                                     self._lessons(wi, findings))
         self.store.save_workorder(order)
-        wi = self._write(wi, dict(wi, state="dispatching", activeWorkOrderId=order["id"], worker=worker),
+        wi = self._write(wi, dict(wi, state="dispatching", activeWorkOrderId=order["id"], worker=worker,
+                                  recovery=recovery),
                          "dispatch", workOrder=order["id"], worker=worker)
         return self.submit(wi, order)
 
@@ -630,7 +751,7 @@ class Foreman:
         order = self._order(wi)
         task = self.relay.get(wi["providerTaskId"])
         if task is None:
-            return self.fail(wi, order, "the relay no longer knows the task (restarted?)")
+            return self._relay_lost(wi, order)
         if task["status"] in ("queued", "running"):
             return wi
         if task["status"] != "completed":
@@ -661,8 +782,10 @@ class Foreman:
             return self._size_recovery(wi, order, errors)
         if errors:
             return self.fail(wi, order, f"{task['agentId']}: " + "; ".join(errors), diagnosis=diagnosis)
+        self._finish_recovery(wi, True)
         self.store.log("result", {"workOrder": order["id"], "commitSha": sha}, wi["id"])
-        done = dict(wi, headSha=sha, attempts=[], activeWorkOrderId=None, providerTaskId=None, remoteVerify=None)
+        done = dict(wi, headSha=sha, attempts=[], activeWorkOrderId=None, providerTaskId=None, remoteVerify=None,
+                    recovery=None, infraRetries=0)
         if wi.get("prNumber"):
             wi = self._write(wi, dict(done, state="reviewing"), "pushed")
             try:  # the gate lints the body against the PR's paths, which this push may have changed
@@ -674,6 +797,32 @@ class Foreman:
         pr = self.open_pr(wi, order, files, evidence, task["agentId"])
         return self._write(wi, dict(done, state="pr_open", prNumber=pr["number"]), "pr_opened",
                            pr=pr["number"])
+
+    def _relay_lost(self, wi, order):
+        """The relay no longer knows an accepted task (ADR-0081): an infrastructure loss, not the
+        code's failed attempt. The facts are reconciled first — this tick rebuilt them, workers hold
+        no credential, and a pending remote-verify scratch branch is checked — so nothing external
+        can have happened; then the same WorkOrder is re-queued under the same idempotency key, so
+        the relay can hold at most one task for it. The re-queue is bounded per WorkItem
+        (RELAY_RETRIES_MAX); beyond the bound, or with any uncertainty, the ordinary failed attempt
+        stands."""
+        retries = wi.get("infraRetries") or 0
+        if wi.get("remoteVerify") is not None:
+            return self.fail(wi, order, "the relay no longer knows the task (restarted?) while a remote "
+                                        "verify was pending, so its scratch branch cannot be reconciled")
+        if retries >= RELAY_RETRIES_MAX:
+            return self.fail(wi, order, f"the relay no longer knows the task (restarted?); it was re-queued "
+                                        f"{retries} times already")
+        self._finish_recovery(wi, False)  # a previous re-queue was lost again; its outcome is now known
+        detail = self._recovery_detail("relay_lost", "relay lost the task", wi, wi.get("worker"),
+                                       wi.get("worker"), task=wi.get("providerTaskId"),
+                                       retries=retries + 1)
+        self.store.log("recovery", detail, wi["id"])
+        record = {"id": detail["recoveryId"], "action": "relay_lost", "category": detail["category"],
+                  "fromWorker": wi.get("worker"), "toWorker": wi.get("worker"), "at": now()}
+        return self._write(wi, dict(wi, state="dispatching", providerTaskId=None, recovery=record,
+                                    infraRetries=retries + 1), "relay_lost",
+                           task=wi.get("providerTaskId"), retries=retries + 1)
 
     def _remote_verify(self, wi, order, patch):
         """Have a GitHub macOS runner run the repo's verify on the patch (ADR-0045), without blocking the
@@ -688,9 +837,10 @@ class Foreman:
             if self.github.file(repo, REMOTE_VERIFY_WORKFLOW, base) is None:  # the scratch branch is built on it
                 reason = (f"{repo} has no {REMOTE_VERIFY_WORKFLOW}, which runs its verify on a macOS runner: "
                           "add it (docs/RUNBOOK.md, Remote verify setup), then retry")
+                self._finish_recovery(wi, False)
                 return self._write(wi, dict(wi, state="human_waiting", activeWorkOrderId=None,
-                                            providerTaskId=None, blockedOn=reason), "remote_verify_unavailable",
-                                   error=reason), [], [], True
+                                            providerTaskId=None, recovery=None, blockedOn=reason),
+                                   "remote_verify_unavailable", error=reason), [], [], True
             branch = f"factory-verify/{wi['issueNumber']}-{len(self.store.workorders(wi['id']))}"
             try:
                 sha = self.push_patch(wi, order, patch, branch, force=True)
@@ -813,7 +963,8 @@ class Foreman:
                   "approves it: call factory_replace_issue with the slices (ownerAsked), or "
                   "factory_resolve_human to retry or close. No worker pass or budget was spent.")
         new = dict(wi, state="human_waiting", blockedOn=reason, activeWorkOrderId=None,
-                   providerTaskId=None, remoteVerify=None)
+                   providerTaskId=None, remoteVerify=None, recovery=None)
+        self._finish_recovery(wi, False)
         return self._write(wi, new, "size_recovery_escalated", slices=plan)
 
     def _replacement_authorized(self, wi):
@@ -833,19 +984,137 @@ class Foreman:
                                        f"{wi['goal']} (#{wi['issueNumber']})",
                                        documents.pr_body(wi, order, files, evidence, worker))
 
+    def _recovery_budget(self, wi):
+        """What a recovery decision costs, for the audit (ADR-0081): the passes spent against the
+        budget and the strikes the attempts hold. A recovery decision charges neither."""
+        return {"passesUsed": len(self.store.workorders(wi["id"])) - (wi.get("passesBefore") or 0),
+                "maxPasses": self.config.max_passes,
+                "strikes": len(wi.get("attempts") or [])}
+
+    def _recovery_detail(self, action, category, wi, from_worker, to_worker, succeeded=None,
+                         escalation_avoided=None, **extra):
+        """One autonomous recovery decision or outcome, as the audit stores it (ADR-0081): the
+        failure category, the action, the worker before and after, the budget impact, whether the
+        recovery succeeded and whether it spared a person. `succeeded` and `escalationAvoided` are
+        null on a decision whose outcome is still open; _finish_recovery says it."""
+        detail = {"recoveryId": uuid.uuid4().hex[:12], "action": action, "category": category,
+                  "fromWorker": from_worker, "toWorker": to_worker,
+                  "budget": self._recovery_budget(wi),
+                  "succeeded": succeeded, "escalationAvoided": escalation_avoided}
+        detail.update(extra)
+        return detail
+
+    def _finish_recovery(self, wi, succeeded):
+        """The outcome of the open recovery decision (ADR-0081): logged when the attempt it chose
+        concluded. A result that stood spares a person; a failed result does not."""
+        record = wi.get("recovery")
+        if not record:
+            return
+        self.store.log("recovery_result", {"recoveryId": record.get("id"), "action": record.get("action"),
+                                           "category": record.get("category"),
+                                           "fromWorker": record.get("fromWorker"),
+                                           "toWorker": record.get("toWorker"),
+                                           "succeeded": succeeded, "escalationAvoided": succeeded},
+                       wi["id"])
+
+    def _timeout_causes(self, wi):
+        """The model families, the worker and the category of the current budget's timeout-class
+        failures (ADR-0081), read from the durable `attempt_failed` audit rows — one per attempt,
+        so they outlive the retry that clears `attempts`. Returns (families, fromWorker, category)."""
+        attempts = len(wi.get("attempts") or [])
+        if not attempts:
+            return set(), None, None
+        entries = [h for h in self.store.history(wi["id"]) if h["action"] == "attempt_failed"][-attempts:]
+        families, from_worker, category = set(), None, None
+        for entry in entries:
+            detail = entry["detail"]
+            worker = detail.get("worker")
+            if not worker:
+                continue
+            cause = detail.get("cause")
+            if cause == "harness timeout" or OUT_OF_TIME.search(detail.get("reason") or ""):
+                families.add(routing.family(worker))
+                from_worker, category = worker, cause or "timeout (unknown cause)"
+        return families, from_worker, category
+
+    def _recovery_decision(self, wi, avoid, from_worker, category, worker):
+        """Record the worker-swap decision (ADR-0081) and return the open recovery for the WorkItem,
+        or None when the chosen worker is inside the avoided families: no swap, one audit row. A
+        deferral or relay loss already open for this very worker keeps its record — the dispatch is
+        the attempt that recovery chose."""
+        pending = wi.get("recovery")
+        if pending and pending.get("toWorker") == worker:
+            return pending
+        if not avoid:
+            return None
+        swapped = routing.family(worker) not in avoid
+        detail = self._recovery_detail("worker_swap", category, wi, from_worker, worker, swapped=swapped)
+        self.store.log("recovery", detail, wi["id"])
+        if not swapped:
+            return None
+        return {"id": detail["recoveryId"], "action": "worker_swap", "category": category,
+                "fromWorker": from_worker, "toWorker": worker, "at": now()}
+
+    def _defer_block(self, wi, order, attempts, reason, diagnosis):
+        """Instead of blocking on a second failure, spend the policy's next authorized attempt
+        (ADR-0081): after a worker ran out of the clock, when routing would still choose a worker
+        this WorkItem has never tried — the failover the policy already covers — that attempt runs
+        before the block, once per budget. The block, the pass budget and the strikes are otherwise
+        untouched. Returns the WorkItem to write, or None when the block stands."""
+        if not (diagnosis.get("cause") == "harness timeout" or OUT_OF_TIME.search(reason or "")):
+            return None  # a real failure, not the worker's clock: the block stands
+        if self._deferred_already(wi):
+            return None
+        families, _, _ = self._timeout_causes(wi)
+        families.update({routing.family(wi.get("worker") or "")})
+        families.discard("")  # an unknown worker names no family to avoid
+        try:
+            issue = self.github.issue(wi["repo"], wi["issueNumber"])
+        except GitHubError:  # the issue's Worker: lines cannot be read: the block stands
+            return None
+        failed = {h["detail"].get("worker") for h in self.store.history(wi["id"])
+                  if h["action"] == "attempt_failed"}
+        failed.add(wi.get("worker"))  # this very attempt just failed, whatever the audit has logged
+        failed.discard(None)
+        worker = routing.route(self.config.workers, self.config.local_only(wi["repo"]), failed,
+                               workitem.workers_named(issue.get("body")), avoid_families=families)
+        if worker is None or worker in failed:
+            return None  # nobody untried the policy would choose: the block stands
+        category = diagnosis.get("cause") or "timeout (unknown cause)"
+        detail = self._recovery_detail("block_deferred", category, wi, wi.get("worker"), worker)
+        self.store.log("recovery", detail, wi["id"])
+        return dict(wi, attempts=attempts, activeWorkOrderId=None, providerTaskId=None, remoteVerify=None,
+                    state="changes_requested" if order["kind"] == "fix" else "ready", blockedOn=None,
+                    recovery={"id": detail["recoveryId"], "action": "block_deferred",
+                              "category": category, "fromWorker": wi.get("worker"),
+                              "toWorker": worker, "at": now()})
+
+    def _deferred_already(self, wi):
+        """Whether the block was already deferred once in this budget: the boundary is the last
+        write that reset `attempts` (BUDGET_RESETS)."""
+        for entry in reversed(self.store.history(wi["id"])):
+            if entry["action"] in BUDGET_RESETS:
+                return False
+            if entry["action"] == "recovery" and entry["detail"].get("action") == "block_deferred":
+                return True
+        return False
+
     def fail(self, wi, order, reason, diagnosis=None):
-        """Record the attempt; two failed attempts block the WorkItem with the evidence. The
-        diagnosis (diagnostics.diagnose) rides with the reason: an evidence-backed cause with its
-        sanitized bounded context, nothing when a cause stays unknown. A diagnosis that names the
-        environment (diagnostics.environment_fault) pauses the WorkItem on the first attempt
-        instead: a second pass would meet the same broken environment (ADR-0051)."""
+        """Record the attempt; two failed attempts block the WorkItem with the evidence, unless the
+        failure ran out of the clock and routing still has a worker this WorkItem never tried: that
+        recovery attempt is granted before the block (ADR-0081, _defer_block). The diagnosis
+        (diagnostics.diagnose) rides with the reason: an evidence-backed cause with its sanitized
+        bounded context, nothing when a cause stays unknown. A diagnosis that names the environment
+        (diagnostics.environment_fault) pauses the WorkItem on the first attempt instead: a second
+        pass would meet the same broken environment (ADR-0051)."""
         diagnosis = diagnosis or {"cause": None, "context": ""}
+        self._finish_recovery(wi, False)  # the attempt a recovery chose just concluded, and did not stand
         detail = dict(reason=reason, diagnosis=diagnosis["context"], worker=wi.get("worker"))
         if diagnosis["cause"]:
             detail["cause"] = diagnosis["cause"]
         attempts = list(wi.get("attempts") or []) + [diagnostics.entry(reason, diagnosis)]
         new = dict(wi, attempts=attempts, activeWorkOrderId=None, providerTaskId=None, remoteVerify=None,
-                   state="changes_requested" if order["kind"] == "fix" else "ready")
+                   recovery=None, state="changes_requested" if order["kind"] == "fix" else "ready")
         if diagnostics.environment_fault(diagnosis["cause"]):
             # A confirmed environment fault pauses for repair (ADR-0051): a second pass, whichever
             # worker it lands on, would meet the same broken checkout, so nobody runs until a person
@@ -854,19 +1123,24 @@ class Foreman:
                 f"a worker's environment failed ({diagnosis['cause']}). Repair the environment, "
                 "then call factory_resolve_human with retry; no worker runs until then."))
         elif len(attempts) >= 2:
-            new.update(state="blocked",
-                       blockedOn=f"{len(attempts)} worker attempts at the {order['kind']} WorkOrder failed. "
-                                 "Fix the cause named in attempts, then call factory_resolve_human.")
+            deferred = self._defer_block(wi, order, attempts, reason, diagnosis)
+            if deferred is not None:
+                new = deferred
+            else:
+                new.update(state="blocked",
+                           blockedOn=f"{len(attempts)} worker attempts at the {order['kind']} WorkOrder failed. "
+                                     "Fix the cause named in attempts, then call factory_resolve_human.")
         return self._write(wi, new, "attempt_failed", **detail)
 
     def resolve_human(self, workitem_id, resolution, note, by, agent=False, owner_asked=False):
         """A person's answer to human_waiting, blocked or exhausted (ADR-0006): retry, regate or close.
-        Day Desk, driving (`agent`), answers each WorkItem once; after that the owner decides (ADR-0030).
-        A person's retry starts a fresh budget of passes and Day Desk's keeps the budget it has (ADR-0035),
-        so Day Desk may not retry a WorkItem that used its budget on its own. When the owner asked in chat
-        (`owner_asked`, ADR-0043, extended by ADR-0046), it is the owner's decision, not Day Desk's: it
-        answers a WorkItem Day Desk already answered, for any of the three resolutions, and a retry buys
-        a fresh budget."""
+        Day Desk, driving (`agent`), answers each incident once — the escalation and its material facts;
+        a materially changed incident earns one fresh answer (ADR-0030, ADR-0081). After that the owner
+        decides. A person's retry starts a fresh budget of passes and Day Desk's keeps the budget it has
+        (ADR-0035), so Day Desk may not retry a WorkItem that used its budget on its own. When the owner
+        asked in chat (`owner_asked`, ADR-0043, extended by ADR-0046), it is the owner's decision, not
+        Day Desk's: it answers a WorkItem Day Desk already answered, for any of the three resolutions,
+        and a retry buys a fresh budget."""
         if owner_asked and not agent:
             raise ToolError("ownerAsked is Day Desk's flag for a decision the owner asked for in chat; the "
                             "owner's own call does not need it")
@@ -881,7 +1155,11 @@ class Foreman:
             if agent and not owner_asked and (wi["state"] == "exhausted" or resolution == "retry" and spent):
                 raise ToolError(f"{workitem_id} used its budget of passes, so the owner decides whether to spend "
                                 f"more: factory retry|close {workitem_id} <note>")
-            if agent and not owner_asked and agent_resolved(self.store.history(workitem_id)):
+            if agent and not owner_asked and not agent_may_resolve(wi, self.store.history(workitem_id)):
+                if wi.get("incident") is not None:
+                    raise ToolError(f"Day Desk already answered {workitem_id}'s current escalation; the tool "
+                                    f"re-arms it only when its blocking facts change, so the owner decides now: "
+                                    f"factory retry|regate|close {workitem_id} <note>")
                 raise ToolError(f"Day Desk already resolved {workitem_id} once, so the owner decides now: "
                                 f"factory retry|regate|close {workitem_id} <note>")
             rerun = {}
@@ -896,7 +1174,10 @@ class Foreman:
                 new = dict(wi, state="cancelled", terminalReason=f"closed by {by}: {note}")
             else:
                 raise ToolError("resolution must be retry, regate (needs a PR) or close")
-            return self._write(wi, dict(new, blockedOn=None, attempts=[]), "human_resolved",
+            if agent and not owner_asked and wi.get("incident") is not None:
+                # Day Desk's answer is spent on this incident; the next one it may answer is a new record
+                new = dict(new, incident=dict(wi["incident"], agentAnswered=True))
+            return self._write(wi, dict(new, blockedOn=None, attempts=[], recovery=None), "human_resolved",
                                resolution=resolution, note=note, by=by, **rerun, **({"agent": True} if agent else {}),
                                **({"ownerAsked": True} if owner_asked else {}))
         finally:

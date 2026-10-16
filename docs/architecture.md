@@ -138,7 +138,7 @@ A tick comes from the background loop or from `factory_tick`.
      merges. Then `closed`.
 3. **Entering `human_waiting`, `blocked` or `exhausted`** comments on the issue and mentions the
    owner. `factory watch` also tells the owner in Telegram of `human_waiting`, `blocked` and
-   `exhausted`: Day Desk can resolve the first two on its own and the owner can answer all three; Day Desk answers `exhausted`, or a WorkItem it already answered once, only when the owner asked for that choice in chat (ADR-0035, ADR-0043, ADR-0046).
+   `exhausted`: Day Desk can resolve the first two on its own and the owner can answer all three; Day Desk answers `exhausted`, or an incident it already answered, only when the owner asked for that choice in chat (ADR-0035, ADR-0043, ADR-0046, ADR-0081).
 
 ## State machine
 
@@ -152,9 +152,11 @@ The states are the enum in `schemas/workitem.schema.json`.
 | `ready` | a `Depends on #n` issue is open | `ready` with `waitingOn: n`; nothing is dispatched |
 | `ready`, `changes_requested` | a `Worker:` line names an agent that is not in `FACTORY_WORKERS` | `human_waiting`; nothing is dispatched |
 | `ready` | a `Depends on #n` issue closed without a merged PR, ended `cancelled` or `exhausted`, or does not exist | `human_waiting` |
+| `human_waiting` on a dependency | each tick re-reads it: merged or open again resumes the WorkItem (`ready`, `waitingOn: n` when open); a differently ended dependency re-arms its incident once; an unchanged one writes nothing (ADR-0081) |
 | state that would dispatch | a recovery pause barrier (ADR-0061) holds the WorkItem | nothing is dispatched: the decision refuses, or `dispatching` holds the relay call until the barrier releases |
 | `implementing` | the task completed, the Result is valid and the guards pass | `pr_open`, or `reviewing` when the PR already exists |
-| `implementing` | the task failed, or the Result or a guard failed | back to `ready` (`changes_requested` for a fix) with an `attempts` entry; `blocked` after 2; a diagnosis that names the environment pauses as `human_waiting` on the first attempt (ADR-0051) |
+| `implementing` | the task failed, or the Result or a guard failed | back to `ready` (`changes_requested` for a fix) with an `attempts` entry, routed to another model family when the failure ran out of the clock; `blocked` after 2, with one deferred attempt first after a timeout-class failure while an untried worker remains (once per budget, ADR-0081); a diagnosis that names the environment pauses as `human_waiting` on the first attempt (ADR-0051) |
+| `implementing` | the relay no longer knows the accepted task | `dispatching` again with the same WorkOrder and idempotency key, no `attempts` entry, per-WorkItem bounded by `RELAY_RETRIES_MAX`; past the bound or with a pending remote verify, an ordinary failed attempt (ADR-0081) |
 | `pr_open` | the gate's check run, or its workflow run when the token cannot read check runs, exists on the head | `reviewing` |
 | `reviewing` | a verdict on the current head: MERGE, CHANGES or HUMAN | `merge_pending`, `changes_requested` or `human_waiting` |
 | `reviewing` | the gate's check run (or workflow run) finished, not cancelled, with no verdict | `human_waiting` |
@@ -226,6 +228,8 @@ The states are the enum in `schemas/workitem.schema.json`.
 | A PR that conflicts with its base is made again on the current base | `Foreman.act` | `test_gate_loop`: `test_a_pr_that_conflicts_with_main_is_made_again_on_the_current_main` |
 | No verdict for `FACTORY_GATE_WAIT_SECONDS` goes to a person | `Foreman.act` | `test_hardening`: `test_silent_gate_goes_to_a_person` |
 | The budget ends a WorkItem | `Foreman.dispatch` | `test_actions`: `test_budget_exhausts` |
+| A timeout moves the next attempt to another model family; the two-strike block waits for the failover the policy covers, once per budget, and stands when no untried worker remains (ADR-0081) | `factory_mcp/routing.py` `route`, `Foreman._dispatch`, `Foreman._defer_block` | `test_workers`: `test_a_timeout_family_is_avoided_while_another_family_may_run`; `test_autonomous_recovery`: `test_a_first_timeout_moves_the_next_attempt_to_another_model_family`, `test_two_timeouts_do_not_block_while_an_untried_worker_remains`, `test_two_timeouts_block_when_no_untried_worker_remains`, `test_the_pass_budget_still_stops_the_recovery_attempt` |
+| A relay that lost an accepted task gets the same WorkOrder again, same idempotency key, no strike, bounded per WorkItem (ADR-0081) | `Foreman._relay_lost` | `test_autonomous_recovery`: `test_a_relay_loss_never_charges_a_strike_and_is_bounded`, `test_a_pending_remote_verify_falls_back_to_the_ordinary_attempt` |
 | A plan opens no issue when one of its issues fails a check | `Foreman.start_plan` | `test_plan`: `test_one_issue_that_fails_a_check_opens_no_issue` |
 | A planned replacement is opened `factory:proposed` and adopted by its marker, never duplicated (ADR-0064) | `Foreman._resolve_replacements`, `Foreman._open_replacement` | `test_recovery_creation`: `test_a_planned_replacement_is_opened_proposed_and_chained`, `test_a_lost_create_response_adopts_the_exact_issue`, `test_after_a_restart_the_barrier_holds_and_the_resume_adopts`, `test_mismatched_words_refuse` |
 | A replacement runs only on the owner's approval (Day Desk with `ownerAsked`, the owner's note), under one stable `requestId`; a different ID for the same WorkItem conflicts before any write (ADR-0067) | `Foreman.replace_issue` | `test_recovery`: `test_day_desk_may_replace_only_on_the_owners_approval`, `test_ownerAsked_is_not_the_owners_own_flag`, `test_a_different_requestId_for_the_same_original_conflicts` |
@@ -234,6 +238,7 @@ The states are the enum in `schemas/workitem.schema.json`.
 | The original retires before the replacement can run: its unmerged PR is closed, never merged, and a merged or unverifiable PR stops the run with the barrier held; a replay closes nothing twice (ADR-0066) | `Foreman._retire_original`, `Foreman.replace_issue` | `test_recovery_creation`: `test_the_original_pr_is_closed_before_the_issue_and_is_never_merged`, `test_a_merged_original_pr_stops_before_anything_can_run`, `test_an_unverifiable_original_pr_stops_before_activation`, `test_a_lost_pr_close_replays_and_closes_nothing_twice` |
 | An issue starts only after each `Depends on #n` issue merged | `Foreman._wait_for` | `test_plan`: `test_a_dependent_waits_while_its_dependency_is_open_and_starts_once_it_merged`, `test_a_dependency_that_ends_without_a_merge_sends_the_dependent_to_a_person` |
 | Dependencies change only before any worker pass, in one repo, without a cycle or an ended issue; a stranded `human_waiting` one may change too | `Foreman.set_dependencies` | `test_dependencies`: `test_a_workitem_no_worker_has_touched_may_change_and_any_other_may_not`, `test_a_human_waiting_workitem_with_no_pass_may_change_its_order`, `test_a_dependency_must_be_an_open_issue_of_the_same_repo_that_has_not_ended`, `test_a_change_that_would_make_a_cycle_is_refused` |
+| An escalation is an incident answered once; only a material change re-arms it, a dependency that resumed clears it, and a tick alone never re-arms it (ADR-0081) | `Foreman._write`, `Foreman._recheck_dependency`, `foreman.agent_may_resolve` | `test_autonomous_recovery`: `test_a_material_change_re_arms_the_incident_once_and_an_unchanged_one_never_does`, `test_an_unchanged_dependency_never_re_arms_and_a_changed_one_re_arms_once`, `test_a_dependency_that_comes_back_resumes_the_workitem_without_a_person`, `test_a_human_verdict_stays_for_the_owner_across_ticks_and_recoveries`; `test_ops`: `test_an_owner_asked_close_answers_a_workitem_day_desk_already_answered` |
 | The harness never touches the host | `worker/runner.py` | `test_worker_runner`: `test_the_harness_gets_a_copy_and_never_the_checkout`, `test_hooks_and_filters_the_harness_plants_never_run_on_the_host` |
 | A patch for a remote-verify repo reaches the WorkItem's branch only after its `factory-verify` run passed | `Foreman._remote_verify` | `test_remote_verify`: `test_a_pass_deletes_the_scratch_branch_then_pushes_the_branch_and_opens_the_pr`, `test_a_failure_is_an_attempt_with_the_log_tail_and_the_next_order_carries_it` |
 | Passes of one repo take its checkout in turns, up to `FACTORY_PASSES_PER_REPO` at once | `worker/runner.py` `checkout_lock`, `Foreman.dispatch` | `test_worker_runner`: `test_a_runner_waits_for_the_checkout_while_another_pass_holds_it`; `test_safety`: `test_passes_of_one_repo_run_at_once_up_to_the_limit` |
@@ -251,8 +256,10 @@ The states are the enum in `schemas/workitem.schema.json`.
 - **Verdict**: the gate's decision on one PR head: MERGE, CHANGES or HUMAN, with findings.
 - **Tick**: one pass of reconcile, then at most one action, for each WorkItem.
 - **Pass**: one worker task. `FACTORY_MAX_PASSES` caps them per WorkItem.
-- **Attempt**: a pass that failed. Two in a row block the WorkItem.
-- **Blocked**: stopped after two failed attempts, until the owner decides.
+- **Attempt**: a pass that failed. Two in a row block the WorkItem, unless a timeout-class failure
+  still has an untried worker the policy would choose: that one recovery attempt runs first
+  (ADR-0081).
+- **Blocked**: stopped after the failed attempts of its budget, until a person answers.
 - **Exhausted**: stopped because the budget of passes ran out; only the owner's retry, which buys
   a fresh budget, starts it again. The owner may ask Day Desk to make it in Telegram (ADR-0043).
 - **Autonomy rate**: of the WorkItems that ended, the share that merged with no human state, no

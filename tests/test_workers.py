@@ -8,7 +8,7 @@ from factory_mcp import patches
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
-from factory_mcp.routing import route
+from factory_mcp.routing import family, route
 from factory_mcp.store import Store
 from tests.fakes import ISSUE_BODY, FakeGitHub, FakeRelay, result_line
 
@@ -61,6 +61,23 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(route(THREE, False, {"opencode-glm", "pi-glm"}, ("opencode-glm", "pi-glm")),
                          "opencode-glm")  # both failed: the first named again, never codex
         self.assertIsNone(route(THREE, True, set(), ("codex",)))  # a local-only repo, a hosted choice
+
+    def test_a_worker_family_is_the_model_token_in_its_id(self):
+        self.assertEqual([family(worker) for worker in
+                          ("pi-glm-factory", "opencode-glm-factory", "pi-deepseek-factory", "codex")],
+                         ["glm", "glm", "deepseek", "codex"])
+
+    def test_a_timeout_family_is_avoided_while_another_family_may_run(self):
+        """ADR-0081: pi-glm and opencode-glm are one model family, so avoiding the family passes
+        both of them, and the preference never widens the set of workers that may run."""
+        self.assertEqual(route(THREE, False, {"pi-glm"}, avoid_families={"glm"}), "codex")
+        self.assertEqual(route(THREE, False, set(), avoid_families={"glm"}), "codex")
+        # both families failed: the ordinary order stands, never a wider set
+        self.assertEqual(route(THREE, False, {"codex", "pi-glm", "opencode-glm"}, avoid_families={"glm"}),
+                         "codex")
+        # nobody outside the avoided family may run: the same family again, not an invented worker
+        self.assertEqual(route(THREE, True, set(), avoid_families={"glm"}), "pi-glm")
+        self.assertEqual(route(THREE, True, {"pi-glm"}, avoid_families={"glm"}), "opencode-glm")
 
 
 class WorkerTest(unittest.TestCase):

@@ -105,9 +105,27 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   passes after it. WorkItems stored before this field have none; readers treat
   that as 0. The tool `factory_resolve_human` takes an optional `ownerAsked`
   boolean: Day Desk sets it only when the owner asked in chat for this retry,
-  regate or close. It answers a WorkItem Day Desk already answered once, and a
-  retry buys a fresh budget like a person's retry; the history row of the answer
-  holds `agent` and `ownerAsked` (ADR-0043, extended by ADR-0046).
+  regate or close. It answers a WorkItem whose current escalation Day Desk
+  already answered, and a retry buys a fresh budget like a person's retry; the
+  history row of the answer holds `agent` and `ownerAsked` (ADR-0043, extended by
+  ADR-0046).
+- **`WorkItem.incident` is the escalation's identity (ADR-0081).** `{id, action,
+  reason, since, agentAnswered}` plus the action's own facts: `causes`
+  (attempt_failed), `dependency` and `end` (dependency_ended) or `gateRound`
+  (reconcile). A write that escalates computes the identity; the same identity
+  keeps the record and its `agentAnswered` flag, a materially changed one becomes
+  `id + 1` with `agentAnswered` false. Day Desk may answer each incident once
+  (`agentMayResolve`, `factory_resolve_human`); a WorkItem that escalated before
+  this field falls back to the once-ever rule over its history, so the store needs
+  no migration.
+- **`WorkItem.recovery` is the open autonomous-recovery decision (ADR-0081).**
+  `{id, action, category, fromWorker, toWorker, at}` with `action` one of
+  `worker_swap`, `block_deferred` or `relay_lost`, or `null` when none is open. The
+  audit holds the decision (`recovery`) and its outcome (`recovery_result`) under
+  the same id; the field links the two across ticks. `WorkItem.infraRetries` counts
+  the relay losses re-queued for the WorkItem against `RELAY_RETRIES_MAX`, and a
+  successful Result resets it. Documents without either field read as no recovery
+  and no re-queue.
 - **`WorkItem.description` is the issue's text outside its Acceptance section
   (ADR-0038).** Intake freezes it with `goal` and `acceptance`, and each
   WorkOrder carries it to the worker as data. WorkItems stored before this field

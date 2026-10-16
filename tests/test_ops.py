@@ -96,7 +96,7 @@ class ResolveHumanTest(unittest.TestCase):
         self.block()
         self.foreman.resolve_human(ID, "retry", "try again", "day-desk", agent=True)  # its one answer
         self.block()
-        with self.assertRaisesRegex(ToolError, "already resolved"):
+        with self.assertRaisesRegex(ToolError, "already answered"):
             self.foreman.resolve_human(ID, "close", "not worth it", "day-desk", agent=True)
         wi = self.foreman.resolve_human(ID, "close", "owner: give up on this one", "day-desk", agent=True,
                                         owner_asked=True)

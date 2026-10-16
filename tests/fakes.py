@@ -213,10 +213,15 @@ class FakeGitHub:
 
 
 class FakeRelay:
-    """agent-relay's task API in memory, including requestId idempotency."""
+    """agent-relay's task API in memory, including requestId idempotency — and the same lifetime:
+    restart() loses every task and request id, exactly as the real relay's memory does."""
 
     def __init__(self):
         self.tasks, self.by_request, self.down = {}, {}, False
+
+    def restart(self):
+        self.tasks.clear()
+        self.by_request.clear()
 
     def submit(self, agent_id, text, request_id, timeout_ms, cwd=None):
         from factory_mcp.relay import RelayError

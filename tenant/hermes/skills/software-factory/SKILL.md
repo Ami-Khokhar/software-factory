@@ -175,12 +175,15 @@ A factory-watch alert names a WorkItem that waits on the owner. When the owner r
    owner's name as `by`.
 
 When the WorkItem is `exhausted`, a `retry` would go past its budget of passes, or you already
-answered it once, the tool refuses unless the owner, in this chat, asked for that retry, regate or
-close. Then set `ownerAsked` true, quote the owner's words as the note, and make the call. A retry
-buys a fresh budget of passes, and an owner-asked answer does not use up your one answer. Never
-set `ownerAsked` for a choice you made yourself, and never in the factory-drive job. Before you
-retry, say it first when the cause is an environment limit, for example a verify the Linux worker
-cannot run: a retry will fail the same way.
+answered its current escalation, the tool refuses unless the owner, in this chat, asked for that
+retry, regate or close. Then set `ownerAsked` true, quote the owner's words as the note, and make
+the call. A retry buys a fresh budget of passes, and an owner-asked answer does not use up your
+one answer. Your answer covers the escalation before you, not the WorkItem: the tool re-arms a
+fresh one, for one more answer, only when the blocking facts change — so an escalation whose facts
+have not changed since you answered it waits for the owner. Never set `ownerAsked` for a choice you
+made yourself, and never in the factory-drive job. Before you retry, say it first when the cause is
+an environment limit, for example a verify the Linux worker cannot run: a retry will fail the same
+way.
 
 When the reason says each attempt ran out of time, that is not the earlier "too big for one pass"
 reading (ADR-0050): a timeout until a `Result.diagnostics` phase names one stays an unknown cause,
@@ -202,8 +205,9 @@ factory_status's workItems with `agentMayResolve` true:
    permits and its `remaining` count. An allowance without a scope is a record the older factory
    wrote and refuses every spend: treat it as absent. The factory-watch job may message the owner
    about the same WorkItem while you act; that is its diagnosing, not a race you must win, and
-   repeated runs of this job read the same facts again, so you answer each WorkItem once,
-   whichever route answers it.
+   repeated runs of this job read the same facts again, so you answer each escalation once,
+   whichever route answers it; the tool re-arms one more answer only when a WorkItem's blocking
+   facts materially change, and an unchanged escalation waits for the owner.
 2. Route through the allowance when every fact lines up: the reason shows an ordinary fixable
    cause, a current scoped allowance covers this item exactly — the same repo, the item named
    among its members when it names any, `retry` among its actions, `remaining` at least 1 — and
@@ -235,8 +239,9 @@ factory_status's workItems with `agentMayResolve` true:
      attempts that each ran out of time with a cause the evidence names and a retry still cannot fix (for example a harness timeout that reached the pass budget, where a split may be the honest answer), attempts that each ran out of time with no cause the evidence names — that is an unknown cause, and diagnosis, not a retry on allowance or on your own answer, and no unbounded retrying — a gate HUMAN with findings, a gate CHANGES with no finding a worker could fix, or anything you
      cannot tell. Leave it; the owner hears of it.
 4. Call factory_resolve_human with the id, the choice, your note, and `day-desk` as `by`. You may
-   answer each WorkItem once; when the tool says the owner decides now, leave it. Never set
-   `ownerAsked` here: the owner spends a new budget, this job never does.
+   answer each escalation once; when the tool says the blocking facts have not changed and the
+   owner decides now, leave it. Never set `ownerAsked` here: the owner spends a new budget, this
+   job never does.
 5. Do not close a WorkItem; closing gives up the owner's work. Reply with one line per WorkItem you
    answered: its id, your choice and your note. If you answered none, reply exactly [SILENT].
 
