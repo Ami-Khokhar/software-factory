@@ -15,7 +15,7 @@ from tests.fakes import FakeBootstrapGit, FakeGitHub, FakeRelay
 
 KEY, READ = "opencode-value-7f3a", "read-token-value-91c2"  # test stand-ins, never real secrets
 CANONICAL_USES = "59540639b38a08733f7222adfdcde36d3a8552e1"
-CANONICAL_REF = "e9f2380fbb040a962ab3d888df578d0625415a70"
+CANONICAL_REF = "c9a6462f3fc4af660d53777de49bb2537c6cc3e4"
 
 
 def stale_workflow():

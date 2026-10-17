@@ -19,7 +19,7 @@ ENTRY = {"name": "o/tool-added", "added_by": "amteshwar", "added_at": "2026-09-2
 REPO = "o/r"
 CANONICAL_WORKFLOW = (TEMPLATE.parent.parent / GATE_WORKFLOW).read_text()
 CANONICAL_USES = "59540639b38a08733f7222adfdcde36d3a8552e1"
-CANONICAL_REF = "e9f2380fbb040a962ab3d888df578d0625415a70"
+CANONICAL_REF = "c9a6462f3fc4af660d53777de49bb2537c6cc3e4"
 
 
 def stale_workflow(canonical=CANONICAL_WORKFLOW):
