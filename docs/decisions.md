@@ -2030,3 +2030,30 @@ truth (ADR-0009). Independent issues run in parallel from the first tick with no
 factory_set_dependencies calls, an issue with two dependencies starts only when both merge, and
 the owner sees the real graph in the plan before the one approval. The chain stays the default,
 so every existing plan and every existing Depends-on line behaves exactly as before.
+
+## ADR-0083 — The weekly report carries first-pass gauges, each stamped with its window and gate pin
+
+**Context.** The factory's only quality number was the autonomy rate: merges ÷ ends. It counts
+merges, not how the first pass went, so a builder that needs two fix rounds looks the same as one
+that merges first time, and no number compares workers, pass kinds or gate pins. The graph plan
+makes later slices judgeable only if the before-state is measurable now, and 74 worker PRs over
+three weeks showed first-verdict MERGE falling with PR size while the pin, wall budget and task
+mix all moved — confounded samples that need the pin recorded with the window.
+
+**Decision.** `tick_one` records the accepted verdict's `outcome` and `round` on each reconcile
+audit row, and `metrics.first_pass` computes seven gauges from the audit history and the stored
+WorkOrders: first-verdict MERGE rate, clean one-shot rate (one pass, first verdict MERGE, merged,
+no failed attempt, no human state), rounds to merge, accepted-Result rate by pass kind and by
+worker family, the timeout share of failed passes, and dependency-wait hours. A pass is a
+`dispatch` row; it was accepted when a `result` row carries its WorkOrder. Rows written before
+this ADR carry no outcome: the state move infers it (merged was MERGE, changes_requested CHANGES,
+a HUMAN says so in its escalation). Every gauge names its `n`, the window in IST and each repo's
+gate pin (`gatekeeper_ref` from the gate workflow, best effort, "unknown" when unreadable), so two
+windows under different pins never read as one trend. Plans have no id in the store, so
+dependency-wait hours are per WorkItem; a plan's nodes are visible by repo and issue range.
+
+**Consequence.** Each graph slice can be judged by the window after it: slice 3 should move
+first-verdict MERGE, slice 5 and 6 move the timeout share and one-shot rate, slice 4 shows per
+family. The recount on a copy of the live store anchors the baseline. Old history is inferred, so
+the gauges are honest about their own blind spot: an old HUMAN escalation that does not name the
+verdict is not counted as one.
