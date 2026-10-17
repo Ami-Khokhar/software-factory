@@ -44,6 +44,11 @@ MUTATIONS = (
      'for key in ("fingerprint", "path", "line", "problem")}',
      "tests.test_gate_loop.GateLoopTest."
      "test_a_changes_finding_with_fix_and_test_reaches_the_fix_workorder"),
+    ("factory_mcp/foreman.py",
+     'except patches.PatchError as exc:  # a refused patch is no partial to keep',
+     'except RuntimeError as exc:  # a refused patch is no partial to keep',
+     "tests.test_autonomous_recovery.SalvageTest."
+     "test_a_partial_touching_a_protected_path_is_not_kept"),
 )
 
 

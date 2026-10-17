@@ -37,6 +37,7 @@ class Config:
     agent_token: str = ""  # Day Desk's driving token (ADR-0030); empty: only the owner's token works
     agents_file: str = ""  # the relay's agents.json; empty: the factory may not register a worker
     worker_template: str = "pi-glm-factory"  # the approved worker a new one copies (ADR-0077)
+    salvage: bool = True  # a timed-out pass's partial work is kept (ADR-0086); FACTORY_SALVAGE=off
     rank_lessons: bool = False  # Jev ranks the repo's lessons per dispatch (ADR-0058)
     jev_api_key: str = ""  # TYPESAFE_API_KEY: only jev_rank sends it, in one Authorization header
     jev_url: str = jev_rank.HOST  # the System One endpoint; tests point it at a local fake
@@ -134,4 +135,5 @@ class Config:
             jev_api_key=env.get("TYPESAFE_API_KEY", ""),
             agents_file=env.get("FACTORY_AGENTS_FILE", ""),
             worker_template=env.get("FACTORY_WORKER_TEMPLATE") or defaults.worker_template,
+            salvage=env.get("FACTORY_SALVAGE", "on").lower() != "off",
         )

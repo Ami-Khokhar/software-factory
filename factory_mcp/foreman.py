@@ -14,7 +14,7 @@ from .github import GitHubError
 from .mcp import ToolError
 from .relay import RelayError
 from .store import REQUEST_PHASES, Conflict, now
-from .verdict import blocking
+from .verdict import blocking, fingerprint
 
 # States that need a person. Entering one posts a comment on the issue, so the owner hears of it.
 ATTENTION = ("human_waiting", "blocked", "exhausted")
@@ -42,6 +42,10 @@ RELAY_RETRIES_MAX = 2
 # attempt's business, never this one (ADR-0081).
 OUT_OF_TIME = re.compile(r"task timed_out|the harness timed out")
 DEFAULT_REVIEWER = "deepseek-v4.1-flash"  # pr-gatekeeper's reviewer_model when the key is absent
+WIP_MOVES_MAX = 2  # how far a salvage wip may move forward before timeouts stop costing pushes
+PARTIAL_WORK = ("A worker ran out of time. Its unfinished work is the commit you start from. "
+                "Check each acceptance bullet against the code, not against any report. "
+                "Keep what is right, fix or remove the rest, and finish.")
 # Reason text is incident identity (ADR-0081), and a commit sha or the attempt count a reason
 # narrates is not material: both read the same every time they are said again.
 SHA40 = re.compile(r"\b[0-9a-f]{40}\b")
@@ -412,6 +416,8 @@ class Foreman:
                                       for f in verdict["findings"] if f["severity"] == "blocking"]
             wi = self._write(wi, new, "reconcile", **detail)
             wi = self.act(wi, facts)
+            if wi.get("wip") and (wi["state"] in workitem.TERMINAL or wi["state"] == "merged"):
+                wi = self._retire_wip(wi)  # a merge or an end ends salvage (ADR-0086)
         except Conflict:
             wi = self.store.get(workitem_id)
         except (GitHubError, RelayError) as exc:
@@ -758,6 +764,10 @@ class Foreman:
         recovery = self._recovery_decision(wi, avoid, from_worker, category, worker)
         attempt = sum(1 for o in orders if o["round"] == wi.get("gateRound", 0) and o["kind"] == kind)
         base = self.github.branch_head(wi["repo"], self._default_branch(wi["repo"]))
+        if kind == "implement" and wi.get("wip"):  # the rescue pass builds on the kept partial (ADR-0086)
+            base = wi["wip"]["sha"]
+            findings = [dict(fingerprint=fingerprint(None, PARTIAL_WORK), path=None, line=None,
+                             problem=PARTIAL_WORK, fix=None, test=None)] + list(findings)
         order = documents.workorder(wi, kind, attempt, self.config, base, findings,
                                     self._lessons(wi, findings))
         self.store.save_workorder(order)
@@ -796,6 +806,9 @@ class Foreman:
         errors = documents.check_result(result, order)
         if not errors and result["status"] != "completed":
             errors = [f"worker reported {result['status']}: {result.get('error')}"]
+            if (order["kind"] == "implement" and self.config.salvage and result.get("patch")
+                    and OUT_OF_TIME.search(result.get("error") or "")):
+                wi = self._salvage(wi, order, result)  # keep the partial; the fail below still runs
         diagnosis = diagnostics.diagnose(order, result)
         sha, files, evidence = None, [], (result or {}).get("evidence", [])
         if not errors and order.get("remoteVerify"):
@@ -814,6 +827,7 @@ class Foreman:
         if errors:
             return self.fail(wi, order, f"{task['agentId']}: " + "; ".join(errors), diagnosis=diagnosis)
         self._finish_recovery(wi, True)
+        wi = self._retire_wip(wi)  # a completed Result ends salvage (ADR-0086): the scratch branch goes
         self.store.log("result", {"workOrder": order["id"], "commitSha": sha}, wi["id"])
         done = dict(wi, headSha=sha, attempts=[], activeWorkOrderId=None, providerTaskId=None, remoteVerify=None,
                     recovery=None, infraRetries=0)
@@ -828,6 +842,40 @@ class Foreman:
         pr = self.open_pr(wi, order, files, evidence, task["agentId"])
         return self._write(wi, dict(done, state="pr_open", prNumber=pr["number"]), "pr_opened",
                            pr=pr["number"])
+
+    def _salvage(self, wi, order, result):
+        """Keep a timed-out pass's partial work (ADR-0086): push its patch to the scratch branch
+        `factory-wip/<issue>` and record it on the WorkItem, so the next implement pass bases
+        itself on the kept work instead of restarting. A patch touching a protected path is not
+        kept — push_patch refuses it as at any other push — and the wip moves forward at most
+        WIP_MOVES_MAX times, so a pass that keeps timing out stops costing salvage pushes. The
+        WorkItem as it stands is returned in every case; fail() still runs as today."""
+        moves = ((wi.get("wip") or {}).get("moves") or 0) + 1
+        if moves > WIP_MOVES_MAX:
+            self.store.log("salvage_declined", {"reason": "the wip has moved forward twice"}, wi["id"])
+            return wi
+        branch = f"factory-wip/{wi['issueNumber']}"
+        try:
+            sha = self.push_patch(wi, order, result["patch"], branch=branch)
+        except patches.PatchError as exc:  # a refused patch is no partial to keep
+            self.store.log("salvage_declined", {"reason": str(exc)}, wi["id"])
+            return wi
+        return self._write(wi, dict(wi, wip={"branch": branch, "sha": sha, "workOrder": order["id"],
+                                             "moves": moves}), "salvaged",
+                           workOrder=order["id"], sha=sha)
+
+    def _retire_wip(self, wi):
+        """A completed Result, a merge or an end retires the salvage scratch branch (ADR-0086):
+        delete it and clear `wip`. A branch GitHub no longer holds is already retired."""
+        wip = wi.get("wip")
+        if not wip:
+            return wi
+        try:
+            self.github.delete_branch(wi["repo"], wip["branch"])
+        except GitHubError as exc:
+            if exc.status != 404:
+                raise
+        return self._write(wi, dict(wi, wip=None), "wip_retired", branch=wip["branch"])
 
     def _relay_lost(self, wi, order):
         """The relay no longer knows an accepted task (ADR-0081): an infrastructure loss, not the

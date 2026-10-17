@@ -620,8 +620,13 @@ and that the `factory-update` job names: `/usr/bin/python3 -m pip install -r req
   and its bounded digest of failing/error test identities and tracebacks is carried beside a later
   empty timeout, across the person's retry, so the next pass still sees what to fix (ADR-0078).
   Retry for a cause a retry can fix, and ask Day Desk to split only when the cause is scope (a
-  harness timeout that reached the budget) and the issue reads like more than one pass holds; a
-  timed-out pass keeps none of its work. A timed-out attempt routes the next pass to another model
+  harness timeout that reached the budget) and the issue reads like more than one pass holds. A
+  timed-out pass keeps its partial work (ADR-0086): the runner collects the checkout on harness
+  exit 124 and the Foreman pushes it to the scratch branch `factory-wip/<issue>` and records it as
+  the WorkItem's `wip`, so the next implement pass bases itself on that commit and is told to keep
+  what is right and finish. `FACTORY_SALVAGE=off` turns this off. The wip moves forward at most
+  twice, and a partial touching a protected path is never kept; a completed Result, a merge or an
+  end deletes the scratch branch and clears the `wip`. A timed-out attempt routes the next pass to another model
   family and the block waits for the policy's failover, at most once per budget (ADR-0081): the
   `recovery` audit rows say what was chosen, and `recovery_result` whether it held.
 - **Stuck in `dispatching` with `relay 401`.** The relay refused factory-mcp's token. factory-mcp

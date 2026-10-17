@@ -120,6 +120,18 @@
       "minimum": 0,
       "description": "Relay losses re-queued for this WorkItem against RELAY_RETRIES_MAX (ADR-0081). A successful Result resets it."
     },
+    "wip": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["branch", "sha", "workOrder", "moves"],
+      "description": "The kept partial work of a pass that ran out of time (ADR-0086): the next implement pass bases itself on `sha` and is told what it is. Cleared when a Result completes, the PR merges, or the WorkItem ends; `moves` counts salvage pushes and stops at two.",
+      "properties": {
+        "branch": { "type": "string", "minLength": 1 },
+        "sha": { "type": "string", "minLength": 1 },
+        "workOrder": { "type": "string", "minLength": 1 },
+        "moves": { "type": "integer", "minimum": 1, "maximum": 2 }
+      }
+    },
     "state": { "$ref": "#/$defs/state" },
     "stateVersion": {
       "type": "integer",

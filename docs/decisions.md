@@ -2125,13 +2125,16 @@ A refused or empty partial leaves no patch, and verification never starts after 
 nothing finished to verify.
 
 **Decision — the Foreman half (slice 6).** A failed implement Result that matches `OUT_OF_TIME`
-and carries a patch whose changed files clear the protected-path check is not a plain failure:
-the Foreman pushes the patch to a per-WorkItem scratch branch `factory-wip/<issue number>` with
-`push_patch()`, stores the branch on the WorkItem as optional `wip`, and the next dispatch's
-WorkOrder is based on that commit with a "Rescue work" preamble telling the worker to keep what
-is right, fix or remove the rest, and finish. `wip` moves forward at most twice; a completed
-Result, a merge or any end state deletes the scratch branch and clears `wip`. `FACTORY_SALVAGE=off`
-turns the whole mechanism off.
+and carries a patch is not a plain failure: the Foreman pushes the patch with `push_patch()` to a
+per-WorkItem scratch branch `factory-wip/<issue number>` — which refuses a partial touching a
+protected path, as it refuses any push — and stores the kept work on the WorkItem as optional
+`wip` = `{branch, sha, workOrder, moves}`. The next implement dispatch bases itself on `wip.sha`
+and carries a `partial-work` finding telling the worker its work is the commit it starts from:
+check each acceptance bullet against the code, keep what is right, fix or remove the rest, and
+finish. `moves` counts salvage pushes and stops at two, so a pass that keeps timing out stops
+costing salvage pushes. `fail()` runs as today — the strike and the ADR-0081 family preference
+are untouched. A completed Result, a merge or any end state deletes the scratch branch and clears
+`wip`. `FACTORY_SALVAGE=off` turns the whole mechanism off.
 
 **Consequence.** A timed-out pass now costs one salvage push plus a finish pass instead of a full
 restart, and the size limits still bind on the partial, so salvage cannot smuggle oversized work
