@@ -459,6 +459,9 @@ owner fixes it without guessing.
 
 **Amended by ADR-0042**: factory_set_dependencies changes the order of a WorkItem no worker has touched.
 
+**Amended by ADR-0082**: a plan item may name the earlier issues it waits for as `after` positions,
+so a plan is a graph and not only a chain.
+
 **Context.** Day Desk turned a goal into issues with one `factory_propose_issue` call per issue,
 then one `factory_approve_issue` call per issue, and Hermes asked the owner before each call: a
 goal of 6 issues cost 12 approvals. The owner reviewed the plan once, in chat; the other approvals
@@ -2000,3 +2003,30 @@ that a dependency change or recovery has made moot resolves itself from facts. T
 ends a WorkItem in `exhausted`, the two-strike block still stops a failed budget, every merge,
 HUMAN and protected-path authority is untouched, and no new background orchestrator exists: the
 rules ride the existing tick, the existing audit and the existing tool calls.
+
+## ADR-0082 — A plan item names what it waits for: `after` turns a plan into a graph
+
+**Amends ADR-0024.**
+
+**Context.** ADR-0024 ordered a plan as a chain: every issue after the first got
+`Depends on #<previous>`, so two independent issues could not run side by side until a person
+called factory_set_dependencies on each one after the plan was open — one call per issue, only
+after the issues existed. The chain also hid the real order: an issue that truly depends on two
+earlier ones still showed one line, and the plan the owner approved in chat did not look like the
+graph the factory would run.
+
+**Decision.** A `factory_start_plan` item may carry `after`: the 1-based positions of the earlier
+issues it waits for. An item without `after` keeps ADR-0024's chain line; `after: []` writes no
+Depends-on line, so the issue starts as soon as it is open. Each position is checked with the
+plan's other checks, before any issue opens and before the repo is enabled: a whole number,
+earlier than its own item, and not repeated — the positions map to the issues this call opens, so
+a position that is not earlier could never resolve. One bad position refuses the whole plan.
+One `Depends on #<issue>` line is written per position, mapped to the issue this call opened for
+that item, and `_wait_for` already holds a ready WorkItem until every line it names merges
+(ADR-0042 made dependency lists ordinary), so fan-in needs no change.
+
+**Consequence.** A plan is a graph held in the issue bodies, which stay the order's source of
+truth (ADR-0009). Independent issues run in parallel from the first tick with no follow-up
+factory_set_dependencies calls, an issue with two dependencies starts only when both merge, and
+the owner sees the real graph in the plan before the one approval. The chain stays the default,
+so every existing plan and every existing Depends-on line behaves exactly as before.

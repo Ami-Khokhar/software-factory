@@ -1,7 +1,10 @@
-"""factory_start_plan (ADR-0024): one approval opens a plan's issues in order, and a ready WorkItem
-waits for the issue its `Depends on #n` line names."""
+"""factory_start_plan (ADR-0024, ADR-0082): one approval opens a plan's issues in order, and a ready
+WorkItem waits for the issues its `Depends on #n` lines name — the chain default, or the earlier
+issues an item's `after` positions map to."""
 import dataclasses
 import unittest
+
+from jsonschema import Draft202012Validator
 
 from factory_mcp import tools
 from factory_mcp.config import Config
@@ -12,7 +15,7 @@ from factory_mcp.store import Store
 from tests.fakes import ISSUE_BODY, FakeGit, FakeGitHub, FakeRelay, result_line
 from tests.test_actions import schema_errors
 
-REPO, FIRST, SECOND = "o/r", "o/r#200", "o/r#201"  # FakeGitHub numbers new issues from 200
+REPO, FIRST, SECOND, THIRD = "o/r", "o/r#200", "o/r#201", "o/r#202"  # FakeGitHub numbers new issues from 200
 NOT_TO_CHANGE = "- AGENTS.md keeps its rules — done when: `git diff main` does not list AGENTS.md\n"
 
 
@@ -100,6 +103,39 @@ class StartPlanTest(unittest.TestCase):
                     with self.assertRaisesRegex(ToolError, "which only a person changes"):
                         self.foreman.start_plan(REPO, [{"title": "T", "body": body}], "amteshwar")
 
+    def test_after_empty_opens_the_issue_with_no_depends_on_line(self):
+        made = self.foreman.start_plan(REPO, [{"title": "One", "body": ISSUE_BODY},
+                                              {"title": "Two", "body": ISSUE_BODY, "after": []}],
+                                       "amteshwar")
+        numbers = [item["issue"] for item in made["issues"]]
+        self.assertEqual([self.github.issues[(REPO, number)]["body"] for number in numbers],
+                         [ISSUE_BODY, ISSUE_BODY])
+
+    def test_an_after_position_that_is_self_later_repeated_or_not_whole_opens_no_issue(self):
+        def item(title, after=None):
+            return {"title": title, "body": ISSUE_BODY, **({} if after is None else {"after": after})}
+        cases = [
+            ("itself", [item("One", [1])], "issue 1 of the plan needs after"),
+            ("later", [item("One"), item("Two", [3])], "issue 2 of the plan needs after"),
+            ("repeated", [item("One"), item("Two"), item("Three", [1, 1])], "issue 3 of the plan needs after"),
+            ("not a whole number", [item("One", ["1"])], "issue 1 of the plan needs after"),
+            ("zero", [item("One", [0])], "issue 1 of the plan needs after"),
+            ("not a list", [item("One", 1)], "issue 1 of the plan needs after"),
+        ]
+        for case, issues, reason in cases:
+            with self.subTest(case), self.assertRaisesRegex(ToolError, reason):
+                self.foreman.start_plan(REPO, issues, "amteshwar")
+        self.assertEqual((self.github.issues, self.foreman.store.all()), ({}, []))
+
+    def test_the_factory_start_plan_tool_accepts_after_and_passes_it_to_start_plan(self):
+        tool = tools.build(self.foreman.store, self.foreman)["factory_start_plan"]
+        args = {"repo": REPO, "by": "amteshwar",
+                "issues": [{"title": "One", "body": ISSUE_BODY},
+                           {"title": "Two", "body": ISSUE_BODY, "after": []}]}
+        self.assertEqual([e.message for e in Draft202012Validator(tool.input_schema).iter_errors(args)], [])
+        made = tool.fn(args)  # after reached start_plan: no chain line was written for issue two
+        self.assertEqual(self.github.issues[(REPO, made["issues"][1]["issue"])]["body"], ISSUE_BODY)
+
 
 class DependsOnTest(unittest.TestCase):
     def setUp(self):
@@ -178,6 +214,52 @@ class DependsOnTest(unittest.TestCase):
         self.foreman.resolve_human(SECOND, "retry", "run it without #200", "amteshwar")
         self.foreman.tick()
         self.assertEqual(self.get(SECOND)["state"], "implementing")
+
+
+class AfterFanInTest(unittest.TestCase):
+    """ADR-0082: `after: [1, 2]` writes one Depends-on line per position, and the WorkItem waits
+    until both merge; an item without `after` still gets the chain's one line."""
+
+    def setUp(self):
+        self.github, self.relay = FakeGitHub(), FakeRelay()
+        FakeGit(self.github).install(self)
+        self.foreman = Foreman(Store(":memory:"), self.github, Config(mcp_token="t", repos=frozenset({REPO})),
+                               self.relay)
+        self.foreman.start_plan(REPO, [{"title": "One", "body": ISSUE_BODY},
+                                       {"title": "Two", "body": ISSUE_BODY},
+                                       {"title": "Three", "body": ISSUE_BODY, "after": [1, 2]}], "amteshwar")
+
+    def get(self, workitem_id):
+        wi = self.foreman.store.get(workitem_id)
+        self.assertEqual(schema_errors("workitem", wi), [])
+        return wi
+
+    def merge(self, workitem_id):
+        """Run one issue through a pass, a MERGE verdict and the merge, as the chain test does."""
+        wi = self.get(workitem_id)
+        self.relay.finish(wi["providerTaskId"], output=result_line(wi["activeWorkOrderId"]))
+        self.foreman.tick()
+        self.github.add_run(REPO, "c1")
+        self.github.add_verdict(REPO, self.github.pulls[-1]["number"], "MERGE", 1, "c1")
+        self.foreman.tick()
+        self.github.pulls[-1].update(state="closed", merged_at="2026-09-24T03:00:00Z")
+        self.foreman.tick()
+
+    def test_after_two_positions_writes_two_lines_and_the_work_waits_until_both_merge(self):
+        self.assertEqual(self.github.issues[(REPO, 202)]["body"],
+                         f"Depends on #200\nDepends on #201\n\n{ISSUE_BODY}")
+        self.foreman.tick()  # only ONE runs: TWO waits on the chain, THREE on both
+        self.assertEqual((self.get(FIRST)["state"], self.get(SECOND)["waitingOn"]), ("implementing", 200))
+        self.assertEqual((self.get(THIRD)["state"], self.get(THIRD)["waitingOn"]), ("ready", 200))
+        self.assertEqual(self.foreman.store.workorders(THIRD), [])
+
+        self.merge(FIRST)
+        self.assertEqual((self.get(FIRST)["state"], self.get(SECOND)["state"]), ("closed", "implementing"))
+        self.assertEqual((self.get(THIRD)["state"], self.get(THIRD)["waitingOn"]), ("ready", 201))
+
+        self.merge(SECOND)
+        self.assertEqual((self.get(SECOND)["state"], self.get(THIRD)["state"]), ("closed", "implementing"))
+        self.assertIsNone(self.get(THIRD)["waitingOn"])
 
 
 if __name__ == "__main__":

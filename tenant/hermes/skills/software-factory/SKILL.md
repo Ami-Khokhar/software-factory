@@ -89,8 +89,12 @@ standard in the repo's AGENTS.md ask:
   for what must not change.
 - No issue names `.github/` or `AGENTS.md`, not even in the bullet for what must not change.
   Those paths need a person, and factory_start_plan refuses a plan that names them.
-- Put the issues in the order they must run: each one can build on the ones before it. A plan
-  has at most 10 issues.
+- Put the issues in the order they must run: each one can build on the ones before it. Then set
+  `after` only where the dependency is real: an issue that builds on earlier ones gets their
+  1-based positions as `after`, and an issue with no real dependency gets `after: []` so it starts
+  at once; without `after` it waits for the issue before it. Two issues that edit the same file —
+  `docs/decisions.md` counts — have a real dependency, so the second waits for the first. Tell the
+  owner which issues run side by side. A plan has at most 10 issues.
 - When the owner names a worker, put a `Worker: <relay agent id>` line in each issue body it
   is for, before `## Acceptance`; several lines give an order. Use only an agent the owner named.
   If the agent is not in FACTORY_WORKERS, the issue waits for the owner with that reason.
@@ -103,11 +107,15 @@ standard in the repo's AGENTS.md ask:
   FACTORY_WORKERS and runs nothing until the owner lists it there and its provider-health pilot
   passes. Tell the owner both steps are theirs.
 
-Show the owner the whole plan in chat: each issue in order, with its title and acceptance. When the
+Show the owner the whole plan in chat: each issue in order, with its title and acceptance, and
+which issues run side by side. Before you ask for the yes, list the pre-flight the plan needs: the
+credentials its repos use, the gate's secrets and the verify tools — `factory_repo_check` shows
+what is missing. When the
 owner asked for the work, call factory_start_plan once, with the repo, all the issues in order as
-`title` and `body`, and the owner's name as `by`; when you planned it on your own, wait for the
+`title` and `body` with their `after`, and the owner's name as `by`; when you planned it on your own, wait for the
 owner's yes in chat first. The call starts the plan: the factory opens the issues labelled
-`factory:ready`, and each issue waits until the issue before it merges. Never split a plan into factory_propose_issue or
+`factory:ready`, and each issue waits for the issues its Depends-on lines name — by default the
+issue before it, or the earlier issues its `after` mapped. Never split a plan into factory_propose_issue or
 factory_approve_issue calls. If the tool refuses, give its reason word for word; it opened no
 issue.
 
