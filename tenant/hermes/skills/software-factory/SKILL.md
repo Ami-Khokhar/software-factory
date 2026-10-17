@@ -182,6 +182,11 @@ A factory-watch alert names a WorkItem that waits on the owner. When the owner r
 3. Call factory_resolve_human with the id, the choice, the owner's own words as the note, and the
    owner's name as `by`.
 
+Before you answer `retry` on a stuck-round incident — the same problem reported in several gate
+rounds — read the PR diff and the gate's findings in factory_status first, then put one decision
+line in the note: what you read, and why this retry can succeed where the round that failed did
+not. The worker sees the note as a finding.
+
 When the WorkItem is `exhausted`, a `retry` would go past its budget of passes, or you already
 answered its current escalation, the tool refuses unless the owner, in this chat, asked for that
 retry, regate or close. Then set `ownerAsked` true, quote the owner's words as the note, and make

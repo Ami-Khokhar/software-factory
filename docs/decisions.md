@@ -2057,3 +2057,28 @@ first-verdict MERGE, slice 5 and 6 move the timeout share and one-shot rate, sli
 family. The recount on a copy of the live store anchors the baseline. Old history is inferred, so
 the gauges are honest about their own blind spot: an old HUMAN escalation that does not name the
 verdict is not counted as one.
+
+## ADR-0084 — A fix pass receives the gate's whole answer: each finding's fix and test, and the marker's problems as blocking findings
+
+**Context.** The factory kept only `fingerprint`, `path`, `line` and `problem` from each gate
+finding, so the fix pass lost the reviewer's suggested fix and the named test, and a CHANGES
+verdict whose problems were pipeline-level (verify, pr-lint, proof of work — the marker's
+`problems` list, no findings) had nothing a worker could act on: it stopped for a person. The
+reviewer's suggestion re-derived from scratch every round, and the worker never learned which
+test the gate wanted green.
+
+**Decision.** `verdict.to_verdict` keeps each finding's optional `test`, and when the outcome is
+CHANGES it reads the marker's optional `problems` list (kind, path, problem) as blocking findings
+with the usual fingerprint; `foreman.act` copies `fix` and `test` into the fix order's
+`findingsToAddress`; the WorkOrder contract's `findingRef` gains optional `fix` and `test`, and
+the verdict contract's finding likewise. A CHANGES marker with problems and no findings now
+dispatches a fix instead of stopping for a person; one with neither still does (its reason is in
+the gate's comment prose, which no worker may read). `worker_input` tells the fix worker the fix
+is the reviewer's suggestion and its data — resolve the problem with the smallest change, make the
+named test pass, check the same pattern at sibling call sites. A retry on a stuck-round incident
+carries one decision line in its note (Day Desk reads the PR diff and the gate findings first).
+
+**Consequence.** The same problem reported as a `problems` entry counts in per-problem round
+rounding like any finding, so two rounds of the same pipeline problem still escalate. A marker's
+`kind` is dropped: the finding's path and problem text carry what the worker needs. Old verdict
+comments re-parse with fix and test null, which validates.

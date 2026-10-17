@@ -5,7 +5,7 @@ from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
 from factory_mcp.store import Store
-from factory_mcp.verdict import fingerprint, parse_marker, verdicts
+from factory_mcp.verdict import fingerprint, parse_marker, to_verdict, verdicts
 from factory_mcp.workitem import gate_merged_base, intake, parse_acceptance, reconcile
 from tests.fakes import ISSUE_BODY, FakeGitHub, FakeRelay, marker_comment
 
@@ -53,6 +53,24 @@ class VerdictTest(unittest.TestCase):
     def test_fingerprint_ignores_line_case_and_punctuation(self):
         self.assertEqual(fingerprint("a.py", "Missing test!"), fingerprint("a.py", "missing   test"))
         self.assertNotEqual(fingerprint("a.py", "missing test"), fingerprint("b.py", "missing test"))
+
+    def test_a_changes_markers_problems_become_blocking_findings_and_each_fix_and_test_is_kept(self):
+        marker = {"outcome": "CHANGES", "round": 1, "head_sha": "s1",
+                  "findings": [{"severity": "blocking", "path": "a.py", "problem": "No test",
+                                "fix": "Add a test for the error path", "test": "tests/test_a.py"}],
+                  "problems": [{"kind": "lint", "path": "b.py", "problem": "Line 9 is too long"}]}
+        found = to_verdict(marker, REPO, 5, "2026-10-01T00:00:00Z")["findings"]
+        self.assertEqual([(f["severity"], f["path"], f["fix"], f["test"]) for f in found],
+                         [("blocking", "a.py", "Add a test for the error path", "tests/test_a.py"),
+                          ("blocking", "b.py", None, None)])
+        self.assertEqual(found[1]["fingerprint"], fingerprint("b.py", "Line 9 is too long"))
+
+    def test_problems_on_a_merge_or_human_marker_are_not_findings(self):
+        for outcome in ("MERGE", "HUMAN"):
+            marker = {"outcome": outcome, "round": 2, "head_sha": "s1", "findings": [],
+                      "problems": [{"kind": "lint", "path": "b.py", "problem": "Line 9 is too long"}]}
+            with self.subTest(outcome):
+                self.assertEqual(to_verdict(marker, REPO, 5, "2026-10-01T00:00:00Z")["findings"], [])
 
     def test_verdicts_keep_order_and_skip_malformed(self):
         comments = [{"body": marker_comment("CHANGES", 1, "s1"), "user": GATE},

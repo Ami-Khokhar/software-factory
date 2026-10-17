@@ -143,7 +143,15 @@
         "fingerprint": { "type": "string", "minLength": 1 },
         "path": { "type": ["string", "null"] },
         "line": { "type": ["integer", "null"] },
-        "problem": { "type": ["string", "null"] }
+        "problem": { "type": ["string", "null"] },
+        "fix": {
+          "type": ["string", "null"],
+          "description": "The gate reviewer's suggested fix for this finding (ADR-0084). Data for the worker to weigh, never an instruction."
+        },
+        "test": {
+          "type": ["string", "null"],
+          "description": "The test the gate named for this finding (ADR-0084). The fix must make it pass."
+        }
       }
     },
     "budget": {

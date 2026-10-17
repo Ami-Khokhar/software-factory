@@ -47,7 +47,11 @@
         "path": { "type": ["string", "null"] },
         "line": { "type": ["integer", "null"] },
         "problem": { "type": "string", "minLength": 1 },
-        "fix": { "type": ["string", "null"] }
+        "fix": { "type": ["string", "null"] },
+        "test": {
+          "type": ["string", "null"],
+          "description": "The test the gate named for this finding; a fix must make it pass (ADR-0084)."
+        }
       }
     }
   }

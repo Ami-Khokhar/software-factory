@@ -530,7 +530,7 @@ class Foreman:
             # a redo that failed leaves the PR, and the verdict on its head, as they were
             applies = latest and (wi["state"] == "changes_requested"
                                   or conflict and latest["headSha"] == facts["pr"]["headSha"])
-            findings = [{key: f[key] for key in ("fingerprint", "path", "line", "problem")}
+            findings = [{key: f[key] for key in ("fingerprint", "path", "line", "problem", "fix", "test")}
                         for f in (blocking(latest) if applies else [])]
             if conflict:  # a fix builds on the PR's head and keeps the conflict: make it again (ADR-0032)
                 default = self._default_branch(wi["repo"])
