@@ -2108,3 +2108,34 @@ gated repo while DeepSeek reviews — the RUNBOOK's deepseek pilot and this wall
 whose `Worker:` line names only excluded workers needs the owner to edit the line or the gate
 config. A repo the gate does not review keeps its `FACTORY_WORKERS` order untouched, which is why
 the exclusion is read per repo at dispatch time rather than configured globally.
+
+## ADR-0086 — Salvage: a timed-out pass hands its partial work back, and the Foreman keeps it
+
+**Context.** A harness that runs out of clock was a total loss: the runner raised on exit 124,
+the Result failed with no patch, and the pass's minutes of real work died in a removed sandbox.
+The next pass restarted the same problem from the base with no memory of what had been tried. A
+timeout is the most common soft failure — the model was slow, not wrong — so throwing the work
+away burned the most budget for the least learning.
+
+**Decision — the runner half (slice 5).** On harness exit 124 the runner runs `collect()` without
+verify: `collect()` commits uncommitted work and applies the size and file limits as for any pass.
+A collected diff rides the failed Result as a partial patch (`status: failed`, `error: the
+harness timed out` — the text the Foreman names timeout incidents by, ADR-0081 — plus `patch`).
+A refused or empty partial leaves no patch, and verification never starts after 124: there is
+nothing finished to verify.
+
+**Decision — the Foreman half (slice 6).** A failed implement Result that matches `OUT_OF_TIME`
+and carries a patch whose changed files clear the protected-path check is not a plain failure:
+the Foreman pushes the patch to a per-WorkItem scratch branch `factory-wip/<issue number>` with
+`push_patch()`, stores the branch on the WorkItem as optional `wip`, and the next dispatch's
+WorkOrder is based on that commit with a "Rescue work" preamble telling the worker to keep what
+is right, fix or remove the rest, and finish. `wip` moves forward at most twice; a completed
+Result, a merge or any end state deletes the scratch branch and clears `wip`. `FACTORY_SALVAGE=off`
+turns the whole mechanism off.
+
+**Consequence.** A timed-out pass now costs one salvage push plus a finish pass instead of a full
+restart, and the size limits still bind on the partial, so salvage cannot smuggle oversized work
+forward. A partial touching a protected path is never kept — the check is the same wall the push
+gate enforces. `factory-wip/*` branches are scratch: they are not PR branches, and only the one
+per WorkItem is ever read. Tests: the runner tests drive exit 124 directly; the Foreman tests
+drive `poll()` with `FakeGit`.

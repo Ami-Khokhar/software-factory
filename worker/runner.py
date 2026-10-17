@@ -577,6 +577,19 @@ def main(argv=None):
         # for the relay log; the Result line comes last. Redacted by the same rules as the tail.
         print(redact(echoed[-4000:], secrets), flush=True)
         if code == 124:
+            # Salvage (ADR-0086): the harness's clock ran out, but the checkout may hold its work.
+            # Collect it without verify as a partial patch on this failed Result; collect() commits
+            # uncommitted work and applies the size and file limits, so a refused or empty partial
+            # leaves no patch. The timeout stays the error either way: the Foreman names timeout
+            # incidents by this text (ADR-0081).
+            salvage = time.monotonic()
+            try:
+                partial = collect(sandbox, work, base, default, order["goal"], order["constraints"])
+            except WorkerError as exc:
+                record("patch collection", salvage, getattr(exc, "code", None), str(exc))
+            else:
+                record("patch collection", salvage, 0)
+                result["patch"] = {"format": "unified", "diff": partial, "baseSha": base}
             raise WorkerError("the harness timed out")
         if code != 0:
             detail = " ".join((err or out).split())[-300:]
