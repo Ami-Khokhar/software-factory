@@ -3,8 +3,10 @@ lessons the owner approved are working, and the weekly report's numbers."""
 import json
 import re
 from collections import Counter
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
+from . import routing
+from .foreman import OUT_OF_TIME
 from .workitem import UNGATED
 
 HUMAN_STATES = ("human_waiting", "blocked")
@@ -13,6 +15,8 @@ REACHED_END = frozenset({"merged", "closed", "cancelled", "exhausted"})
 WEEK = timedelta(days=7)
 TOP_REASONS = 3
 SHA = re.compile(r"\b[0-9a-f]{40}\b")
+MOMENT = "%Y-%m-%dT%H:%M:%SZ"
+IST = timezone(timedelta(hours=5, minutes=30))  # the owner reads windows in Asia/Kolkata, no DST
 
 
 def escalation(wi, history):
@@ -126,10 +130,115 @@ def escalation_reasons(workitems, history_of, since, until):
             for reason, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
 
 
-def weekly(workitems, history_of, candidates, effect, now):
+def _moment(stamp):
+    """An audit timestamp (store.now()) as an aware datetime."""
+    return datetime.strptime(stamp, MOMENT).replace(tzinfo=timezone.utc)
+
+
+def _ist_window(since, until):
+    """The gauge window in the owner's time: both audit stamps as Asia/Kolkata wall clock."""
+    return (f"{_moment(since).astimezone(IST).strftime('%Y-%m-%d %H:%M')} to "
+            f"{_moment(until).astimezone(IST).strftime('%Y-%m-%d %H:%M')} IST")
+
+
+def _first_verdict(history):
+    """The first gate verdict a WorkItem's history shows, as (at, outcome, round), or None.
+    Rows written before ADR-0083 carry no outcome: the state move infers it (merged was a MERGE,
+    changes_requested a CHANGES, and a HUMAN says so in its escalation)."""
+    known = []
+    for h in history:
+        if h["action"] != "reconcile":
+            continue
+        detail = h["detail"]
+        if "verdict" in detail:
+            known.append((h["at"], detail["verdict"], detail.get("round") or 1))
+        elif detail.get("to") == "merged":
+            known.append((h["at"], "MERGE", 1))
+        elif detail.get("to") == "changes_requested":
+            known.append((h["at"], "CHANGES", 1))
+        elif detail.get("to") == "human_waiting" and "decided HUMAN" in (detail.get("escalation") or ""):
+            known.append((h["at"], "HUMAN", 1))
+    return min(known) if known else None
+
+
+def first_pass(workitems, history_of, workorders_of, since, until, gate_pins):
+    """The first-pass gauges (ADR-0083) for the window `since` < t <= `until`: first-verdict MERGE
+    rate, clean one-shot rate, rounds to merge, accepted Results by pass kind and worker family,
+    the timeout share of failed passes, and dependency-wait hours. Every gauge names its n, the IST
+    window and the gate pin, so two windows under different pins or budgets never read as one
+    trend. A pass is a dispatch row; it was accepted when a result row carries its WorkOrder."""
+    orders = {order["id"]: order for order in workorders_of()}
+    window, firsts, kinds, families = _ist_window(since, until), [], {}, {}
+    clean = failed = timeouts = waits = 0
+    wait_hours, rounds = 0.0, Counter()
+    for wi in workitems:
+        history = history_of(wi["id"])
+        results = {h["detail"].get("workOrder") for h in history if h["action"] == "result"}
+        first = _first_verdict(history)
+        if first is not None and since < first[0] <= until:
+            firsts.append(first[1])
+            dispatches = [h for h in history if h["action"] == "dispatch"]
+            if (first[1] == "MERGE" and wi["state"] == "merged" and len(dispatches) == 1
+                    and not any(h["action"] == "attempt_failed" for h in history)
+                    and not any(h["detail"].get("to") in HUMAN_STATES for h in history)
+                    and dispatches[0]["detail"].get("workOrder") in results):
+                clean += 1
+        merges = [h for h in history if h["action"] == "reconcile"
+                  and h["detail"].get("to") == "merged"]
+        if merges and since < merges[0]["at"] <= until:
+            verdicts = [h for h in history if h["action"] == "reconcile"
+                        and h["detail"].get("verdict") == "MERGE"]
+            rounds[(verdicts[-1]["detail"].get("round") if verdicts
+                    else wi.get("gateRound")) or 1] += 1
+        for h in history:
+            if not since < h["at"] <= until:
+                continue
+            if h["action"] == "dispatch":
+                order = orders.get(h["detail"].get("workOrder")) or {}
+                accepted = h["detail"].get("workOrder") in results
+                for bucket, key in ((kinds, order.get("kind") or "unknown"),
+                                    (families, routing.family(h["detail"].get("worker")) or "unknown")):
+                    bucket.setdefault(key, {"n": 0, "accepted": 0})
+                    bucket[key]["n"] += 1
+                    bucket[key]["accepted"] += 1 if accepted else 0
+            elif h["action"] == "attempt_failed":
+                failed += 1
+                text = f"{h['detail'].get('reason') or ''} {h['detail'].get('diagnosis') or ''}"
+                timeouts += 1 if OUT_OF_TIME.search(text) else 0
+        started = None  # one dependency wait: the first `waiting` row to the `dependency_merged`
+        for h in history:
+            if h["action"] == "waiting":
+                started = started or _moment(h["at"])
+            elif h["action"] == "dependency_merged" and started is not None:
+                wait_hours += (_moment(h["at"]) - started).total_seconds() / 3600
+                waits += 1
+                started = None
+            elif h["action"] not in ("waiting", "dependency_merged"):
+                started = None  # the wait ended by another route: not a dependency wait
+    merge, known = sum(1 for outcome in firsts if outcome == "MERGE"), len(firsts)
+    passes = sum(bucket["n"] for bucket in kinds.values())
+
+    def gauge(n, **rest):
+        return {"n": n, "window": window, "gatePin": gate_pins, **rest}
+
+    return {"firstVerdictMerge": gauge(known, merge=merge,
+                                       rate=round(merge / known, 3) if known else None),
+            "oneShot": gauge(known, clean=clean, rate=round(clean / known, 3) if known else None),
+            "roundsToMerge": gauge(sum(rounds.values()),
+                                   byRound={str(round_): count
+                                            for round_, count in sorted(rounds.items())}),
+            "acceptedByKind": gauge(passes, kinds=kinds),
+            "acceptedByFamily": gauge(passes, families=families),
+            "timeouts": gauge(failed, timeouts=timeouts,
+                              share=round(timeouts / failed, 3) if failed else None),
+            "dependencyWait": gauge(waits, hours=round(wait_hours, 1))}
+
+
+def weekly(workitems, history_of, candidates, effect, now, workorders_of=None, gate_pins=None):
     """The weekly report's numbers for the 7 days before `now` (an aware datetime: the clock) and
     the 7 days before those. `candidates` are lessons.candidates of each allowlisted repo, each
-    with its repo; `effect` is lesson_effect of the approved lessons."""
+    with its repo; `effect` is lesson_effect of the approved lessons; `workorders_of` and
+    `gate_pins` stamp the first-pass gauges (ADR-0083)."""
     until, since, before = (_stamp(now - WEEK * weeks) for weeks in (0, 1, 2))
     reasons = escalation_reasons(workitems, history_of, since, until)
     allowances = sum(1 for wi in workitems for h in history_of(wi["id"])
@@ -144,7 +253,9 @@ def weekly(workitems, history_of, candidates, effect, now):
             "topReasons": reasons[:TOP_REASONS],
             "allowanceUses": allowances, "allowanceUsesWeekBefore": allowances_before,
             "newCandidates": [c for c in candidates if since < c["candidateSince"] <= until],
-            "notWorking": [e for e in effect.values() if e["notWorking"]]}
+            "notWorking": [e for e in effect.values() if e["notWorking"]],
+            "gauges": first_pass(workitems, history_of, workorders_of or (lambda: []),
+                                 since, until, gate_pins or {})}
 
 
 def _stamp(moment):

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from . import docker, lessons, metrics, repos
 from .foreman import MAX_ALLOWANCE, MAX_PLAN_ISSUES, RECOVERY_ACTIONS, Foreman, agent_may_resolve
+from .github import GitHubError
 from .mcp import Tool, ToolError
 
 # What Day Desk may call when it drives the factory with FACTORY_AGENT_TOKEN (ADR-0030). Setting up
@@ -25,6 +26,20 @@ def last_allowance_use(history):
     at, detail = spends[-1]["at"], spends[-1]["detail"]
     return {"at": at, "planId": detail.get("planId"), "action": detail.get("action"),
             "evidence": detail.get("evidence"), "remaining": detail.get("remaining")}
+
+
+def _gate_pins(foreman):
+    """Each repo's pr-gatekeeper revision pin (its gatekeeper_ref, ADR-0080), as the weekly report
+    stamps it on every gauge (ADR-0083), so two windows under different pins never read as one
+    trend. Best effort: a repo the factory cannot read yields "unknown", never a failed report."""
+    pins = {}
+    for repo in sorted(foreman.config.repos):
+        try:
+            text = foreman.github.file(repo, ".github/workflows/pr-gatekeeper.yml")
+            pins[repo] = (repos._gate_pins(text) or {}).get("refSha") or "unknown"
+        except GitHubError:
+            pins[repo] = "unknown"
+    return pins
 
 
 def build(store, foreman, agent=False):
@@ -91,7 +106,7 @@ def build(store, foreman, agent=False):
                       for candidate in lessons.candidates(store, repo)]
         return metrics.weekly(store.all(), store.history, candidates,
                               metrics.lesson_effect(approved, store.all_workorders),
-                              datetime.now(timezone.utc))
+                              datetime.now(timezone.utc), store.all_workorders, _gate_pins(foreman))
 
     tools = [
         Tool("factory_docker_status", "Check whether the host Docker engine is running.",
@@ -405,7 +420,11 @@ def build(store, foreman, agent=False):
              "The weekly report's numbers for the 7 days to now: the autonomy rate of the "
              "WorkItems that ended in them and in the 7 days before, how many WorkItems went to a "
              "person or ran out of passes and the 3 most frequent reasons why, the lesson "
-             "candidates that are new, and the lessons flagged as not working. Changes nothing.",
+             "candidates that are new, and the lessons flagged as not working. First-pass gauges "
+             "for the window: first-verdict MERGE rate, clean one-shot rate, rounds to merge, "
+             "accepted Results by pass kind and worker family, the timeout share of failed passes "
+             "and dependency-wait hours — each with its n, its IST window and the gate pin "
+             "(ADR-0083). Changes nothing.",
              {"type": "object", "properties": {}, "additionalProperties": False},
              "read", report),
         Tool("factory_approve_lesson",

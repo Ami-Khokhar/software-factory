@@ -404,6 +404,8 @@ class Foreman:
                 detail["mergedBase"] = True
             verdict = workitem.current_verdict(wi, facts)  # accepted now: keep its blocking findings
             if verdict:  # by severity: blocking() falls back to every finding, and a nit is no lesson
+                detail["verdict"] = verdict["outcome"]  # the first-pass gauges read these (ADR-0083)
+                detail["round"] = verdict["round"]
                 detail["blocking"] = [{"fingerprint": f["fingerprint"], "problem": f["problem"]}
                                       for f in verdict["findings"] if f["severity"] == "blocking"]
             wi = self._write(wi, new, "reconcile", **detail)
