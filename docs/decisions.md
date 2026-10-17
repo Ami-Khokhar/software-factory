@@ -2168,3 +2168,24 @@ matched case-sensitively. The fence binds source only, because `sizing.kind` dec
 fence is frozen at intake like goal and acceptance (ADR-0038): editing a running issue's body
 does not move it. An issue without `Paths:` runs unfenced — only planned work is required to
 carry the line, so a one-off approved issue keeps working.
+
+## ADR-0088 — Nodes with overlapping `Paths:` never run at once
+
+**Context.** Slice 7 fenced each node's source changes, but two ready nodes that listed the
+same files could still dispatch in the same tick: the DAG orders issues by Depends-on edges,
+and independent issues sharing a file — `docs/decisions.md` above all — would have raced.
+
+**Decision.** After its dependencies have merged, a ready WorkItem holds while another
+WorkItem of the same repo holds files its own `Paths:` also list. A WorkItem holds its files
+while it is in `dispatching`, `implementing`, `pr_open`, `reviewing`, `changes_requested` or
+`merge_pending`; one waiting for a person (`human_waiting`) holds nothing, so a stalled node
+never blocks its neighbours. Overlap is a glob match in either direction, or one entry's
+literal head covering the other as a directory. A WorkItem without `Paths:` neither waits nor
+holds. Each held tick writes an audit `waiting` row naming the holder and the shared entries;
+the WorkItem stays `ready` and the next tick retries, so the merge that ends the hold
+dispatches the waiting node with no other signal.
+
+**Consequence.** A plan that lists overlapping issues runs them in turn instead of at once —
+the sequencing falls out of the fences themselves, not out of `after` lines — while disjoint
+nodes still dispatch together up to `FACTORY_PASSES_PER_REPO`. The check reads the store,
+never GitHub, so it costs one pass over the repo's WorkItems per ready node.

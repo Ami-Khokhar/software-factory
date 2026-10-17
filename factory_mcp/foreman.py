@@ -20,6 +20,24 @@ from .verdict import blocking, fingerprint
 # States that need a person. Entering one posts a comment on the issue, so the owner hears of it.
 ATTENTION = ("human_waiting", "blocked", "exhausted")
 WORKING = ("dispatching", "implementing")
+# A node holds its `Paths:` files while it is one of these (ADR-0088); waiting for a person
+# holds nothing, so a stalled node never blocks its neighbours' files.
+PATHS_HOLDING = ("dispatching", "implementing", "pr_open", "reviewing", "changes_requested",
+                 "merge_pending")
+
+
+def _covers(prefix, entry):
+    """`prefix` covers `entry` when its literal head, cut at the first wildcard, is `entry` or a
+    directory prefix of it."""
+    stem = prefix.split("*")[0].rstrip("/")
+    return bool(stem) and (entry == stem or entry.startswith(stem + "/"))
+
+
+def _overlaps(entry, other):
+    """Two `Paths:` entries meet (ADR-0088): a glob match in either direction, or one's literal
+    head covering the other as a directory."""
+    return (fnmatch.fnmatchcase(entry, other) or fnmatch.fnmatchcase(other, entry)
+            or _covers(entry, other) or _covers(other, entry))
 from .setup_merge import BOOTSTRAP_PREFIX
 MAX_PLAN_ISSUES = 10  # one approval covers this many issues at most (ADR-0024)
 REGATE_MARKER = re.compile(r"<!-- factory regate (\d+) -->")
@@ -526,6 +544,10 @@ class Foreman:
             wi = self._wait_for(wi, facts["issue"]["dependsOn"])
             if wi["state"] != "ready" or wi.get("waitingOn"):
                 return wi
+            held = self._paths_held_by(wi)  # two nodes that list the same files run in turn (ADR-0088)
+            if held:
+                self.store.log("waiting", {"on": held["id"], "paths": held["share"]}, wi["id"])
+                return wi  # still ready; the next tick retries the hold
             # a retry says why the last attempt failed, or what a person said
             return self.dispatch(wi, "implement", self._human_findings(wi) + self._attempt_findings(wi),
                                  facts["issue"]["workers"])
@@ -580,6 +602,22 @@ class Foreman:
                                             blockedOn=self._dependency_reason(number, how)),
                                    "dependency_ended", on=number, how=how)
         return self._write(wi, dict(wi, waitingOn=None), "dependency_merged") if wi.get("waitingOn") else wi
+
+    def _paths_held_by(self, wi):
+        """The active WorkItem of this repo that holds files this node's `Paths:` also lists
+        (ADR-0088), or None: two nodes that list the same source files run one after the other.
+        A node without Paths waits for nothing, and one waiting for a person holds nothing."""
+        if not wi.get("paths"):
+            return None
+        for other in self.store.all():
+            if (other["id"] == wi["id"] or other["repo"] != wi["repo"]
+                    or other["state"] not in PATHS_HOLDING or not other.get("paths")):
+                continue
+            share = [entry for entry in wi["paths"]
+                     if any(_overlaps(entry, held) for held in other["paths"])]
+            if share:
+                return {"id": other["id"], "share": share}
+        return None
 
     @staticmethod
     def _dependency_reason(number, how):
