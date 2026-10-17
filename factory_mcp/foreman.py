@@ -1,6 +1,7 @@
 """The Foreman: under a per-WorkItem lease, reconcile with GitHub, then act at most once."""
 import calendar
 import dataclasses
+import json
 import os
 import re
 import time
@@ -40,6 +41,7 @@ RELAY_RETRIES_MAX = 2
 # This is the worker-health signal recovery acts on; whether the cause is evidence-backed is the
 # attempt's business, never this one (ADR-0081).
 OUT_OF_TIME = re.compile(r"task timed_out|the harness timed out")
+DEFAULT_REVIEWER = "deepseek-v4.1-flash"  # pr-gatekeeper's reviewer_model when the key is absent
 # Reason text is incident identity (ADR-0081), and a commit sha or the attempt count a reason
 # narrates is not material: both read the same every time they are said again.
 SHA40 = re.compile(r"\b[0-9a-f]{40}\b")
@@ -688,6 +690,22 @@ class Foreman:
         with self.runtime_lock:
             return self._dispatch(wi, kind, findings, named)
 
+    def _reviewer_families(self, repo):
+        """The model families the gate's reviewers belong to (ADR-0085), read from the default
+        branch's `.github/pr-gatekeeper.json` — the gate's config, which the factory reads and
+        never writes. The file's absence means the gate does not run on this repo, so it has no
+        reviewer family; a missing `reviewer_model` key means pr-gatekeeper's default, and an
+        absent or empty `strong_reviewer_model` excludes nothing (it is off by default)."""
+        text = self.github.file(repo, ".github/pr-gatekeeper.json")
+        if not text:
+            return set()
+        try:
+            gate = json.loads(text)
+        except ValueError:  # a malformed config is every key missing: the gate's defaults stand
+            gate = {}
+        models = [gate.get("reviewer_model") or DEFAULT_REVIEWER, gate.get("strong_reviewer_model")]
+        return {routing.family(model) for model in models if model}
+
     def _dispatch(self, wi, kind, findings=(), named=()):
         """Send one WorkOrder. `findings` are this dispatch's findingsToAddress, exactly what the
         WorkOrder will hold; _lessons passes the same to the ranker, never a reconstruction."""
@@ -721,12 +739,20 @@ class Foreman:
                   if h["action"] == "attempt_failed"}
         # After a timeout-class failure the next attempt prefers another model family (ADR-0081): the
         # family that just ran out of the clock is the suspect, and this preference runs before the
-        # two-strike block ever sees the case.
+        # two-strike block ever sees the case. The gate reviewer's family is excluded outright (ADR-0085).
         avoid, from_worker, category = self._timeout_causes(wi)
+        excluded = self._reviewer_families(wi["repo"])
         worker = routing.route(self.config.workers, self.config.local_only(wi["repo"]), failed, named,
-                               avoid_families=avoid)
+                               avoid_families=avoid, exclude_families=excluded)
         if worker is None:
             self._finish_recovery(wi, False)  # no attempt will run, so the open recovery finds no outcome
+            local_only = self.config.local_only(wi["repo"])
+            candidates = [agent for agent, place in self.config.workers
+                          if (place == "local" or not local_only) and (not named or agent in named)]
+            if candidates and all(routing.family(agent) in excluded for agent in candidates):
+                return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=(
+                    "every allowed worker is in the reviewer family "
+                    + ", ".join(sorted(excluded)))), "no_worker")
             return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=(
                 f"{wi['repo']} is local-only and FACTORY_WORKERS has no local worker")), "no_worker")
         recovery = self._recovery_decision(wi, avoid, from_worker, category, worker)
@@ -1086,7 +1112,8 @@ class Foreman:
         failed.add(wi.get("worker"))  # this very attempt just failed, whatever the audit has logged
         failed.discard(None)
         worker = routing.route(self.config.workers, self.config.local_only(wi["repo"]), failed,
-                               workitem.workers_named(issue.get("body")), avoid_families=families)
+                               workitem.workers_named(issue.get("body")), avoid_families=families,
+                               exclude_families=self._reviewer_families(wi["repo"]))
         if worker is None or worker in failed:
             return None  # nobody untried the policy would choose: the block stands
         category = diagnosis.get("cause") or "timeout (unknown cause)"

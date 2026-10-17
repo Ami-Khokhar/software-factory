@@ -2082,3 +2082,29 @@ carries one decision line in its note (Day Desk reads the PR diff and the gate f
 rounding like any finding, so two rounds of the same pipeline problem still escalate. A marker's
 `kind` is dropped: the finding's path and problem text carry what the worker needs. Old verdict
 comments re-parse with fix and test null, which validates.
+
+## ADR-0085 — No pass runs in the gate reviewer's model family
+
+**Context.** pr-gatekeeper reviews every factory PR with a model family (its `reviewer_model`,
+`deepseek-v4.1-flash` by default, `strong_reviewer_model` on round 1 and sensitive paths). When
+the builder shares that family, the gate's review is a model grading its own family's work: the
+same blind spots on both sides, and the family-level gauges (ADR-0083) cannot separate builder
+quality from reviewer leniency. The factory already avoids a family after a timeout (ADR-0081),
+but only as a soft preference: with no other worker eligible it falls back inside the family.
+
+**Decision.** `routing.route` gains `exclude_families`, a hard filter applied after the issue's
+`Worker:` lines and before the ADR-0081 preference. `routing.family` also reads a model id
+(`deepseek-v4.1-flash` → `deepseek`), so the gate's config and worker ids compare in one space.
+Foreman's `_dispatch` and `_defer_block` read `reviewer_model` and `strong_reviewer_model` from
+the repo's `.github/pr-gatekeeper.json` on the default branch with `github.file` — the gate's
+config: the factory reads it, never writes it. A missing key means pr-gatekeeper's default
+(`deepseek-v4.1-flash`); a repo with no gate file has no reviewer and routes as before. When
+every candidate a dispatch could reach is excluded, the WorkItem waits for a person with
+`every allowed worker is in the reviewer family <f>` instead of running. The ADR-0081 deferral
+takes the same wall, so a timeout cannot launder a pass into the reviewer family.
+
+**Consequence.** With the default gate config, `pi-deepseek-factory` cannot take a pass on any
+gated repo while DeepSeek reviews — the RUNBOOK's deepseek pilot and this wall agree. An issue
+whose `Worker:` line names only excluded workers needs the owner to edit the line or the gate
+config. A repo the gate does not review keeps its `FACTORY_WORKERS` order untouched, which is why
+the exclusion is read per repo at dispatch time rather than configured globally.

@@ -256,6 +256,16 @@ registry if it is already running. Deploying this configuration is a step on the
 from the implementation that lands in this repository; the existing GLM workers stay, so a
 DeepSeek outage falls back to them.
 
+Routing hard wall (ADR-0085): no pass ever runs in the gate reviewer's model family. `_dispatch`
+and the deferred attempt read `reviewer_model` and `strong_reviewer_model` from the repo's
+`.github/pr-gatekeeper.json` on the default branch (the gate's config — the factory reads that
+file and never writes it) and exclude those families from `route()` outright, after any `Worker:`
+line and before the timeout preference (ADR-0081). A missing `reviewer_model` key means
+pr-gatekeeper's default, `deepseek-v4.1-flash`; a repo with no gate config at all is routed as
+before, because the gate does not review it. So with the default config, `pi-deepseek-factory`
+never takes a pass on a gated repo — it is the reviewer — and an issue whose `Worker:` line names
+only excluded workers waits for a person with `every allowed worker is in the reviewer family <f>`.
+
 ### Choosing and registering a worker from Day Desk (ADR-0077)
 
 Day Desk steers two worker decisions itself, within the same allowlist and credential boundary:

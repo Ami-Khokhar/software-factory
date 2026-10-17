@@ -128,6 +128,15 @@ class WorkerFailoverTest(ForemanCase):
         self.assertEqual([(r["action"], r["succeeded"]) for r in self.results()],
                          [("worker_swap", False), ("block_deferred", False)])
 
+    def test_the_deferral_never_lands_on_a_worker_from_the_gate_reviewers_family(self):
+        """ADR-0085: the deferral still prefers outside the timed-out family (ADR-0081), but the
+        gate reviewer's family is a hard wall: with no other family left, the block stands."""
+        self.github.contents[(REPO, ".github/pr-gatekeeper.json")] = '{"reviewer_model": "deepseek-v4.1-flash"}'
+        self.relay_timeout()  # pi-glm-factory; the swap falls back to the same family, never deepseek
+        wi = self.relay_timeout()  # opencode-glm-factory: two strikes, and no untried worker outside deepseek
+        self.assertEqual(wi["state"], "blocked")
+        self.assertEqual(self.recoveries("block_deferred"), [])
+
     def test_two_timeouts_block_when_no_untried_worker_remains(self):
         """The block stands when routing's only choice is a worker that already failed here."""
         self.foreman.config = Config(mcp_token="t", repos=frozenset({REPO}), workers=POOL[:2])
