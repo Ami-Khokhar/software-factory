@@ -8,7 +8,7 @@ from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
 from factory_mcp.store import Store
 from tests.fakes import ISSUE_BODY, FakeGit, FakeGitHub, FakeRelay
-from tests.test_plan import FIRST, REPO, SECOND, plan
+from tests.test_plan import FIRST, REPO, SECOND, FENCED, plan
 
 THIRD = "o/r#202"
 
@@ -29,7 +29,7 @@ class SetDependenciesTest(unittest.TestCase):
 
     def test_removing_the_dependency_lets_two_issues_of_a_plan_run_side_by_side(self):
         self.set(SECOND, [])
-        self.assertEqual(self.body(201), ISSUE_BODY)
+        self.assertEqual(self.body(201), FENCED)
         self.foreman.tick()
         self.assertEqual([self.foreman.store.get(i)["state"] for i in (FIRST, SECOND, THIRD)],
                          ["implementing", "implementing", "ready"])
@@ -41,9 +41,9 @@ class SetDependenciesTest(unittest.TestCase):
         self.assertEqual(self.foreman.store.get(SECOND)["waitingOn"], 200)
         self.assertIsNone(self.set(SECOND, [])["waitingOn"])
         self.set(THIRD, [200])
-        self.assertEqual(self.body(202), f"Depends on #200\n\n{ISSUE_BODY}")
+        self.assertEqual(self.body(202), f"Depends on #200\n\n{FENCED}")
         self.set(THIRD, [200, 201])
-        self.assertEqual(self.body(202), f"Depends on #200\nDepends on #201\n\n{ISSUE_BODY}")
+        self.assertEqual(self.body(202), f"Depends on #200\nDepends on #201\n\n{FENCED}")
 
     def test_the_change_is_audited_with_who_asked_and_whether_the_agent_did(self):
         self.set(THIRD, [200], by="day-desk", agent=True)
@@ -71,14 +71,14 @@ class SetDependenciesTest(unittest.TestCase):
             self.foreman.store.put(dict(self.foreman.store.get(THIRD), state=state))
             with self.assertRaisesRegex(ToolError, f"is {state}; dependencies change only"):
                 self.set(THIRD, [])
-        self.assertEqual(self.body(202), f"Depends on #201\n\n{ISSUE_BODY}")
+        self.assertEqual(self.body(202), f"Depends on #201\n\n{FENCED}")
 
     def test_a_human_waiting_workitem_with_no_pass_may_change_its_order(self):
         # Agentspace#5: its dependency was cancelled and replaced, so the order was fixable before a pass.
         self.foreman.store.put(dict(self.foreman.store.get(THIRD), state="human_waiting",
                                     blockedOn="this issue depends on #201, which ended cancelled"))
         self.set(THIRD, [200], by="day-desk", agent=True)
-        self.assertEqual(self.body(202), f"Depends on #200\n\n{ISSUE_BODY}")
+        self.assertEqual(self.body(202), f"Depends on #200\n\n{FENCED}")
         wi = self.foreman.resolve_human(THIRD, "retry", "wait for the replacement", "day-desk", agent=True)
         self.assertEqual((wi["state"], wi["blockedOn"]), ("ready", None))
 
@@ -100,7 +100,7 @@ class SetDependenciesTest(unittest.TestCase):
             self.github.issues[(REPO, 12)] = {"number": 12, "state": "open", "body": "", "labels": [],
                                               "pull_request": {}}
             self.set(THIRD, [12])
-        self.assertEqual(self.body(202), f"Depends on #201\n\n{ISSUE_BODY}")
+        self.assertEqual(self.body(202), f"Depends on #201\n\n{FENCED}")
 
     def test_a_change_that_would_make_a_cycle_is_refused(self):
         with self.assertRaisesRegex(ToolError, "#201 depends on #200, so #200 cannot depend on #201: "
@@ -108,7 +108,7 @@ class SetDependenciesTest(unittest.TestCase):
             self.set(FIRST, [201])
         with self.assertRaisesRegex(ToolError, "#201 depends on #200, so #200 cannot depend on #202"):
             self.set(FIRST, [202])  # 202 waits for 201, which waits for 200: a path, not a direct line
-        self.assertEqual(self.body(200), ISSUE_BODY)
+        self.assertEqual(self.body(200), FENCED)
 
     def test_an_unknown_workitem_and_a_missing_name_are_refused(self):
         with self.assertRaisesRegex(ToolError, "o/r#9 is not a WorkItem the factory knows"):

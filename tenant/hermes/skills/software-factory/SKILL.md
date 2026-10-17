@@ -89,6 +89,10 @@ standard in the repo's AGENTS.md ask:
   for what must not change.
 - No issue names `.github/` or `AGENTS.md`, not even in the bullet for what must not change.
   Those paths need a person, and factory_start_plan refuses a plan that names them.
+- Clone the repo and read the files the goal touches before you write the issues. Put a
+  `Paths: <glob>, <glob>` line in each issue body — the source files that issue may change. Every
+  pass is fenced to its issue's `Paths:`: a source file outside them fails the attempt, while tests
+  and docs can change anywhere. factory_start_plan refuses an issue without the line.
 - Put the issues in the order they must run: each one can build on the ones before it. Then set
   `after` only where the dependency is real: an issue that builds on earlier ones gets their
   1-based positions as `after`, and an issue with no real dependency gets `after: []` so it starts

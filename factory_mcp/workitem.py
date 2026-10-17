@@ -22,6 +22,7 @@ DEPENDS_ON = re.compile(r"^\s*depends on #(\d+)\b", re.I | re.M)
 HEADING = re.compile(r"\s*#+\s")
 ACCEPTANCE = re.compile(r"\s*#+\s*acceptance\b", re.I)
 WORKER = re.compile(r"^\s*worker:\s*(\S+)\s*$", re.I | re.M)
+PATHS = re.compile(r"^\s*paths:\s*(.+?)\s*$", re.I | re.M)
 
 
 def workitem_id(repo, number):
@@ -159,6 +160,13 @@ def workers_named(body):
     return WORKER.findall(body or "")
 
 
+def paths_listed(body):
+    """The globs that `Paths: <glob>, <glob>` lines list, in order (ADR-0087): the source files a
+    node's pass may change. No line means no fence."""
+    return [glob for line in PATHS.findall(body or "")
+            for glob in (part.strip() for part in line.split(",")) if glob]
+
+
 def intake(repo, issue):
     """A new WorkItem (stateVersion 0) for an open issue, or a ValueError saying what is missing."""
     if "pull_request" in issue:
@@ -175,7 +183,9 @@ def intake(repo, issue):
     stamp = now()
     return {"schemaVersion": "factory.workitem/v1", "id": workitem_id(repo, issue["number"]),
             "repo": repo, "issueNumber": issue["number"], "goal": issue["title"],
-            "description": description(issue.get("body")), "acceptance": criteria, "branch": branch_for(issue["number"]), "prNumber": None,
+            "description": description(issue.get("body")), "acceptance": criteria,
+            "paths": paths_listed(issue.get("body")) or None,
+            "branch": branch_for(issue["number"]), "prNumber": None,
             "headSha": None, "reviewedSha": None, "gateRound": 0, "attempts": [], "blockers": [],
             "state": state, "stateVersion": 0, "createdAt": stamp, "updatedAt": stamp}
 

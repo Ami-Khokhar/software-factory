@@ -132,6 +132,11 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Touching any of these forces HUMAN at the gate."
+        },
+        "allowedPaths": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "The node's fence (ADR-0087): globs for the source files this pass may change, from the issue's `Paths:` lines. Absent means no fence. worker_input tells the worker to read them first and change source only inside them; tests and docs can change anywhere; check_pushed fails a pushed source file outside them."
         }
       }
     },

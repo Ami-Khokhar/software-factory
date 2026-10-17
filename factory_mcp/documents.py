@@ -29,7 +29,8 @@ def workorder(wi, kind, attempt, config, base_sha=None, findings=(), lessons=())
                             "maxSourceChangedLinesAdvisory": True,
                             "maxSourceChangedLinesCeiling": config.source_ceiling,
                             "maxChangedFiles": 20,
-                            "protectedPaths": list(config.protected_paths)},
+                            "protectedPaths": list(config.protected_paths),
+                            **({"allowedPaths": list(wi["paths"])} if wi.get("paths") else {})},
             "findingsToAddress": list(findings),
             "lessons": [{"fingerprint": entry["fingerprint"], "text": entry["text"][:MAX_TEXT]}
                         for entry in list(lessons)[:MAX_PER_WORKORDER]],  # the file is hand-editable
@@ -56,6 +57,9 @@ def worker_input(order, branch):
         "- Commit your change locally. Do not push, do not open a pull request, and do not change git "
         "remotes or git configuration.",
         f"- Never change these paths: {', '.join(constraints['protectedPaths'])}.",
+        *([f"- The fence for this node: read these files first, then change source only inside "
+           f"them: {', '.join(constraints['allowedPaths'])}. Tests and docs can change anywhere."]
+          if constraints.get("allowedPaths") else []),
         f"- Keep the pull request at about {target} "
         f"changed SOURCE lines within {constraints['maxChangedFiles']} files. The source target "
         "counts source additions and deletions only; tests and docs are reported separately and never "

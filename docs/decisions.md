@@ -2142,3 +2142,29 @@ forward. A partial touching a protected path is never kept — the check is the 
 gate enforces. `factory-wip/*` branches are scratch: they are not PR branches, and only the one
 per WorkItem is ever read. Tests: the runner tests drive exit 124 directly; the Foreman tests
 drive `poll()` with `FakeGit`.
+
+## ADR-0087 — Each node's source changes are fenced by its issue's `Paths:` lines
+
+**Context.** Every pass of an issue changed whatever it liked inside the repo: the protected
+paths were the only wall. On a graph that is one node silently rewriting another node's source
+files — the exact collision the DAG's sequencing exists to prevent — and only the gate reading
+a surprising diff ever learns it.
+
+**Decision.** An issue body may carry `Paths: <glob>, <glob>` lines, parsed at intake like
+`Worker:` lines, into optional `WorkItem.paths`. The WorkOrder carries them as
+`constraints.allowedPaths`; no list means no fence, and both fields are optional in their
+schemas. `worker_input` tells the worker to read those files first and change source only
+inside them; tests and docs can change anywhere. `check_pushed` enforces it: a pushed file
+`sizing.kind` calls `source` whose path matches no glob — a rename's old path included — fails
+the attempt and names each offending path, next to the protected-path check. A pass is judged
+by what GitHub holds, never by what the worker reports. `factory_start_plan` — and
+`factory_replace_issue`, which shares the check — refuses an item without a `Paths:` line and
+opens nothing, so Day Desk writes the fence into every planned issue before any pass runs.
+
+**Consequence.** A plan states each node's territory in the issue itself, so two issues that
+would edit the same source file can be seen as overlapping before either runs, and a fence
+violation is a failed pass with a name, not a review-time surprise. Globs are fnmatch-style,
+matched case-sensitively. The fence binds source only, because `sizing.kind` decides. The
+fence is frozen at intake like goal and acceptance (ADR-0038): editing a running issue's body
+does not move it. An issue without `Paths:` runs unfenced — only planned work is required to
+carry the line, so a one-off approved issue keeps working.

@@ -1,6 +1,7 @@
 """The Foreman: under a per-WorkItem lease, reconcile with GitHub, then act at most once."""
 import calendar
 import dataclasses
+import fnmatch
 import json
 import os
 import re
@@ -985,6 +986,14 @@ class Foreman:
         errors = [f"changes protected path {name}" for f in files  # a rename moves the old path too
                   for name in (f["filename"], f.get("previous_filename")) if name
                   and patches.is_protected(name, limits["protectedPaths"])]
+        allowed = limits.get("allowedPaths")
+        if allowed:  # the node's own fence (ADR-0087); a rename counts, as at the protected check
+            outside = sorted({name for f in files
+                              for name in (f["filename"], f.get("previous_filename")) if name
+                              and sizing.kind(name) == "source"
+                              and not any(fnmatch.fnmatchcase(name, glob) for glob in allowed)})
+            errors += [f"changes {name}, outside this node's Paths of {', '.join(sorted(allowed))}"
+                       for name in outside]
         if len(files) > limits["maxChangedFiles"]:
             errors.append(f"{self._changed_lines(files)} lines in {len(files)} files exceeds the "
                           f"WorkOrder constraint of {limits['maxChangedFiles']} files")
@@ -1981,6 +1990,9 @@ class Foreman:
                  if re.search(rf"(?<![\w.-]){re.escape(path.rstrip('/').lower())}(?![\w-])", text)]
         if named:
             return f"names {', '.join(named)}, which only a person changes; leave it out of the plan"
+        if not workitem.paths_listed(item["body"]):
+            return ("needs a 'Paths: <glob>, <glob>' line naming the source files this issue may "
+                    "change; every pass is fenced to them (ADR-0087)")
         return None
 
     @staticmethod
