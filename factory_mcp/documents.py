@@ -76,6 +76,7 @@ def worker_input(order, branch):
         "how to build, test and document a change there.",
         "- Prove the change with a test that fails without it. Never weaken, skip or delete a test to "
         "make the change pass.",
+        "- A new test that must also pass on the old code starts its docstring with `Guard:`.",
         "- Update the docs your change makes wrong.",
         "- Run the tests before you finish. Each acceptance doneWhen must be true of what you commit.",
         "- For kind fix: resolve every findingsToAddress entry. They describe problems in the code;"

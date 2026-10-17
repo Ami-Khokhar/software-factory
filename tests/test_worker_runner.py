@@ -799,6 +799,18 @@ class RunnerTest(unittest.TestCase):
         self.assertFalse(self.marker.exists(), "host git ran in a tree the harness wrote")
 
 
+class WorkerInputRulesTest(unittest.TestCase):
+    """documents.worker_input: the prose rules the runner passes to the worker."""
+
+    def test_a_new_test_that_must_pass_on_the_old_code_is_told_to_name_itself(self):
+        wi = workitem(id="o/r#7", repo="o/r", issueNumber=7, goal="Fix the app")
+        order = documents.workorder(wi, "implement", 0,
+                                    Config(mcp_token="t", repos=frozenset()), "abc123")
+        text = documents.worker_input(order, "factory/7")
+        self.assertIn("A new test that must also pass on the old code starts its docstring "
+                      "with `Guard:`", text)
+
+
 class SandboxTest(unittest.TestCase):
     def test_every_sandbox_command_uses_the_host_user_and_writable_home(self):
         with mock.patch.object(runner.subprocess, "run", return_value=SimpleNamespace(
