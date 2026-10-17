@@ -1369,20 +1369,24 @@ class Foreman:
         return {"issue": issue["number"], "url": issue.get("html_url")}
 
     def start_plan(self, repo, issues, by):
-        """The owner's one approval of a whole plan (ADR-0024): check every issue, then open them in
-        order, each labelled factory:ready and depending on the one before it. A failed check opens none."""
+        """The owner's one approval of a whole plan (ADR-0024, ADR-0082): check every issue, then
+        open them in order, each labelled factory:ready and depending on the one before it, or on
+        the earlier issues its `after` names. A failed check opens none."""
         if not isinstance(by, str) or not by.strip():
             raise ToolError("a plan needs the name of the person who approved it")
         if not isinstance(issues, list) or not 1 <= len(issues) <= MAX_PLAN_ISSUES:
             raise ToolError(f"a plan has 1 to {MAX_PLAN_ISSUES} issues; split a bigger goal into more plans")
         for position, item in enumerate(issues, 1):
-            problem = self._plan_problem(item)
+            problem = self._plan_problem(item) or self._after_problem(item, position)
             if problem:
                 raise ToolError(f"issue {position} of the plan {problem}. No issue was opened")
         repo = self._enabled(repo, by)  # after the plan's checks: a refused plan enables nothing
         opened, taken = [], []
-        for item in issues:
-            body = f"Depends on #{opened[-1]['issue']}\n\n{item['body']}" if opened else item["body"]
+        for position, item in enumerate(issues, 1):
+            after = item.get("after")
+            positions = ([position - 1] if opened else []) if after is None else after
+            lines = "\n".join(f"Depends on #{opened[n - 1]['issue']}" for n in positions)
+            body = f"{lines}\n\n{item['body']}" if lines else item["body"]
             try:  # the checks passed, so only GitHub or the author's trust can stop the plan here
                 issue = self.github.create_issue(repo, item["title"], body, [workitem.READY])
                 opened.append({"issue": issue["number"], "url": issue.get("html_url")})
@@ -1900,6 +1904,21 @@ class Foreman:
                  if re.search(rf"(?<![\w.-]){re.escape(path.rstrip('/').lower())}(?![\w-])", text)]
         if named:
             return f"names {', '.join(named)}, which only a person changes; leave it out of the plan"
+        return None
+
+    @staticmethod
+    def _after_problem(item, position):
+        """Why one issue of a plan may not carry its `after` positions (ADR-0082), or None: each is a
+        whole number earlier than its own item, and none repeats. The positions map to the issues
+        this call opens, so a position that is not earlier could never resolve."""
+        after = item.get("after")
+        if after is None:
+            return None
+        if (not isinstance(after, list)
+                or any(isinstance(n, bool) or not isinstance(n, int) or not 1 <= n < position for n in after)
+                or len(set(after)) != len(after)):
+            return ("needs after to list only the earlier positions it waits for, each a whole number "
+                    "before this issue and not repeated")
         return None
 
     def approve_lesson(self, repo, fingerprint, text, by):

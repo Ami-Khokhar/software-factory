@@ -231,7 +231,10 @@ def build(store, foreman, agent=False):
         Tool("factory_start_plan",
              "A person's go on a whole plan. Opens the issues in the given order, each labelled "
              "factory:ready. Each issue after the first gets the line 'Depends on #<previous>', and "
-             "the factory starts it only after the previous issue merges. First checks every issue: "
+             "the factory starts it only after the previous issue merges. An issue may carry "
+             "`after`: the 1-based positions of the earlier issues it waits for instead, each a "
+             "whole number before it and not repeated; omitted keeps the chain, and `after: []` "
+             "lets it start at once. First checks every issue: "
              f"1 to {MAX_PLAN_ISSUES} issues, each body with an '## Acceptance' list of "
              "'- <claim> — done when: <check>' bullets, and no title or body that names .github/ or "
              "AGENTS.md. If one check fails, opens no issue. A second call opens the issues again.",
@@ -242,7 +245,15 @@ def build(store, foreman, agent=False):
                                         "items": {"type": "object", "required": ["title", "body"],
                                                   "additionalProperties": False,
                                                   "properties": {"title": {"type": "string", "minLength": 1},
-                                                                 "body": {"type": "string", "minLength": 1}}}},
+                                                                 "body": {"type": "string", "minLength": 1},
+                                                                 "after": {"type": "array",
+                                                                           "description":
+                                                                               "1-based positions of the earlier "
+                                                                               "issues this one waits for; "
+                                                                               "omitted keeps the chain, [] "
+                                                                               "starts at once",
+                                                                           "items": {"type": "integer",
+                                                                                     "minimum": 1}}}}},
                              "by": {"type": "string", "minLength": 1, "description": "who approved the plan"}}},
              "write", lambda args: foreman.start_plan(args["repo"], args["issues"], args["by"])),
         Tool("factory_set_dependencies",
