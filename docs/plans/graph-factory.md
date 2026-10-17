@@ -18,6 +18,29 @@ Keep the factory's deterministic Foreman as the loop. Use GPT 6.1 sol only to pl
 
 Roles are slots with a per-role model setting, so any model can fill them and the gauges compare them. CONTROL PLANE: Day Desk on GPT 6.1 sol at high effort (its Hermes profile). It clones and reads the code, plans the DAG and each node's contract, writes the pre-flight list, answers each incident once with a decision line, runs the plan's final runtime check, and may write pinned tests for Risk: high nodes (slice 10). It never writes product code, pushes, merges or reviews a PR, and the Foreman never calls it (ADR-0010, ADR-0030). It works at plan time and at forks only, which also bounds Codex quota. FOREMAN (factory-mcp): deterministic code with no model. It owns every state change, check, route and gauge. BUILDERS (FACTORY_WORKERS): small models in single-shot Docker passes without a GitHub credential, today GLM 5.3 Flash on pi. DeepSeek V4.1 Flash builds only where the gate reviewer is not DeepSeek (slice 4). REVIEWER (pr-gatekeeper, per repo): reviewer_model from another family than the builder, strong_reviewer_model from a third family on round 1 and on sensitive paths (tiering.py at c9a6462 supports it, every repo leaves it empty), verifier_model to confirm or drop findings, at most 3 rounds per problem, and the only routine merge authority (ADR-0004). DETERMINISTIC CHECKS: the gate's verify read from the base commit (the CI command), protected paths, size target and ceiling, Paths fence, revert probe (per new test after slice 9), proof replay, secret scan, PR lint, update-branch before merge, leases, idempotency keys, the two-strike incident and the same-problem-twice stop. No advisor tier by default. The owner may ask for a strongest-model memo on a design fork, as the hackathon did three times.
 
+## Model pool (owner constraint, 2026-10-17)
+
+Only these models fill factory roles:
+
+| Model | Access | Family | Roles |
+|---|---|---|---|
+| GPT 6.1 sol | Codex (ChatGPT plan), local only | OpenAI | Control plane: Day Desk plans, forks, incidents, optional pinned tests (slice 10) |
+| GLM 5.3 Flash | OpenCode or pi | Zhipu | Builder, reviewer, verifier |
+| DeepSeek V4.1 Flash | OpenCode or pi | DeepSeek | Builder, reviewer, verifier |
+| MiMo V2.6 Flash (free) | OpenCode or pi | Xiaomi | Builder, reviewer, verifier |
+
+Rules:
+- sol stays out of the gate. The gate runs in GitHub Actions, and a personal ChatGPT plan must not run in CI. So every gate role uses a flash model.
+- Three flash families make the family rule work. The builder's family never reviews its own PR (slice 4). Example: reviewer DeepSeek, builders GLM or MiMo, strong reviewer (round 1 and sensitive paths) the third family.
+- MiMo is the third family that the owner decision on strong_reviewer_model asks for. With a DeepSeek reviewer, GLM and MiMo can still build, so one outage no longer stops all builds (slice 4 risk).
+- No other model (Claude, Gemini or others) fills a factory role. Any name of another model in this plan describes the hackathon or the meta work only.
+
+Assumption: this pool covers the factory's own roles. Building the factory's slices is meta work, which the owner does with Claude. The owner decision "Choose who builds the slices" keeps that meaning. Confirm before slice 3.
+
+Check before slice 4:
+- Which of the three flash models the gate can call through its API (OpenCode Go or Zen).
+- MiMo's free-tier limits and data policy (rate limits; whether prompts may be used for training).
+
 ## Graph model
 
 NODE. One GitHub issue is one WorkItem, one branch factory/&lt;n> and one PR (ADR-0002, unchanged). reconcile() stays the only fact-driven mover over the existing 15 states, with one action per tick under a lease. The node contract is the issue body, which code parses: the goal and a bench-style description (exact files, interface, rules, edge cases, one failure-path bullet), '## Acceptance' bullets 'claim — done when: check' plus one must-not-change bullet, 'Depends on #n' lines, 'Paths:' lines (the write set, slice 7), optional 'Worker:' lines and an optional '## Acceptance tests' section (slice 10). Inside a node each pass is one WorkOrder: implement, fix (the gate's findings with their fix and failing test, plus the marker's problems, all as data) or finish (an implement pass that starts from salvaged work on factory-wip/&lt;n>). Code checks each Result (schema, protected paths, size, Paths fence), pushes it and opens or updates the PR. pr-gatekeeper answers MERGE, CHANGES or HUMAN, at most 3 rounds per problem. It never merges a head behind base: it updates the branch and reviews the merged result again (SPEC.md:460).
