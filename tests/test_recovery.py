@@ -11,7 +11,7 @@ from factory_mcp.mcp import ToolError
 from factory_mcp.store import Store
 from tests.fakes import ISSUE_BODY, FakeGit, FakeGitHub, FakeRelay
 from tests.test_dependencies import THIRD
-from tests.test_plan import FIRST, REPO, SECOND, plan
+from tests.test_plan import FIRST, REPO, SECOND, FENCED, plan
 
 UPSTREAM = "o/r#199"
 SKILL = Path(__file__).resolve().parent.parent / "tenant" / "hermes" / "skills" / "software-factory" / "SKILL.md"
@@ -129,7 +129,7 @@ class ReplaceIssueTest(unittest.TestCase):
     def test_a_dependent_swaps_only_the_original_edge_and_keeps_the_unrelated_one(self):
         self.wait()
         self.replace()
-        self.assertEqual(self.body(202), f"Depends on #{B}\nDepends on #150\n\n{ISSUE_BODY}")
+        self.assertEqual(self.body(202), f"Depends on #{B}\nDepends on #150\n\n{FENCED}")
 
     def test_the_skill_replaces_then_approves_in_order(self):
         """A factory:proposed issue starts only when it is approved (round-2 finding): the guidance
@@ -163,7 +163,7 @@ class ReplaceIssueTest(unittest.TestCase):
         with self.assertRaisesRegex(ToolError, "#202 already had a worker pass"):
             self.replace()
         self.assertEqual(self.github.writes, [])
-        self.assertEqual(self.body(202), f"Depends on #201\nDepends on #150\n\n{ISSUE_BODY}")
+        self.assertEqual(self.body(202), f"Depends on #201\nDepends on #150\n\n{FENCED}")
 
     def test_approving_refused_replacements_is_refused_nothing_starts(self):
         """No activation after a failed replacement: the factory queued the graph but the dependent
@@ -186,7 +186,7 @@ class ReplaceIssueTest(unittest.TestCase):
         with self.assertRaisesRegex(ToolError, "would make a cycle: #200 depends on #300 depends on #200"):
             self.replace()
         self.assertEqual(self.github.writes, [])
-        self.assertEqual(self.body(202), f"Depends on #201\nDepends on #150\n\n{ISSUE_BODY}")
+        self.assertEqual(self.body(202), f"Depends on #201\nDepends on #150\n\n{FENCED}")
 
     def test_invalid_originals_and_replacements_are_refused(self):
         with self.assertRaisesRegex(ToolError, "o/r#201 is ready; only a WorkItem waiting on recovery"):
@@ -231,7 +231,7 @@ class ReplaceIssueTest(unittest.TestCase):
         self.assertEqual((wi["state"], wi["terminalReason"]), ("cancelled", "replaced by #300, #301"))
         self.assertEqual(self.github.issues[(REPO, 201)]["state"], "closed")
         # the plan moved only the original's edges: the dependent keeps its unrelated one
-        self.assertEqual(self.body(202), f"Depends on #{B}\nDepends on #150\n\n{ISSUE_BODY}")
+        self.assertEqual(self.body(202), f"Depends on #{B}\nDepends on #150\n\n{FENCED}")
         self.assertEqual([h["detail"].get("replacements") for h in self.foreman.store.history(ORIGINAL)
                           if h["action"] == "replaced"], [[A, B]])
         # the cancelled WorkItem keeps what was tried: the audit trail reads on from it

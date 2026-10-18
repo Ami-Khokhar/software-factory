@@ -1,4 +1,5 @@
 """Phase E: verdict comments drive CHANGES -> fix -> MERGE, with per-problem round counting."""
+import json
 import unittest
 
 from factory_mcp import tools
@@ -309,6 +310,51 @@ class GateLoopTest(unittest.TestCase):
         self.tick()
         order = self.foreman.store.workorders(ID)[-1]
         self.assertEqual((order["kind"], [f["fingerprint"] for f in order["findingsToAddress"]]), ("fix", ["human"]))
+
+    def gate_problems(self, round_, sha, problems):
+        """A gate verdict whose marker names pipeline problems and no findings, as pr-gatekeeper
+        writes when verify, pr-lint or the proof of work failed."""
+        payload = json.dumps({"round": round_, "outcome": "CHANGES", "head_sha": sha,
+                              "findings": [], "problems": problems}).replace(">", "\\u003e")
+        self.github.issue_comments.setdefault((REPO, 100), []).append(
+            {"body": f"<!-- pr-gatekeeper {payload} -->", "created_at": "2026-09-24T02:00:00Z",
+             "user": {"login": "github-actions[bot]"}})
+        self.github.add_run(REPO, sha, conclusion="failure")
+
+    def test_a_changes_finding_with_fix_and_test_reaches_the_fix_workorder(self):
+        self.gate("CHANGES", 1, "c1", dict(MISSING_TEST, fix="Assert the error path in the test",
+                                           test="tests/test_error.py"))
+        wi = self.tick()
+        self.assertEqual(wi["state"], "implementing")
+        addressed = self.foreman.store.workorders(ID)[-1]["findingsToAddress"][0]
+        self.assertEqual((addressed["fix"], addressed["test"]),
+                         ("Assert the error path in the test", "tests/test_error.py"))
+
+    def test_a_changes_marker_with_problems_and_no_findings_dispatches_a_fix_that_carries_them(self):
+        self.gate_problems(1, "c1", [{"kind": "lint", "path": "src/app.py", "problem": "Line 9 is too long"}])
+        wi = self.tick()
+        self.assertEqual(wi["state"], "implementing")
+        order = self.foreman.store.workorders(ID)[-1]
+        self.assertEqual((order["kind"], [f["problem"] for f in order["findingsToAddress"]]),
+                         ("fix", ["Line 9 is too long"]))
+        self.assertEqual([f["fingerprint"] for f in order["findingsToAddress"]],
+                         [fingerprint("src/app.py", "Line 9 is too long")])
+
+    def test_a_changes_marker_without_problems_carries_no_fix_or_test_it_did_not_name(self):
+        self.gate("CHANGES", 1, "c1", MISSING_TEST)
+        self.tick()
+        addressed = self.foreman.store.workorders(ID)[-1]["findingsToAddress"][0]
+        self.assertEqual((addressed["fix"], addressed["test"]), (None, None))
+
+    def test_the_same_problem_reported_as_a_problem_in_two_rounds_escalates(self):
+        problems = [{"kind": "lint", "path": "src/app.py", "problem": "Line 9 is too long"}]
+        self.gate_problems(1, "c1", problems)
+        self.assertEqual(self.tick()["state"], "implementing")
+        self.pass_("c2", dispatch=False)
+        self.gate_problems(2, "c2", problems)
+        wi = self.tick()
+        self.assertEqual(wi["state"], "human_waiting")
+        self.assertIn("Line 9 is too long", wi["blockedOn"])
 
     def test_gate_human_verdict(self):
         self.gate("HUMAN", 1, "c1")

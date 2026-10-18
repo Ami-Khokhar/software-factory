@@ -13,6 +13,8 @@ from factory_mcp.mcp import ToolError
 from factory_mcp.repos import load
 from factory_mcp.store import Store
 from tests.fakes import ISSUE_BODY, FakeGitHub, FakeRelay
+
+from tests.test_plan import FENCED  # ADR-0087: a plan item needs a Paths line
 from tests.test_repos import gated
 
 OWNER = "amteshwar"
@@ -122,14 +124,14 @@ class AnyRepoTest(unittest.TestCase):
                          [(NEW, "factory_propose_issue")])
 
     def test_a_plan_in_an_unlisted_repo_that_passes_the_check_enables_it(self):
-        self.foreman.start_plan(NEW, [{"title": "One", "body": ISSUE_BODY}], OWNER)
+        self.foreman.start_plan(NEW, [{"title": "One", "body": FENCED}], OWNER)
         self.assertEqual([(e["name"], e["added_by"]) for e in load(str(self.manifest))], [(NEW, OWNER)])
 
     def test_the_tools_refuse_an_unlisted_repo_that_fails_the_check_and_write_nothing(self):
         self.github.add_issue(BARE, 4, labels=("factory:proposed",), author=OWNER)
         calls = {"approve": lambda: self.foreman.approve_issue(BARE, 4, OWNER),
                  "propose": lambda: self.foreman.propose_issue(BARE, "Greet by name", ISSUE_BODY),
-                 "plan": lambda: self.foreman.start_plan(BARE, [{"title": "One", "body": ISSUE_BODY}], OWNER)}
+                 "plan": lambda: self.foreman.start_plan(BARE, [{"title": "One", "body": FENCED}], OWNER)}
         for name, call in calls.items():
             with self.subTest(name), self.assertRaisesRegex(ToolError, f"{BARE} is not ready: {BARE} has no "):
                 call()

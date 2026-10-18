@@ -1,6 +1,8 @@
 """The Foreman: under a per-WorkItem lease, reconcile with GitHub, then act at most once."""
 import calendar
 import dataclasses
+import fnmatch
+import json
 import os
 import re
 import time
@@ -13,11 +15,29 @@ from .github import GitHubError
 from .mcp import ToolError
 from .relay import RelayError
 from .store import REQUEST_PHASES, Conflict, now
-from .verdict import blocking
+from .verdict import blocking, fingerprint
 
 # States that need a person. Entering one posts a comment on the issue, so the owner hears of it.
 ATTENTION = ("human_waiting", "blocked", "exhausted")
 WORKING = ("dispatching", "implementing")
+# A node holds its `Paths:` files while it is one of these (ADR-0088); waiting for a person
+# holds nothing, so a stalled node never blocks its neighbours' files.
+PATHS_HOLDING = ("dispatching", "implementing", "pr_open", "reviewing", "changes_requested",
+                 "merge_pending")
+
+
+def _covers(prefix, entry):
+    """`prefix` covers `entry` when its literal head, cut at the first wildcard, is `entry` or a
+    directory prefix of it."""
+    stem = prefix.split("*")[0].rstrip("/")
+    return bool(stem) and (entry == stem or entry.startswith(stem + "/"))
+
+
+def _overlaps(entry, other):
+    """Two `Paths:` entries meet (ADR-0088): a glob match in either direction, or one's literal
+    head covering the other as a directory."""
+    return (fnmatch.fnmatchcase(entry, other) or fnmatch.fnmatchcase(other, entry)
+            or _covers(entry, other) or _covers(other, entry))
 from .setup_merge import BOOTSTRAP_PREFIX
 MAX_PLAN_ISSUES = 10  # one approval covers this many issues at most (ADR-0024)
 REGATE_MARKER = re.compile(r"<!-- factory regate (\d+) -->")
@@ -40,6 +60,11 @@ RELAY_RETRIES_MAX = 2
 # This is the worker-health signal recovery acts on; whether the cause is evidence-backed is the
 # attempt's business, never this one (ADR-0081).
 OUT_OF_TIME = re.compile(r"task timed_out|the harness timed out")
+DEFAULT_REVIEWER = "deepseek-v4.1-flash"  # pr-gatekeeper's reviewer_model when the key is absent
+WIP_MOVES_MAX = 2  # how far a salvage wip may move forward before timeouts stop costing pushes
+PARTIAL_WORK = ("A worker ran out of time. Its unfinished work is the commit you start from. "
+                "Check each acceptance bullet against the code, not against any report. "
+                "Keep what is right, fix or remove the rest, and finish.")
 # Reason text is incident identity (ADR-0081), and a commit sha or the attempt count a reason
 # narrates is not material: both read the same every time they are said again.
 SHA40 = re.compile(r"\b[0-9a-f]{40}\b")
@@ -410,6 +435,8 @@ class Foreman:
                                       for f in verdict["findings"] if f["severity"] == "blocking"]
             wi = self._write(wi, new, "reconcile", **detail)
             wi = self.act(wi, facts)
+            if wi.get("wip") and (wi["state"] in workitem.TERMINAL or wi["state"] == "merged"):
+                wi = self._retire_wip(wi)  # a merge or an end ends salvage (ADR-0086)
         except Conflict:
             wi = self.store.get(workitem_id)
         except (GitHubError, RelayError) as exc:
@@ -517,6 +544,10 @@ class Foreman:
             wi = self._wait_for(wi, facts["issue"]["dependsOn"])
             if wi["state"] != "ready" or wi.get("waitingOn"):
                 return wi
+            held = self._paths_held_by(wi)  # two nodes that list the same files run in turn (ADR-0088)
+            if held:
+                self.store.log("waiting", {"on": held["id"], "paths": held["share"]}, wi["id"])
+                return wi  # still ready; the next tick retries the hold
             # a retry says why the last attempt failed, or what a person said
             return self.dispatch(wi, "implement", self._human_findings(wi) + self._attempt_findings(wi),
                                  facts["issue"]["workers"])
@@ -530,7 +561,7 @@ class Foreman:
             # a redo that failed leaves the PR, and the verdict on its head, as they were
             applies = latest and (wi["state"] == "changes_requested"
                                   or conflict and latest["headSha"] == facts["pr"]["headSha"])
-            findings = [{key: f[key] for key in ("fingerprint", "path", "line", "problem")}
+            findings = [{key: f[key] for key in ("fingerprint", "path", "line", "problem", "fix", "test")}
                         for f in (blocking(latest) if applies else [])]
             if conflict:  # a fix builds on the PR's head and keeps the conflict: make it again (ADR-0032)
                 default = self._default_branch(wi["repo"])
@@ -571,6 +602,22 @@ class Foreman:
                                             blockedOn=self._dependency_reason(number, how)),
                                    "dependency_ended", on=number, how=how)
         return self._write(wi, dict(wi, waitingOn=None), "dependency_merged") if wi.get("waitingOn") else wi
+
+    def _paths_held_by(self, wi):
+        """The active WorkItem of this repo that holds files this node's `Paths:` also lists
+        (ADR-0088), or None: two nodes that list the same source files run one after the other.
+        A node without Paths waits for nothing, and one waiting for a person holds nothing."""
+        if not wi.get("paths"):
+            return None
+        for other in self.store.all():
+            if (other["id"] == wi["id"] or other["repo"] != wi["repo"]
+                    or other["state"] not in PATHS_HOLDING or not other.get("paths")):
+                continue
+            share = [entry for entry in wi["paths"]
+                     if any(_overlaps(entry, held) for held in other["paths"])]
+            if share:
+                return {"id": other["id"], "share": share}
+        return None
 
     @staticmethod
     def _dependency_reason(number, how):
@@ -688,6 +735,22 @@ class Foreman:
         with self.runtime_lock:
             return self._dispatch(wi, kind, findings, named)
 
+    def _reviewer_families(self, repo):
+        """The model families the gate's reviewers belong to (ADR-0085), read from the default
+        branch's `.github/pr-gatekeeper.json` — the gate's config, which the factory reads and
+        never writes. The file's absence means the gate does not run on this repo, so it has no
+        reviewer family; a missing `reviewer_model` key means pr-gatekeeper's default, and an
+        absent or empty `strong_reviewer_model` excludes nothing (it is off by default)."""
+        text = self.github.file(repo, ".github/pr-gatekeeper.json")
+        if not text:
+            return set()
+        try:
+            gate = json.loads(text)
+        except ValueError:  # a malformed config is every key missing: the gate's defaults stand
+            gate = {}
+        models = [gate.get("reviewer_model") or DEFAULT_REVIEWER, gate.get("strong_reviewer_model")]
+        return {routing.family(model) for model in models if model}
+
     def _dispatch(self, wi, kind, findings=(), named=()):
         """Send one WorkOrder. `findings` are this dispatch's findingsToAddress, exactly what the
         WorkOrder will hold; _lessons passes the same to the ranker, never a reconstruction."""
@@ -721,17 +784,29 @@ class Foreman:
                   if h["action"] == "attempt_failed"}
         # After a timeout-class failure the next attempt prefers another model family (ADR-0081): the
         # family that just ran out of the clock is the suspect, and this preference runs before the
-        # two-strike block ever sees the case.
+        # two-strike block ever sees the case. The gate reviewer's family is excluded outright (ADR-0085).
         avoid, from_worker, category = self._timeout_causes(wi)
+        excluded = self._reviewer_families(wi["repo"])
         worker = routing.route(self.config.workers, self.config.local_only(wi["repo"]), failed, named,
-                               avoid_families=avoid)
+                               avoid_families=avoid, exclude_families=excluded)
         if worker is None:
             self._finish_recovery(wi, False)  # no attempt will run, so the open recovery finds no outcome
+            local_only = self.config.local_only(wi["repo"])
+            candidates = [agent for agent, place in self.config.workers
+                          if (place == "local" or not local_only) and (not named or agent in named)]
+            if candidates and all(routing.family(agent) in excluded for agent in candidates):
+                return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=(
+                    "every allowed worker is in the reviewer family "
+                    + ", ".join(sorted(excluded)))), "no_worker")
             return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=(
                 f"{wi['repo']} is local-only and FACTORY_WORKERS has no local worker")), "no_worker")
         recovery = self._recovery_decision(wi, avoid, from_worker, category, worker)
         attempt = sum(1 for o in orders if o["round"] == wi.get("gateRound", 0) and o["kind"] == kind)
         base = self.github.branch_head(wi["repo"], self._default_branch(wi["repo"]))
+        if kind == "implement" and wi.get("wip"):  # the rescue pass builds on the kept partial (ADR-0086)
+            base = wi["wip"]["sha"]
+            findings = [dict(fingerprint=fingerprint(None, PARTIAL_WORK), path=None, line=None,
+                             problem=PARTIAL_WORK, fix=None, test=None)] + list(findings)
         order = documents.workorder(wi, kind, attempt, self.config, base, findings,
                                     self._lessons(wi, findings))
         self.store.save_workorder(order)
@@ -770,6 +845,9 @@ class Foreman:
         errors = documents.check_result(result, order)
         if not errors and result["status"] != "completed":
             errors = [f"worker reported {result['status']}: {result.get('error')}"]
+            if (order["kind"] == "implement" and self.config.salvage and result.get("patch")
+                    and OUT_OF_TIME.search(result.get("error") or "")):
+                wi = self._salvage(wi, order, result)  # keep the partial; the fail below still runs
         diagnosis = diagnostics.diagnose(order, result)
         sha, files, evidence = None, [], (result or {}).get("evidence", [])
         if not errors and order.get("remoteVerify"):
@@ -788,6 +866,7 @@ class Foreman:
         if errors:
             return self.fail(wi, order, f"{task['agentId']}: " + "; ".join(errors), diagnosis=diagnosis)
         self._finish_recovery(wi, True)
+        wi = self._retire_wip(wi)  # a completed Result ends salvage (ADR-0086): the scratch branch goes
         self.store.log("result", {"workOrder": order["id"], "commitSha": sha}, wi["id"])
         done = dict(wi, headSha=sha, attempts=[], activeWorkOrderId=None, providerTaskId=None, remoteVerify=None,
                     recovery=None, infraRetries=0)
@@ -802,6 +881,40 @@ class Foreman:
         pr = self.open_pr(wi, order, files, evidence, task["agentId"])
         return self._write(wi, dict(done, state="pr_open", prNumber=pr["number"]), "pr_opened",
                            pr=pr["number"])
+
+    def _salvage(self, wi, order, result):
+        """Keep a timed-out pass's partial work (ADR-0086): push its patch to the scratch branch
+        `factory-wip/<issue>` and record it on the WorkItem, so the next implement pass bases
+        itself on the kept work instead of restarting. A patch touching a protected path is not
+        kept — push_patch refuses it as at any other push — and the wip moves forward at most
+        WIP_MOVES_MAX times, so a pass that keeps timing out stops costing salvage pushes. The
+        WorkItem as it stands is returned in every case; fail() still runs as today."""
+        moves = ((wi.get("wip") or {}).get("moves") or 0) + 1
+        if moves > WIP_MOVES_MAX:
+            self.store.log("salvage_declined", {"reason": "the wip has moved forward twice"}, wi["id"])
+            return wi
+        branch = f"factory-wip/{wi['issueNumber']}"
+        try:
+            sha = self.push_patch(wi, order, result["patch"], branch=branch)
+        except patches.PatchError as exc:  # a refused patch is no partial to keep
+            self.store.log("salvage_declined", {"reason": str(exc)}, wi["id"])
+            return wi
+        return self._write(wi, dict(wi, wip={"branch": branch, "sha": sha, "workOrder": order["id"],
+                                             "moves": moves}), "salvaged",
+                           workOrder=order["id"], sha=sha)
+
+    def _retire_wip(self, wi):
+        """A completed Result, a merge or an end retires the salvage scratch branch (ADR-0086):
+        delete it and clear `wip`. A branch GitHub no longer holds is already retired."""
+        wip = wi.get("wip")
+        if not wip:
+            return wi
+        try:
+            self.github.delete_branch(wi["repo"], wip["branch"])
+        except GitHubError as exc:
+            if exc.status != 404:
+                raise
+        return self._write(wi, dict(wi, wip=None), "wip_retired", branch=wip["branch"])
 
     def _relay_lost(self, wi, order):
         """The relay no longer knows an accepted task (ADR-0081): an infrastructure loss, not the
@@ -911,6 +1024,14 @@ class Foreman:
         errors = [f"changes protected path {name}" for f in files  # a rename moves the old path too
                   for name in (f["filename"], f.get("previous_filename")) if name
                   and patches.is_protected(name, limits["protectedPaths"])]
+        allowed = limits.get("allowedPaths")
+        if allowed:  # the node's own fence (ADR-0087); a rename counts, as at the protected check
+            outside = sorted({name for f in files
+                              for name in (f["filename"], f.get("previous_filename")) if name
+                              and sizing.kind(name) == "source"
+                              and not any(fnmatch.fnmatchcase(name, glob) for glob in allowed)})
+            errors += [f"changes {name}, outside this node's Paths of {', '.join(sorted(allowed))}"
+                       for name in outside]
         if len(files) > limits["maxChangedFiles"]:
             errors.append(f"{self._changed_lines(files)} lines in {len(files)} files exceeds the "
                           f"WorkOrder constraint of {limits['maxChangedFiles']} files")
@@ -1086,7 +1207,8 @@ class Foreman:
         failed.add(wi.get("worker"))  # this very attempt just failed, whatever the audit has logged
         failed.discard(None)
         worker = routing.route(self.config.workers, self.config.local_only(wi["repo"]), failed,
-                               workitem.workers_named(issue.get("body")), avoid_families=families)
+                               workitem.workers_named(issue.get("body")), avoid_families=families,
+                               exclude_families=self._reviewer_families(wi["repo"]))
         if worker is None or worker in failed:
             return None  # nobody untried the policy would choose: the block stands
         category = diagnosis.get("cause") or "timeout (unknown cause)"
@@ -1906,6 +2028,9 @@ class Foreman:
                  if re.search(rf"(?<![\w.-]){re.escape(path.rstrip('/').lower())}(?![\w-])", text)]
         if named:
             return f"names {', '.join(named)}, which only a person changes; leave it out of the plan"
+        if not workitem.paths_listed(item["body"]):
+            return ("needs a 'Paths: <glob>, <glob>' line naming the source files this issue may "
+                    "change; every pass is fenced to them (ADR-0087)")
         return None
 
     @staticmethod

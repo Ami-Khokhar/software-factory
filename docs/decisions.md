@@ -2057,3 +2057,135 @@ first-verdict MERGE, slice 5 and 6 move the timeout share and one-shot rate, sli
 family. The recount on a copy of the live store anchors the baseline. Old history is inferred, so
 the gauges are honest about their own blind spot: an old HUMAN escalation that does not name the
 verdict is not counted as one.
+
+## ADR-0084 — A fix pass receives the gate's whole answer: each finding's fix and test, and the marker's problems as blocking findings
+
+**Context.** The factory kept only `fingerprint`, `path`, `line` and `problem` from each gate
+finding, so the fix pass lost the reviewer's suggested fix and the named test, and a CHANGES
+verdict whose problems were pipeline-level (verify, pr-lint, proof of work — the marker's
+`problems` list, no findings) had nothing a worker could act on: it stopped for a person. The
+reviewer's suggestion re-derived from scratch every round, and the worker never learned which
+test the gate wanted green.
+
+**Decision.** `verdict.to_verdict` keeps each finding's optional `test`, and when the outcome is
+CHANGES it reads the marker's optional `problems` list (kind, path, problem) as blocking findings
+with the usual fingerprint; `foreman.act` copies `fix` and `test` into the fix order's
+`findingsToAddress`; the WorkOrder contract's `findingRef` gains optional `fix` and `test`, and
+the verdict contract's finding likewise. A CHANGES marker with problems and no findings now
+dispatches a fix instead of stopping for a person; one with neither still does (its reason is in
+the gate's comment prose, which no worker may read). `worker_input` tells the fix worker the fix
+is the reviewer's suggestion and its data — resolve the problem with the smallest change, make the
+named test pass, check the same pattern at sibling call sites. A retry on a stuck-round incident
+carries one decision line in its note (Day Desk reads the PR diff and the gate findings first).
+
+**Consequence.** The same problem reported as a `problems` entry counts in per-problem round
+rounding like any finding, so two rounds of the same pipeline problem still escalate. A marker's
+`kind` is dropped: the finding's path and problem text carry what the worker needs. Old verdict
+comments re-parse with fix and test null, which validates.
+
+## ADR-0085 — No pass runs in the gate reviewer's model family
+
+**Context.** pr-gatekeeper reviews every factory PR with a model family (its `reviewer_model`,
+`deepseek-v4.1-flash` by default, `strong_reviewer_model` on round 1 and sensitive paths). When
+the builder shares that family, the gate's review is a model grading its own family's work: the
+same blind spots on both sides, and the family-level gauges (ADR-0083) cannot separate builder
+quality from reviewer leniency. The factory already avoids a family after a timeout (ADR-0081),
+but only as a soft preference: with no other worker eligible it falls back inside the family.
+
+**Decision.** `routing.route` gains `exclude_families`, a hard filter applied after the issue's
+`Worker:` lines and before the ADR-0081 preference. `routing.family` also reads a model id
+(`deepseek-v4.1-flash` → `deepseek`), so the gate's config and worker ids compare in one space.
+Foreman's `_dispatch` and `_defer_block` read `reviewer_model` and `strong_reviewer_model` from
+the repo's `.github/pr-gatekeeper.json` on the default branch with `github.file` — the gate's
+config: the factory reads it, never writes it. A missing key means pr-gatekeeper's default
+(`deepseek-v4.1-flash`); a repo with no gate file has no reviewer and routes as before. When
+every candidate a dispatch could reach is excluded, the WorkItem waits for a person with
+`every allowed worker is in the reviewer family <f>` instead of running. The ADR-0081 deferral
+takes the same wall, so a timeout cannot launder a pass into the reviewer family.
+
+**Consequence.** With the default gate config, `pi-deepseek-factory` cannot take a pass on any
+gated repo while DeepSeek reviews — the RUNBOOK's deepseek pilot and this wall agree. An issue
+whose `Worker:` line names only excluded workers needs the owner to edit the line or the gate
+config. A repo the gate does not review keeps its `FACTORY_WORKERS` order untouched, which is why
+the exclusion is read per repo at dispatch time rather than configured globally.
+
+## ADR-0086 — Salvage: a timed-out pass hands its partial work back, and the Foreman keeps it
+
+**Context.** A harness that runs out of clock was a total loss: the runner raised on exit 124,
+the Result failed with no patch, and the pass's minutes of real work died in a removed sandbox.
+The next pass restarted the same problem from the base with no memory of what had been tried. A
+timeout is the most common soft failure — the model was slow, not wrong — so throwing the work
+away burned the most budget for the least learning.
+
+**Decision — the runner half (slice 5).** On harness exit 124 the runner runs `collect()` without
+verify: `collect()` commits uncommitted work and applies the size and file limits as for any pass.
+A collected diff rides the failed Result as a partial patch (`status: failed`, `error: the
+harness timed out` — the text the Foreman names timeout incidents by, ADR-0081 — plus `patch`).
+A refused or empty partial leaves no patch, and verification never starts after 124: there is
+nothing finished to verify.
+
+**Decision — the Foreman half (slice 6).** A failed implement Result that matches `OUT_OF_TIME`
+and carries a patch is not a plain failure: the Foreman pushes the patch with `push_patch()` to a
+per-WorkItem scratch branch `factory-wip/<issue number>` — which refuses a partial touching a
+protected path, as it refuses any push — and stores the kept work on the WorkItem as optional
+`wip` = `{branch, sha, workOrder, moves}`. The next implement dispatch bases itself on `wip.sha`
+and carries a `partial-work` finding telling the worker its work is the commit it starts from:
+check each acceptance bullet against the code, keep what is right, fix or remove the rest, and
+finish. `moves` counts salvage pushes and stops at two, so a pass that keeps timing out stops
+costing salvage pushes. `fail()` runs as today — the strike and the ADR-0081 family preference
+are untouched. A completed Result, a merge or any end state deletes the scratch branch and clears
+`wip`. `FACTORY_SALVAGE=off` turns the whole mechanism off.
+
+**Consequence.** A timed-out pass now costs one salvage push plus a finish pass instead of a full
+restart, and the size limits still bind on the partial, so salvage cannot smuggle oversized work
+forward. A partial touching a protected path is never kept — the check is the same wall the push
+gate enforces. `factory-wip/*` branches are scratch: they are not PR branches, and only the one
+per WorkItem is ever read. Tests: the runner tests drive exit 124 directly; the Foreman tests
+drive `poll()` with `FakeGit`.
+
+## ADR-0087 — Each node's source changes are fenced by its issue's `Paths:` lines
+
+**Context.** Every pass of an issue changed whatever it liked inside the repo: the protected
+paths were the only wall. On a graph that is one node silently rewriting another node's source
+files — the exact collision the DAG's sequencing exists to prevent — and only the gate reading
+a surprising diff ever learns it.
+
+**Decision.** An issue body may carry `Paths: <glob>, <glob>` lines, parsed at intake like
+`Worker:` lines, into optional `WorkItem.paths`. The WorkOrder carries them as
+`constraints.allowedPaths`; no list means no fence, and both fields are optional in their
+schemas. `worker_input` tells the worker to read those files first and change source only
+inside them; tests and docs can change anywhere. `check_pushed` enforces it: a pushed file
+`sizing.kind` calls `source` whose path matches no glob — a rename's old path included — fails
+the attempt and names each offending path, next to the protected-path check. A pass is judged
+by what GitHub holds, never by what the worker reports. `factory_start_plan` — and
+`factory_replace_issue`, which shares the check — refuses an item without a `Paths:` line and
+opens nothing, so Day Desk writes the fence into every planned issue before any pass runs.
+
+**Consequence.** A plan states each node's territory in the issue itself, so two issues that
+would edit the same source file can be seen as overlapping before either runs, and a fence
+violation is a failed pass with a name, not a review-time surprise. Globs are fnmatch-style,
+matched case-sensitively. The fence binds source only, because `sizing.kind` decides. The
+fence is frozen at intake like goal and acceptance (ADR-0038): editing a running issue's body
+does not move it. An issue without `Paths:` runs unfenced — only planned work is required to
+carry the line, so a one-off approved issue keeps working.
+
+## ADR-0088 — Nodes with overlapping `Paths:` never run at once
+
+**Context.** Slice 7 fenced each node's source changes, but two ready nodes that listed the
+same files could still dispatch in the same tick: the DAG orders issues by Depends-on edges,
+and independent issues sharing a file — `docs/decisions.md` above all — would have raced.
+
+**Decision.** After its dependencies have merged, a ready WorkItem holds while another
+WorkItem of the same repo holds files its own `Paths:` also list. A WorkItem holds its files
+while it is in `dispatching`, `implementing`, `pr_open`, `reviewing`, `changes_requested` or
+`merge_pending`; one waiting for a person (`human_waiting`) holds nothing, so a stalled node
+never blocks its neighbours. Overlap is a glob match in either direction, or one entry's
+literal head covering the other as a directory. A WorkItem without `Paths:` neither waits nor
+holds. Each held tick writes an audit `waiting` row naming the holder and the shared entries;
+the WorkItem stays `ready` and the next tick retries, so the merge that ends the hold
+dispatches the waiting node with no other signal.
+
+**Consequence.** A plan that lists overlapping issues runs them in turn instead of at once —
+the sequencing falls out of the fences themselves, not out of `after` lines — while disjoint
+nodes still dispatch together up to `FACTORY_PASSES_PER_REPO`. The check reads the store,
+never GitHub, so it costs one pass over the repo's WorkItems per ready node.

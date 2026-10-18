@@ -7,10 +7,15 @@ from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
 from factory_mcp.store import Store
-from tests.fakes import ISSUE_BODY, FakeGit, FakeGitHub, FakeRelay
-from tests.test_plan import FIRST, REPO, SECOND, plan
+from tests.fakes import ISSUE_BODY, FakeGit, FakeGitHub, FakeRelay, result_line
+from tests.test_plan import FIRST, REPO, SECOND
 
 THIRD = "o/r#202"
+# Distinct fences per issue (ADR-0088): two plan issues listing the same files run in turn, and
+# the tests here are about the dependency edges, so only removing an edge may run two at once.
+BODY_ONE = ISSUE_BODY.replace("## Acceptance", "Paths: src/one*\n\n## Acceptance")
+BODY_TWO = ISSUE_BODY.replace("## Acceptance", "Paths: src/two*\n\n## Acceptance")
+BODY_THREE = ISSUE_BODY.replace("## Acceptance", "Paths: src/three*\n\n## Acceptance")
 
 
 class SetDependenciesTest(unittest.TestCase):
@@ -19,7 +24,9 @@ class SetDependenciesTest(unittest.TestCase):
         FakeGit(self.github).install(self)
         self.foreman = Foreman(Store(":memory:"), self.github, Config(mcp_token="t", repos=frozenset({REPO})),
                                self.relay)
-        self.foreman.start_plan(REPO, plan("One", "Two", "Three"), "amteshwar")  # 201 waits for 200, 202 for 201
+        self.foreman.start_plan(REPO, [{"title": "One", "body": BODY_ONE},
+                                       {"title": "Two", "body": BODY_TWO},
+                                       {"title": "Three", "body": BODY_THREE}], "amteshwar")
 
     def body(self, number):
         return self.github.issues[(REPO, number)]["body"]
@@ -29,7 +36,7 @@ class SetDependenciesTest(unittest.TestCase):
 
     def test_removing_the_dependency_lets_two_issues_of_a_plan_run_side_by_side(self):
         self.set(SECOND, [])
-        self.assertEqual(self.body(201), ISSUE_BODY)
+        self.assertEqual(self.body(201), BODY_TWO)
         self.foreman.tick()
         self.assertEqual([self.foreman.store.get(i)["state"] for i in (FIRST, SECOND, THIRD)],
                          ["implementing", "implementing", "ready"])
@@ -41,9 +48,9 @@ class SetDependenciesTest(unittest.TestCase):
         self.assertEqual(self.foreman.store.get(SECOND)["waitingOn"], 200)
         self.assertIsNone(self.set(SECOND, [])["waitingOn"])
         self.set(THIRD, [200])
-        self.assertEqual(self.body(202), f"Depends on #200\n\n{ISSUE_BODY}")
+        self.assertEqual(self.body(202), f"Depends on #200\n\n{BODY_THREE}")
         self.set(THIRD, [200, 201])
-        self.assertEqual(self.body(202), f"Depends on #200\nDepends on #201\n\n{ISSUE_BODY}")
+        self.assertEqual(self.body(202), f"Depends on #200\nDepends on #201\n\n{BODY_THREE}")
 
     def test_the_change_is_audited_with_who_asked_and_whether_the_agent_did(self):
         self.set(THIRD, [200], by="day-desk", agent=True)
@@ -71,14 +78,14 @@ class SetDependenciesTest(unittest.TestCase):
             self.foreman.store.put(dict(self.foreman.store.get(THIRD), state=state))
             with self.assertRaisesRegex(ToolError, f"is {state}; dependencies change only"):
                 self.set(THIRD, [])
-        self.assertEqual(self.body(202), f"Depends on #201\n\n{ISSUE_BODY}")
+        self.assertEqual(self.body(202), f"Depends on #201\n\n{BODY_THREE}")
 
     def test_a_human_waiting_workitem_with_no_pass_may_change_its_order(self):
         # Agentspace#5: its dependency was cancelled and replaced, so the order was fixable before a pass.
         self.foreman.store.put(dict(self.foreman.store.get(THIRD), state="human_waiting",
                                     blockedOn="this issue depends on #201, which ended cancelled"))
         self.set(THIRD, [200], by="day-desk", agent=True)
-        self.assertEqual(self.body(202), f"Depends on #200\n\n{ISSUE_BODY}")
+        self.assertEqual(self.body(202), f"Depends on #200\n\n{BODY_THREE}")
         wi = self.foreman.resolve_human(THIRD, "retry", "wait for the replacement", "day-desk", agent=True)
         self.assertEqual((wi["state"], wi["blockedOn"]), ("ready", None))
 
@@ -100,7 +107,7 @@ class SetDependenciesTest(unittest.TestCase):
             self.github.issues[(REPO, 12)] = {"number": 12, "state": "open", "body": "", "labels": [],
                                               "pull_request": {}}
             self.set(THIRD, [12])
-        self.assertEqual(self.body(202), f"Depends on #201\n\n{ISSUE_BODY}")
+        self.assertEqual(self.body(202), f"Depends on #201\n\n{BODY_THREE}")
 
     def test_a_change_that_would_make_a_cycle_is_refused(self):
         with self.assertRaisesRegex(ToolError, "#201 depends on #200, so #200 cannot depend on #201: "
@@ -108,7 +115,7 @@ class SetDependenciesTest(unittest.TestCase):
             self.set(FIRST, [201])
         with self.assertRaisesRegex(ToolError, "#201 depends on #200, so #200 cannot depend on #202"):
             self.set(FIRST, [202])  # 202 waits for 201, which waits for 200: a path, not a direct line
-        self.assertEqual(self.body(200), ISSUE_BODY)
+        self.assertEqual(self.body(200), BODY_ONE)
 
     def test_an_unknown_workitem_and_a_missing_name_are_refused(self):
         with self.assertRaisesRegex(ToolError, "o/r#9 is not a WorkItem the factory knows"):
@@ -125,6 +132,57 @@ class SetDependenciesTest(unittest.TestCase):
             self.assertEqual(result["workItem"]["id"], THIRD)
         self.assertEqual([h["detail"].get("agent") for h in self.foreman.store.history(THIRD)
                           if h["action"] == "dependencies_changed"], [True, None])
+
+
+class PathsOverlapTest(unittest.TestCase):
+    """ADR-0088: two ready nodes that list the same files run one after the other. Disjoint nodes
+    run side by side, and a node waiting for a person holds nothing."""
+    first_body = ISSUE_BODY.replace("## Acceptance", "Paths: app*, lib*\n\n## Acceptance")
+    disjoint = ISSUE_BODY.replace("## Acceptance", "Paths: web*\n\n## Acceptance")
+    same = ISSUE_BODY.replace("## Acceptance", "Paths: app*\n\n## Acceptance")
+
+    def setUp(self):
+        self.github, self.relay = FakeGitHub(), FakeRelay()
+        self.git = FakeGit(self.github).install(self)
+        self.foreman = Foreman(Store(":memory:"), self.github,
+                               Config(mcp_token="t", repos=frozenset({REPO})), self.relay)
+
+    def plan(self, one, two):
+        """Two independent issues of one repo: no Depends line, so only the overlap can hold two."""
+        self.foreman.start_plan(REPO, [{"title": "One", "body": one},
+                                       {"title": "Two", "body": two, "after": []}], "amteshwar")
+
+    def states(self):
+        return [self.foreman.store.get(f"{REPO}#{n}")["state"] for n in (200, 201)]
+
+    def test_two_ready_nodes_with_disjoint_paths_dispatch_in_one_tick(self):
+        self.plan(self.first_body, self.disjoint)
+        self.foreman.tick()
+        self.assertEqual(self.states(), ["implementing", "implementing"])
+
+    def test_two_ready_nodes_with_overlapping_paths_run_in_turn(self):
+        self.plan(self.first_body, self.same)
+        self.foreman.tick()
+        self.assertEqual(self.states(), ["implementing", "ready"])
+        self.assertEqual([h["detail"] for h in self.foreman.store.history(SECOND)
+                          if h["action"] == "waiting"], [{"on": FIRST, "paths": ["app*"]}])
+        first = self.foreman.store.get(FIRST)
+        self.git.files = (("app/one.py", 5, 0),)  # inside FIRST's fence: the push must land
+        self.relay.finish(first["providerTaskId"], output=result_line(first["activeWorkOrderId"]))
+        self.foreman.tick()  # the push lands and the PR opens
+        self.github.add_run(REPO, "c1")
+        self.github.add_verdict(REPO, self.github.pulls[-1]["number"], "MERGE", 1, "c1")
+        self.foreman.tick()
+        self.github.pulls[-1].update(state="closed", merged_at="2026-09-24T03:00:00Z")
+        self.foreman.tick()  # the merge ends the first node's hold
+        self.assertEqual(self.states(), ["closed", "implementing"])
+
+    def test_a_node_waiting_for_a_person_holds_no_files(self):
+        self.plan(self.first_body, self.same)
+        self.foreman.store.put(dict(self.foreman.store.get(FIRST), state="human_waiting",
+                                    blockedOn="two attempts failed", owner="amteshwar"))
+        self.foreman.tick()
+        self.assertEqual(self.states(), ["human_waiting", "implementing"])
 
 
 if __name__ == "__main__":

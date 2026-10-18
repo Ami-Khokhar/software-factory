@@ -63,6 +63,11 @@ if mode == "sizecheck":  # run the worker rule's size command in this copy, fail
 if mode == "fail":
     print("pi could not reach the model", file=sys.stderr)
     sys.exit(17)
+if mode == "salvage":  # a partial fix left uncommitted, then the harness runs out of clock (124)
+    open("app.txt", "w").write("partial fix\n")
+    sys.exit(124)
+if mode == "salvage-nomod":  # the clock runs out with the checkout unchanged
+    sys.exit(124)
 if mode == "timeout":
     print("step one", flush=True)
     print("CODEX_KEY: " + os.environ.get("CODEX_KEY", ""), flush=True)
@@ -269,6 +274,25 @@ class RunnerTest(unittest.TestCase):
     def test_no_change_fails(self):
         result, order = self.run_order("nothing")
         self.assertEqual((result["status"], result["error"]), ("failed", "the harness made no change"))
+        self.assertEqual(documents.check_result(result, order), [])
+
+    def test_a_harness_that_times_out_hands_back_its_partial_work(self):
+        """ADR-0086: exit 124 collects the checkout without verify and returns the partial as a
+        patch on the failed Result; the timeout stays the error and verification never runs."""
+        result, order = self.run_order("salvage")
+        self.assertEqual((result["status"], result["error"]), ("failed", "the harness timed out"))
+        self.assertEqual((result["patch"]["format"], result["patch"]["baseSha"]), ("unified", self.base))
+        self.assertIn("+partial fix", result["patch"]["diff"])
+        self.assertEqual((self.apply_on(self.base, result["patch"]["diff"]) / "app.txt").read_text(),
+                         "partial fix\n")  # collected uncommitted work, as collect() commits it first
+        self.assertEqual(list(self.phases_of(result)), [
+            "checkout", "environment setup", "harness execution", "patch collection"])
+        self.assertEqual(documents.check_result(result, order), [])
+
+    def test_a_timeout_with_no_change_returns_no_patch_and_todays_error(self):
+        result, order = self.run_order("salvage-nomod")
+        self.assertEqual((result["status"], result["error"]), ("failed", "the harness timed out"))
+        self.assertNotIn("patch", result)  # a refused or empty partial is no partial
         self.assertEqual(documents.check_result(result, order), [])
 
     def test_a_whole_pull_request_over_its_limits_fails_before_the_verify(self):
@@ -773,6 +797,18 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(result["status"], "completed", result.get("error"))
         self.assertIn("+fixed", result["patch"]["diff"])
         self.assertFalse(self.marker.exists(), "host git ran in a tree the harness wrote")
+
+
+class WorkerInputRulesTest(unittest.TestCase):
+    """documents.worker_input: the prose rules the runner passes to the worker."""
+
+    def test_a_new_test_that_must_pass_on_the_old_code_is_told_to_name_itself(self):
+        wi = workitem(id="o/r#7", repo="o/r", issueNumber=7, goal="Fix the app")
+        order = documents.workorder(wi, "implement", 0,
+                                    Config(mcp_token="t", repos=frozenset()), "abc123")
+        text = documents.worker_input(order, "factory/7")
+        self.assertIn("A new test that must also pass on the old code starts its docstring "
+                      "with `Guard:`", text)
 
 
 class SandboxTest(unittest.TestCase):

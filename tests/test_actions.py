@@ -11,7 +11,7 @@ from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
 from factory_mcp.store import Store
-from tests.fakes import FakeGit, FakeGitHub, FakeRelay, result_line
+from tests.fakes import ISSUE_BODY, FakeGit, FakeGitHub, FakeRelay, result_line
 
 REPO, ID = "o/r", "o/r#7"
 ROOT = Path(__file__).resolve().parent.parent
@@ -318,6 +318,64 @@ class ActionsTest(unittest.TestCase):
         self.tick()
         self.github.add_verdict(REPO, 100, "MERGE", 1, "c0-older")
         self.assertEqual(self.tick()["state"], "pr_open")
+
+
+class PathsFenceTest(unittest.TestCase):
+    """ADR-0087: an issue's `Paths:` line fences the source files its pass may change, and a pushed
+    source change outside them fails the attempt. Tests and docs can change anywhere."""
+
+    body = ISSUE_BODY.replace("## Acceptance", "Paths: factory_mcp/*\n\n## Acceptance")
+
+    def setUp(self):
+        self.fence(self.body)
+
+    def fence(self, body):
+        """A foreman whose issue carries this body."""
+        self.github, self.relay = FakeGitHub(), FakeRelay()
+        self.git = FakeGit(self.github).install(self)
+        self.github.add_issue(REPO, 7, body=body)
+        self.foreman = Foreman(Store(":memory:"), self.github,
+                               Config(mcp_token="t", repos=frozenset({REPO})), self.relay)
+        self.foreman.intake(REPO, 7)
+
+    def tick(self):
+        wi = self.foreman.tick(ID)["workItem"]
+        self.assertEqual(schema_errors("workitem", wi), [])
+        return wi
+
+    def dispatched(self):
+        wi = self.tick()
+        self.assertEqual(wi["state"], "implementing")
+        return wi, self.relay.tasks[wi["providerTaskId"]]
+
+    def test_a_pushed_source_change_outside_the_fence_fails_the_attempt_and_names_the_file(self):
+        wi, task = self.dispatched()
+        self.assertEqual(self.foreman.store.workorders(ID)[0]["constraints"]["allowedPaths"],
+                         ["factory_mcp/*"])
+        self.git.files = (("src/outside.py", 10, 0),)
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
+        wi = self.tick()
+        self.assertEqual(wi["state"], "ready", wi.get("attempts"))
+        self.assertIn("changes src/outside.py, outside this node's Paths", wi["attempts"][0])
+
+    def test_a_test_or_doc_file_outside_the_fence_is_accepted(self):
+        wi, task = self.dispatched()
+        self.git.files = (("factory_mcp/new.py", 10, 0), ("tests/extra_test.py", 4, 0),
+                          ("docs/extra.md", 3, 0))
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
+        self.assertEqual(self.tick()["state"], "pr_open")
+
+    def test_an_issue_without_paths_runs_unfenced(self):
+        self.fence(ISSUE_BODY)
+        wi, task = self.dispatched()
+        self.assertNotIn("allowedPaths", self.foreman.store.workorders(ID)[0]["constraints"])
+        self.git.files = (("src/anywhere.py", 10, 0),)
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
+        self.assertEqual(self.tick()["state"], "pr_open")
+
+    def test_the_workers_rules_list_the_fence(self):
+        _, task = self.dispatched()
+        self.assertIn("change source only inside them: factory_mcp/*", task["input"])
 
 
 if __name__ == "__main__":

@@ -67,6 +67,11 @@ class RouteTest(unittest.TestCase):
                           ("pi-glm-factory", "opencode-glm-factory", "pi-deepseek-factory", "codex")],
                          ["glm", "glm", "deepseek", "codex"])
 
+    def test_a_model_id_is_read_for_its_family_too(self):
+        self.assertEqual([family(name) for name in
+                          ("deepseek-v4.1-flash", "glm-5.3-flash", "mimo-v2.6-flash-free", "codex")],
+                         ["deepseek", "glm", "mimo", "codex"])
+
     def test_a_timeout_family_is_avoided_while_another_family_may_run(self):
         """ADR-0081: pi-glm and opencode-glm are one model family, so avoiding the family passes
         both of them, and the preference never widens the set of workers that may run."""
@@ -160,6 +165,27 @@ class WorkerTest(unittest.TestCase):
         self.assertEqual(wi["state"], "human_waiting")
         self.assertIn("names codex-unsandboxed, which is not in FACTORY_WORKERS (codex, pi-glm)", wi["blockedOn"])
         self.assertEqual(self.relay.tasks, {})
+
+    def test_a_pass_never_goes_to_the_gate_reviewers_family(self):
+        """ADR-0085: the gate reviews deepseek-v4.1-flash, so the first pass skips pi-deepseek-factory."""
+        foreman = self.foreman(workers=(("pi-deepseek-factory", "local"), ("pi-glm-factory", "local")))
+        self.github.contents[(REPO, ".github/pr-gatekeeper.json")] = '{"reviewer_model": "deepseek-v4.1-flash"}'
+        wi = foreman.tick(ID)["workItem"]
+        self.assertEqual(self.relay.tasks[wi["providerTaskId"]]["agentId"], "pi-glm-factory")
+
+    def test_a_worker_line_that_names_only_the_reviewers_family_waits_for_a_person(self):
+        foreman = self.foreman(body=f"Worker: pi-deepseek-factory\n\n{ISSUE_BODY}",
+                               workers=(("pi-deepseek-factory", "local"), ("pi-glm-factory", "local")))
+        self.github.contents[(REPO, ".github/pr-gatekeeper.json")] = '{"reviewer_model": "deepseek-v4.1-flash"}'
+        wi = foreman.tick(ID)["workItem"]
+        self.assertEqual((wi["state"], wi["blockedOn"]),
+                         ("human_waiting", "every allowed worker is in the reviewer family deepseek"))
+        self.assertEqual(self.relay.tasks, {})
+
+    def test_a_repo_without_a_gate_config_routes_as_before(self):
+        foreman = self.foreman(workers=(("pi-deepseek-factory", "local"), ("pi-glm-factory", "local")))
+        wi = foreman.tick(ID)["workItem"]
+        self.assertEqual(self.relay.tasks[wi["providerTaskId"]]["agentId"], "pi-deepseek-factory")
 
     def test_a_patch_to_a_protected_path_is_never_pushed(self):
         # A pushed workflow file runs (`on: push`) with the repo's secrets before any later check.

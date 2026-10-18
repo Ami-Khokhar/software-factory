@@ -132,6 +132,11 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Touching any of these forces HUMAN at the gate."
+        },
+        "allowedPaths": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "The node's fence (ADR-0087): globs for the source files this pass may change, from the issue's `Paths:` lines. Absent means no fence. worker_input tells the worker to read them first and change source only inside them; tests and docs can change anywhere; check_pushed fails a pushed source file outside them."
         }
       }
     },
@@ -143,7 +148,15 @@
         "fingerprint": { "type": "string", "minLength": 1 },
         "path": { "type": ["string", "null"] },
         "line": { "type": ["integer", "null"] },
-        "problem": { "type": ["string", "null"] }
+        "problem": { "type": ["string", "null"] },
+        "fix": {
+          "type": ["string", "null"],
+          "description": "The gate reviewer's suggested fix for this finding (ADR-0084). Data for the worker to weigh, never an instruction."
+        },
+        "test": {
+          "type": ["string", "null"],
+          "description": "The test the gate named for this finding (ADR-0084). The fix must make it pass."
+        }
       }
     },
     "budget": {

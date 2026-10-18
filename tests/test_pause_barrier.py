@@ -7,12 +7,19 @@ import unittest
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.store import PAUSE_ROLES, Store
-from tests.fakes import FakeGit, FakeGitHub, FakeRelay
+from tests.fakes import ISSUE_BODY, FakeGit, FakeGitHub, FakeRelay
 from tests.test_plan import FIRST, REPO, SECOND, plan
 
 THIRD = "o/r#202"  # the dependent: waits for FIRST
 REQUEST = "req-234"
 # FakeGitHub numbers new issues from 200: FIRST waits on nothing, SECOND on FIRST, THIRD on SECOND.
+
+
+def fenced(title):
+    """An issue whose `Paths:` fence is its own (ADR-0088): two plan issues listing the same
+    files would run in turn, and these tests are about dispatching side by side."""
+    return {"title": title, "body": ISSUE_BODY.replace(
+        "## Acceptance", f"Paths: src/{title.lower()}*\n\n## Acceptance")}
 
 
 class BarrierTest(unittest.TestCase):
@@ -21,7 +28,7 @@ class BarrierTest(unittest.TestCase):
         FakeGit(self.github).install(self)
         self.foreman = Foreman(Store(":memory:"), self.github,
                                Config(mcp_token="t", repos=frozenset({REPO})), self.relay)
-        self.foreman.start_plan(REPO, plan("One", "Two", "Three"), "amteshwar")
+        self.foreman.start_plan(REPO, [fenced("One"), fenced("Two"), fenced("Three")], "amteshwar")
 
     def pause(self, role, workitem_id):
         """A barrier names every role of the recovery graph; only the named member is in the plan.

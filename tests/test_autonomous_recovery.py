@@ -8,7 +8,7 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
-from factory_mcp import tools
+from factory_mcp import patches, tools
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
@@ -20,6 +20,19 @@ ID = "o/r#7"
 POOL = (("pi-glm-factory", "local"), ("opencode-glm-factory", "local"), ("pi-deepseek-factory", "local"))
 ROOT = Path(__file__).resolve().parent.parent
 TIMED_OUT = "task timed_out: Agent exceeded 1800000 ms"
+PARTIAL_WORK = ("A worker ran out of time. Its unfinished work is the commit you start from. "
+                "Check each acceptance bullet against the code, not against any report. "
+                "Keep what is right, fix or remove the rest, and finish.")
+
+
+def timeout_result(order_id, diff="diff --git a/src/app.py b/src/app.py\n"):
+    """A Result from a pass that ran out of clock (ADR-0086): failed with the timeout error,
+    carrying the partial patch the runner salvaged."""
+    return "working...\n" + json.dumps({
+        "schemaVersion": "factory.result/v1", "workOrderId": order_id, "status": "failed",
+        "error": "the harness timed out",
+        "patch": {"format": "unified", "diff": diff},
+        "evidence": [], "startedAt": "2026-09-24T00:00:00Z", "finishedAt": "2026-09-24T00:10:00Z"})
 
 
 def schema_errors(name, doc):
@@ -64,6 +77,62 @@ class ForemanCase(unittest.TestCase):
 
     def results(self):
         return [h["detail"] for h in self.foreman.store.history(ID) if h["action"] == "recovery_result"]
+
+
+class ProtectedGit(FakeGit):
+    """FakeGit that keeps patches.apply's protected-path wall: a patch whose diff names a
+    protected path is refused with PatchError, as the real push refuses it."""
+    def apply(self, url, token, branch, base_sha, patch, message, force, protected=(), limits=None):
+        if any(name in patch.get("diff", "") for name in protected):
+            raise patches.PatchError(f"patch changes protected path {protected[0]}")
+        return super().apply(url, token, branch, base_sha, patch, message, force, protected, limits)
+
+
+class SalvageTest(ForemanCase):
+    """ADR-0086: a timed-out pass's partial work is kept on a scratch branch and the next pass
+    finishes it. These are runner timeouts — a failed Result line — not relay kills."""
+    workers = POOL
+
+    def keep_partial(self, diff="diff --git a/src/app.py b/src/app.py\n"):
+        """One pass that ran out of clock with partial work, and the tick that keeps it."""
+        wi, task = self.dispatch()
+        self.relay.finish(task["id"], output=timeout_result(wi["activeWorkOrderId"], diff))
+        return self.tick()
+
+    def test_a_timed_out_pass_keeps_its_partial_work_for_the_next_pass(self):
+        wi = self.keep_partial()
+        self.assertEqual((self.git.pushes[-1]["branch"], self.git.pushes[-1]["base"]),
+                         ("factory-wip/7", "base0"))
+        self.assertEqual((wi["state"], wi["wip"]["branch"], wi["wip"]["sha"], wi["wip"]["moves"]),
+                         ("ready", "factory-wip/7", "c1", 1))
+        wi, _ = self.dispatch()  # the rescue pass bases itself on the kept work
+        order = self.foreman.store.workorders(ID)[-1]
+        self.assertEqual(order["baseSha"], "c1")
+        self.assertEqual(order["findingsToAddress"][0]["problem"], PARTIAL_WORK)
+
+    def test_a_third_timeout_does_not_move_the_wip_again(self):
+        self.keep_partial()  # salvage 1: wip moves to c1 (moves 1)
+        self.keep_partial()  # its rescue times out too: salvage 2 (moves 2)
+        wi = self.keep_partial()  # that rescue times out again: no third salvage push
+        self.assertEqual((wi["state"], wi["wip"]["moves"], wi["wip"]["sha"]), ("blocked", 2, "c1"))
+        self.assertEqual(len([p for p in self.git.pushes if p["branch"] == "factory-wip/7"]), 2)
+
+    def test_a_completed_result_retires_the_scratch_branch(self):
+        self.keep_partial()
+        wi, task = self.dispatch()
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
+        wi = self.tick()
+        self.assertIsNone(wi["wip"])
+        self.assertEqual([h["detail"].get("branch") for h in self.foreman.store.history(ID)
+                          if h["action"] == "wip_retired"], ["factory-wip/7"])
+
+    def test_a_partial_touching_a_protected_path_is_not_kept(self):
+        ProtectedGit(self.github).install(self)
+        wi = self.keep_partial(
+            diff="diff --git a/.github/pr-gatekeeper.json b/.github/pr-gatekeeper.json\n")
+        self.assertIsNone(wi.get("wip"))
+        self.assertEqual(self.git.pushes, [])  # nothing was pushed at all
+        self.assertEqual(wi["state"], "ready")  # the failed attempt stands, salvage or not
 
 
 class WorkerFailoverTest(ForemanCase):
@@ -127,6 +196,15 @@ class WorkerFailoverTest(ForemanCase):
                                           "Fix the cause named in attempts, then call factory_resolve_human.")
         self.assertEqual([(r["action"], r["succeeded"]) for r in self.results()],
                          [("worker_swap", False), ("block_deferred", False)])
+
+    def test_the_deferral_never_lands_on_a_worker_from_the_gate_reviewers_family(self):
+        """ADR-0085: the deferral still prefers outside the timed-out family (ADR-0081), but the
+        gate reviewer's family is a hard wall: with no other family left, the block stands."""
+        self.github.contents[(REPO, ".github/pr-gatekeeper.json")] = '{"reviewer_model": "deepseek-v4.1-flash"}'
+        self.relay_timeout()  # pi-glm-factory; the swap falls back to the same family, never deepseek
+        wi = self.relay_timeout()  # opencode-glm-factory: two strikes, and no untried worker outside deepseek
+        self.assertEqual(wi["state"], "blocked")
+        self.assertEqual(self.recoveries("block_deferred"), [])
 
     def test_two_timeouts_block_when_no_untried_worker_remains(self):
         """The block stands when routing's only choice is a worker that already failed here."""

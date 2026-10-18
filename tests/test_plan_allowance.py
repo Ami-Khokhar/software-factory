@@ -15,6 +15,7 @@ from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
 from factory_mcp.store import Conflict, Store
 from tests.fakes import ISSUE_BODY, FakeGitHub, FakeRelay, workitem
+from tests.test_plan import FENCED  # ADR-0087: a plan item needs a Paths line
 
 REPO, ORIGINAL, REPLACEMENT = "o/r", "o/r#201", 300
 PLAN = "plan/factory#239"
@@ -232,8 +233,8 @@ class AllowanceReplacementTest(unittest.TestCase):
                                Config(mcp_token="t", repos=frozenset({REPO})), FakeRelay())
         self.agent, self.owner = tools.build(self.foreman.store, self.foreman, agent=True), \
             tools.build(self.foreman.store, self.foreman)
-        self.foreman.start_plan(REPO, [{"title": "One", "body": ISSUE_BODY},
-                                       {"title": "Two", "body": ISSUE_BODY}], "Ami-Khokhar")
+        self.foreman.start_plan(REPO, [{"title": "One", "body": FENCED},
+                                       {"title": "Two", "body": FENCED}], "Ami-Khokhar")
         self.github.add_issue(REPO, REPLACEMENT)
         self.foreman.store.put(dict(self.foreman.store.get(ORIGINAL), state="human_waiting",
                                     blockedOn="two attempts failed"))

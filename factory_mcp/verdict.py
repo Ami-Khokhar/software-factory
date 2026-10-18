@@ -41,8 +41,17 @@ def to_verdict(marker, repo, pr_number, published_at):
             "fingerprint": fingerprint(f.get("path"), f["problem"]),
             "severity": "blocking" if f.get("severity") == "blocking" else "minor",
             "path": f.get("path"), "line": f.get("line") if isinstance(f.get("line"), int) else None,
-            "problem": f["problem"], "fix": f.get("fix"),
+            "problem": f["problem"], "fix": f.get("fix"), "test": f.get("test"),
         })
+    if marker.get("outcome") == "CHANGES":  # the pipeline's problems are blocking findings (ADR-0084)
+        for p in marker.get("problems") or []:
+            if not isinstance(p, dict) or not p.get("problem"):
+                continue
+            findings.append({
+                "fingerprint": fingerprint(p.get("path"), p["problem"]),
+                "severity": "blocking", "path": p.get("path"), "line": None,
+                "problem": p["problem"], "fix": None, "test": None,
+            })
     return {"schemaVersion": "factory.verdict/v1", "repo": repo, "prNumber": pr_number,
             "round": marker["round"], "headSha": marker["head_sha"], "outcome": marker["outcome"],
             "findings": findings, "publishedAt": published_at}

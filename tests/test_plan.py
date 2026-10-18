@@ -17,10 +17,12 @@ from tests.test_actions import schema_errors
 
 REPO, FIRST, SECOND, THIRD = "o/r", "o/r#200", "o/r#201", "o/r#202"  # FakeGitHub numbers new issues from 200
 NOT_TO_CHANGE = "- AGENTS.md keeps its rules — done when: `git diff main` does not list AGENTS.md\n"
+FENCED = ISSUE_BODY.replace("## Acceptance",
+                            "Paths: tests/*, docs/*, src/*\n\n## Acceptance")  # ADR-0087
 
 
 def plan(*titles):
-    return [{"title": title, "body": ISSUE_BODY} for title in titles]
+    return [{"title": title, "body": FENCED} for title in titles]
 
 
 class StartPlanTest(unittest.TestCase):
@@ -35,8 +37,8 @@ class StartPlanTest(unittest.TestCase):
         issues = [self.github.issues[(REPO, number)] for number in numbers]
         self.assertEqual([issue["title"] for issue in issues], ["One", "Two", "Three"])
         self.assertEqual([issue["body"] for issue in issues],
-                         [ISSUE_BODY, f"Depends on #{numbers[0]}\n\n{ISSUE_BODY}",
-                          f"Depends on #{numbers[1]}\n\n{ISSUE_BODY}"])
+                         [FENCED, f"Depends on #{numbers[0]}\n\n{FENCED}",
+                          f"Depends on #{numbers[1]}\n\n{FENCED}"])
         self.assertEqual([[label["name"] for label in issue["labels"]] for issue in issues],
                          [["factory:ready"]] * 3)
         for number in numbers:
@@ -64,6 +66,12 @@ class StartPlanTest(unittest.TestCase):
                 self.foreman.start_plan(repo, issues, "amteshwar")
         with self.assertRaisesRegex(ToolError, "needs the name of the person who approved it"):
             self.foreman.start_plan(REPO, plan("One"), " ")
+        self.assertEqual((self.github.issues, self.foreman.store.all()), ({}, []))
+
+    def test_an_item_without_a_paths_line_is_refused_and_opens_nothing(self):
+        with self.assertRaisesRegex(ToolError, "issue 1 of the plan needs a 'Paths: <glob>, <glob>'"):
+            self.foreman.start_plan(REPO, [{"title": "One", "body": ISSUE_BODY}] + plan("Two"),
+                                    "amteshwar")
         self.assertEqual((self.github.issues, self.foreman.store.all()), ({}, []))
 
     def test_a_github_failure_mid_plan_names_the_issues_already_opened(self):
@@ -95,7 +103,7 @@ class StartPlanTest(unittest.TestCase):
         for mention, accepted in cases:
             with self.subTest(mention):
                 self.setUp()
-                body = ISSUE_BODY + f"- it mentions {mention} — done when: the README says so\n"
+                body = FENCED + f"- it mentions {mention} — done when: the README says so\n"
                 if accepted:
                     self.assertEqual(len(self.foreman.start_plan(REPO, [{"title": "T", "body": body}],
                                                                  "amteshwar")["issues"]), 1)
@@ -104,16 +112,16 @@ class StartPlanTest(unittest.TestCase):
                         self.foreman.start_plan(REPO, [{"title": "T", "body": body}], "amteshwar")
 
     def test_after_empty_opens_the_issue_with_no_depends_on_line(self):
-        made = self.foreman.start_plan(REPO, [{"title": "One", "body": ISSUE_BODY},
-                                              {"title": "Two", "body": ISSUE_BODY, "after": []}],
+        made = self.foreman.start_plan(REPO, [{"title": "One", "body": FENCED},
+                                              {"title": "Two", "body": FENCED, "after": []}],
                                        "amteshwar")
         numbers = [item["issue"] for item in made["issues"]]
         self.assertEqual([self.github.issues[(REPO, number)]["body"] for number in numbers],
-                         [ISSUE_BODY, ISSUE_BODY])
+                         [FENCED, FENCED])
 
     def test_an_after_position_that_is_self_later_repeated_or_not_whole_opens_no_issue(self):
         def item(title, after=None):
-            return {"title": title, "body": ISSUE_BODY, **({} if after is None else {"after": after})}
+            return {"title": title, "body": FENCED, **({} if after is None else {"after": after})}
         cases = [
             ("itself", [item("One", [1])], "issue 1 of the plan needs after"),
             ("later", [item("One"), item("Two", [3])], "issue 2 of the plan needs after"),
@@ -130,11 +138,11 @@ class StartPlanTest(unittest.TestCase):
     def test_the_factory_start_plan_tool_accepts_after_and_passes_it_to_start_plan(self):
         tool = tools.build(self.foreman.store, self.foreman)["factory_start_plan"]
         args = {"repo": REPO, "by": "amteshwar",
-                "issues": [{"title": "One", "body": ISSUE_BODY},
-                           {"title": "Two", "body": ISSUE_BODY, "after": []}]}
+                "issues": [{"title": "One", "body": FENCED},
+                           {"title": "Two", "body": FENCED, "after": []}]}
         self.assertEqual([e.message for e in Draft202012Validator(tool.input_schema).iter_errors(args)], [])
         made = tool.fn(args)  # after reached start_plan: no chain line was written for issue two
-        self.assertEqual(self.github.issues[(REPO, made["issues"][1]["issue"])]["body"], ISSUE_BODY)
+        self.assertEqual(self.github.issues[(REPO, made["issues"][1]["issue"])]["body"], FENCED)
 
 
 class DependsOnTest(unittest.TestCase):
@@ -225,9 +233,9 @@ class AfterFanInTest(unittest.TestCase):
         FakeGit(self.github).install(self)
         self.foreman = Foreman(Store(":memory:"), self.github, Config(mcp_token="t", repos=frozenset({REPO})),
                                self.relay)
-        self.foreman.start_plan(REPO, [{"title": "One", "body": ISSUE_BODY},
-                                       {"title": "Two", "body": ISSUE_BODY},
-                                       {"title": "Three", "body": ISSUE_BODY, "after": [1, 2]}], "amteshwar")
+        self.foreman.start_plan(REPO, [{"title": "One", "body": FENCED},
+                                       {"title": "Two", "body": FENCED},
+                                       {"title": "Three", "body": FENCED, "after": [1, 2]}], "amteshwar")
 
     def get(self, workitem_id):
         wi = self.foreman.store.get(workitem_id)
@@ -247,7 +255,7 @@ class AfterFanInTest(unittest.TestCase):
 
     def test_after_two_positions_writes_two_lines_and_the_work_waits_until_both_merge(self):
         self.assertEqual(self.github.issues[(REPO, 202)]["body"],
-                         f"Depends on #200\nDepends on #201\n\n{ISSUE_BODY}")
+                         f"Depends on #200\nDepends on #201\n\n{FENCED}")
         self.foreman.tick()  # only ONE runs: TWO waits on the chain, THREE on both
         self.assertEqual((self.get(FIRST)["state"], self.get(SECOND)["waitingOn"]), ("implementing", 200))
         self.assertEqual((self.get(THIRD)["state"], self.get(THIRD)["waitingOn"]), ("ready", 200))

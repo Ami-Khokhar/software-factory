@@ -13,7 +13,7 @@ from factory_mcp.mcp import ToolError
 from factory_mcp.store import REQUEST_PHASES, Store
 from tests.fakes import ISSUE_BODY, FakeGit, FakeGitHub, FakeRelay
 from tests.test_dependencies import THIRD
-from tests.test_plan import FIRST, REPO, SECOND, plan
+from tests.test_plan import FIRST, REPO, SECOND, FENCED, plan
 
 ORIGINAL = SECOND  # 201, waiting on 200 (FIRST) after start_plan One, Two, Three
 REQUEST = f"replace/{ORIGINAL}"
@@ -23,7 +23,7 @@ UNRELATED = MY_NUMBER - 1  # 200, an open issue 201 waits on that 202 must keep 
 
 
 def spec(title):
-    return {"title": title, "body": ISSUE_BODY}
+    return {"title": title, "body": FENCED}
 
 
 class FlakyGitHub(FakeGitHub):
@@ -121,11 +121,11 @@ class ReplaceCreationTest(unittest.TestCase):
                           self.github.issues[(REPO, second)]["labels"]],
                          [[{"name": "factory:proposed"}], [{"name": "factory:proposed"}]])
         self.assertEqual(self.github.issues[(REPO, first)]["body"],
-                         f"Depends on #200\n\n{ISSUE_BODY}\n{marker.format(1)}")
+                         f"Depends on #200\n\n{FENCED}\n{marker.format(1)}")
         self.assertEqual(self.github.issues[(REPO, second)]["body"],
-                         f"Depends on #{first}\n\n{ISSUE_BODY}\n{marker.format(2)}")
+                         f"Depends on #{first}\n\n{FENCED}\n{marker.format(2)}")
         self.assertEqual(self.github.issues[(REPO, LAST)]["body"],
-                         f"Depends on #{second}\n\n{ISSUE_BODY}")
+                         f"Depends on #{second}\n\n{FENCED}")
         self.assertEqual([wi["state"] for wi in
                           (self.foreman.store.get(f"o/r#{n}") for n in (first, second)) if wi], [])
         self.assertEqual(self.foreman.store.active_pauses(), [])  # the cleanup completed
@@ -202,8 +202,8 @@ class ReplaceCreationTest(unittest.TestCase):
         self.replace([spec("Recover this")])
         (replacement,) = self.proposals()
         self.assertEqual(self.github.issues[(REPO, LAST)]["body"],
-                         f"Depends on #{replacement}\nDepends on #{UNRELATED}\n\n{ISSUE_BODY}")
-        self.assertEqual(self.github.issues[(REPO, UNRELATED)]["body"], ISSUE_BODY)  # untouched
+                         f"Depends on #{replacement}\nDepends on #{UNRELATED}\n\n{FENCED}")
+        self.assertEqual(self.github.issues[(REPO, UNRELATED)]["body"], FENCED)  # untouched
         self.assertEqual(self.github.issues[(REPO, MY_NUMBER)]["state"], "closed")
         # the original closes once: a duplicate write would leave a second failure point
         # after GitHub already closed it and before the journal reached done (ADR-0065)
@@ -224,7 +224,7 @@ class ReplaceCreationTest(unittest.TestCase):
         self.replace([spec("Recover this")])  # the same journalled call replays the rewiring
         (replacement,) = self.proposals()
         self.assertEqual(self.github.issues[(REPO, LAST)]["body"],
-                         f"Depends on #{replacement}\nDepends on #{UNRELATED}\n\n{ISSUE_BODY}\n"
+                         f"Depends on #{replacement}\nDepends on #{UNRELATED}\n\n{FENCED}\n"
                          "A line GitHub wrote on its own")
         self.assertEqual((self.foreman.store.get(ORIGINAL)["state"],
                           self.foreman.store.active_pauses()), ("cancelled", []))
@@ -239,7 +239,7 @@ class ReplaceCreationTest(unittest.TestCase):
             self.replace([spec("Recover this")])
         (replacement,) = self.proposals()
         self.assertEqual(self.github.issues[(REPO, LAST)]["body"],
-                         f"Depends on #{replacement}\nDepends on #{UNRELATED}\n\n{ISSUE_BODY}")
+                         f"Depends on #{replacement}\nDepends on #{UNRELATED}\n\n{FENCED}")
         self.assertEqual(self.foreman.store.request(REQUEST)["phase"], REQUEST_PHASES[1])
         before = self.github.issues[(REPO, LAST)]["body"]
         self.replace([spec("Recover this")])
@@ -258,14 +258,14 @@ class ReplaceCreationTest(unittest.TestCase):
         created = self.proposals()
         self.assertEqual(len(created), 1)
         self.assertEqual(self.github.issues[(REPO, LAST)]["body"],
-                         f"Depends on #{MY_NUMBER}\nDepends on #{UNRELATED}\n\n{ISSUE_BODY}")
+                         f"Depends on #{MY_NUMBER}\nDepends on #{UNRELATED}\n\n{FENCED}")
         self.restart()
         self.assertTrue(self.foreman.store.active_pauses(), "the kill did not keep the barrier")
         self.replace([spec("Recover this")])  # the resume adopts the proposal and finishes
         (replacement,) = created
         self.assertEqual(self.proposals(), created)  # the resume adopted, it opened nothing again
         self.assertEqual(self.github.issues[(REPO, LAST)]["body"],
-                         f"Depends on #{replacement}\nDepends on #{UNRELATED}\n\n{ISSUE_BODY}")
+                         f"Depends on #{replacement}\nDepends on #{UNRELATED}\n\n{FENCED}")
         self.assertEqual((self.foreman.store.request(REQUEST)["phase"],
                           self.foreman.store.active_pauses()), (REQUEST_PHASES[2], []))
 
@@ -384,7 +384,7 @@ class ReplaceCreationTest(unittest.TestCase):
         self.github.fail_create = 1  # the check must win even though a create would fail too
         for bad, message in [
                 ({"title": "", "body": ISSUE_BODY}, "the planned replacement at position 1"),
-                ({"title": "Clean thing", "body": ISSUE_BODY + "\n\nDepends on #200"}, "Depends on"),
+                ({"title": "Clean thing", "body": FENCED + "\n\nDepends on #200"}, "Depends on"),
                 ({"title": ".github/ thing", "body": ISSUE_BODY}, "which only a person changes")]:
             with self.subTest(bad=bad["title"]):
                 with self.assertRaisesRegex(ToolError, message.replace("#", "")):

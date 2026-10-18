@@ -89,6 +89,10 @@ standard in the repo's AGENTS.md ask:
   for what must not change.
 - No issue names `.github/` or `AGENTS.md`, not even in the bullet for what must not change.
   Those paths need a person, and factory_start_plan refuses a plan that names them.
+- Clone the repo and read the files the goal touches before you write the issues. Put a
+  `Paths: <glob>, <glob>` line in each issue body — the source files that issue may change. Every
+  pass is fenced to its issue's `Paths:`: a source file outside them fails the attempt, while tests
+  and docs can change anywhere. factory_start_plan refuses an issue without the line.
 - Put the issues in the order they must run: each one can build on the ones before it. Then set
   `after` only where the dependency is real: an issue that builds on earlier ones gets their
   1-based positions as `after`, and an issue with no real dependency gets `after: []` so it starts
@@ -181,6 +185,11 @@ A factory-watch alert names a WorkItem that waits on the owner. When the owner r
    gives up on the WorkItem.
 3. Call factory_resolve_human with the id, the choice, the owner's own words as the note, and the
    owner's name as `by`.
+
+Before you answer `retry` on a stuck-round incident — the same problem reported in several gate
+rounds — read the PR diff and the gate's findings in factory_status first, then put one decision
+line in the note: what you read, and why this retry can succeed where the round that failed did
+not. The worker sees the note as a finding.
 
 When the WorkItem is `exhausted`, a `retry` would go past its budget of passes, or you already
 answered its current escalation, the tool refuses unless the owner, in this chat, asked for that

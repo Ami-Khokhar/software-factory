@@ -9,13 +9,15 @@ the command exits nonzero with a message naming what to do next: it never
 silently skips a case and never claims a pass it did not run. Cases are
 deterministic and need no model credential: they run real `docker run`
 containers through runner.Sandbox and exercise success, failing verification,
-timeout output, secret redaction and isolation, the environment preflight and
+timeout output and its salvage of the partial work, secret redaction and isolation,
+the environment preflight and
 the early size rejection, then check that no container or scratch dir survives.
 
 The JSON report printed last records, for every case, the commands it ran and
 what each showed. A case without a recorded command counts as a failure.
 """
 import argparse
+import io
 import json
 import os
 import shutil
@@ -23,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import redirect_stdout
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -129,6 +132,67 @@ def case_timeout(image, tmp, case):
     case.observe("docker run: the hung harness is killed with its output kept",
                  code == 124 and "step one" in (out + err), (out + err)[:120])
     case.observe(f"docker: the kill happened near the limit ({elapsed:.1f}s)", elapsed < 30)
+
+
+def case_timeout_salvage(image, tmp, case):
+    """ADR-0086: the harness runs out of clock holding partial work. The runner collects it
+    without verify, so its Result is failed with the timeout error and carries the partial
+    patch — a timed-out pass hands its work back instead of throwing it away."""
+    work, _ = fixture(tmp)
+    env = dict(os.environ, GIT_AUTHOR_NAME="f", GIT_AUTHOR_EMAIL="f@f",
+               GIT_COMMITTER_NAME="f", GIT_COMMITTER_EMAIL="f@f")
+
+    def git(*args, cwd=work):
+        return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, env=env)
+
+    # The base commit carries the gate config (preflight refuses a WorkOrder with no verify
+    # command), and origin is a local bare remote behind an insteadOf rewrite of the https URL,
+    # so prepare()'s fetch runs offline while origin_repo() still reads o/r.
+    os.makedirs(os.path.join(work, ".github"))
+    with open(os.path.join(work, ".github", "pr-gatekeeper.json"), "w") as handle:
+        handle.write('{"verify": "true"}')
+    git("add", "-A")
+    git("commit", "-q", "--amend", "--no-edit")
+    base = git("rev-parse", "HEAD").stdout.decode().strip()
+    origin = os.path.join(tmp, "origin.git")
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", origin], check=True,
+                   capture_output=True, env=env)
+    git("push", "-q", origin, "HEAD:main")
+    git("remote", "add", "origin", "https://github.com/o/r.git")
+    git("config", f"url.{origin}.insteadOf", "https://github.com/o/r.git")
+    git("remote", "set-head", "origin", "main")
+
+    order = {"schemaVersion": "factory.workorder/v1", "id": "o/r#7:0:implement:0",
+             "workItemId": "o/r#7", "kind": "implement", "repo": "o/r", "baseSha": base,
+             "goal": "Stop the crash loop on startup", "budget": {"maxPasses": 4, "wallMs": 180000},
+             "constraints": {"maxChangedLines": 600, "maxChangedFiles": 20}}
+    text = "WorkOrder:\n" + json.dumps(order)
+    capture, previous = io.StringIO(), os.getcwd()
+    try:
+        os.chdir(work)
+        with redirect_stdout(capture):
+            # The harness writes its partial fix uncommitted, then never returns: the runner
+            # kills it at 84s (its floor of 120 wall seconds times 0.7) with exit 124.
+            runner.main(["--image", image, "--", "sh", "-c",
+                         "printf 'partial fix\\n' > app.txt && sleep 600", text])
+    finally:
+        os.chdir(previous)
+    lines = [line for line in capture.getvalue().splitlines() if line.strip()]
+    try:
+        result = json.loads(lines[-1])
+    except (IndexError, ValueError):
+        return case.fail(f"the runner printed no Result line: {capture.getvalue()[-300:]}")
+    case.observe("the Result line is failed with the timeout error",
+                 result.get("status") == "failed" and result.get("error") == "the harness timed out",
+                 json.dumps({key: result.get(key) for key in ("status", "error")}))
+    patch = result.get("patch") or {}
+    case.observe("the partial work rides the failed Result as a patch on the base",
+                 "+partial fix" in patch.get("diff", "") and patch.get("baseSha") == base,
+                 str(patch)[:200])
+    phases = [phase["phase"] for phase in result.get("diagnostics", {}).get("phases", [])]
+    case.observe("after exit 124, patch collection ran and verification never started",
+                 phases == ["checkout", "environment setup", "harness execution", "patch collection"],
+                 str(phases))
 
 
 def case_secrets(image, tmp, case):
@@ -245,7 +309,8 @@ def case_cleanup(image, tmp, case):
 
 
 CASES = [("success", case_success), ("failing verification", case_failing_verification),
-         ("timeout", case_timeout), ("secrets", case_secrets), ("preflight", case_preflight),
+         ("timeout", case_timeout), ("timeout salvage", case_timeout_salvage),
+         ("secrets", case_secrets), ("preflight", case_preflight),
          ("size rejection", case_size), ("cleanup", case_cleanup)]
 
 
