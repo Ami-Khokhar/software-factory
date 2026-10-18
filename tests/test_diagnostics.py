@@ -214,6 +214,11 @@ class DiagnosticsTest(unittest.TestCase):
         value = diagnostics.sanitize("prefix " + "x" * 350 + " actionable ending", limit=40)
         self.assertTrue(value.endswith("actionable ending"))
 
+    def test_sanitized_context_with_a_nonpositive_limit_is_empty(self):
+        for limit in (0, -1):
+            with self.subTest(limit=limit):
+                self.assertEqual(diagnostics.sanitize("secret", limit=limit), "")
+
     def test_the_next_workorder_carries_the_failing_test_beside_the_timeout_after_a_retry(self):
         """The dispatch path through the real state machine: a verify failure followed by an empty
         timeout blocks the WorkItem and clears `attempts` on the person's retry, but the next

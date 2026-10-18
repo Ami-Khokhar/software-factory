@@ -919,7 +919,8 @@ class Foreman:
             return wi
         return self._write(wi, dict(wi, wip={"branch": branch, "sha": sha, "workOrder": order["id"],
                                              "kind": order["kind"], "headSha": order.get("headSha"),
-                                             "baseSha": order.get("baseSha"), "moves": moves}), "salvaged",
+                                             "baseSha": order.get("baseSha"), "moves": moves,
+                                             "provenanceVersion": 1}), "salvaged",
                            workOrder=order["id"], sha=sha)
 
     def _retire_stale_wip(self, wi, facts):
@@ -932,7 +933,8 @@ class Foreman:
         source = next((order for order in self.store.workorders(wi["id"])
                        if order["id"] == wip.get("workOrder")), None)
         current_wip = self.github.branch_head(wi["repo"], wip["branch"])
-        stale = (source is None or source.get("kind") != wip.get("kind")
+        stale = (wip.get("provenanceVersion") != 1 or source is None
+                 or source.get("kind") != wip.get("kind")
                  or source.get("headSha") != wip.get("headSha")
                  or source.get("baseSha") != wip.get("baseSha")
                  or current_wip != wip.get("sha")

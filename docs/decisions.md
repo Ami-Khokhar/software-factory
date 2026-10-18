@@ -2282,5 +2282,7 @@ long prefix cannot hide the actionable end of a failure.
 
 **Consequence.** A timeout during a fix keeps verified provenance for the next pass and stale
 partial work is discarded after branch or base drift. Existing checkpoints without provenance
-are retired. Independent verification and the normal protected-path, size, and push guards still
-decide whether a completed Result can reach the PR.
+are marked provenance version 0 by migration 9, then their recorded scratch branch is retired on
+the next tick. Independent verification and the normal protected-path, size, and push guards
+still decide whether a completed Result can reach the PR.
+

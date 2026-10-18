@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "worker"))
 import runner  # noqa: E402
 
 HARNESS = r'''
-import os, re, stat, subprocess, sys, time
+import json, os, re, stat, subprocess, sys, time
 mode = sys.argv[1]
 def git(*args):
     subprocess.run(["git", *args], check=True, capture_output=True)
@@ -75,7 +75,14 @@ if mode == "timeout":
     for directory in os.environ.get("CREDENTIAL_DIRS", "").split(":"):
         if os.path.isdir(directory):
             for name in sorted(os.listdir(directory)):
-                print(open(os.path.join(directory, name)).read(), flush=True)
+                text = open(os.path.join(directory, name)).read()
+                print(text, flush=True)
+                try:
+                    credential = json.loads(text)
+                except ValueError:
+                    continue
+                print(credential.get("access_token", ""), flush=True)
+                print(credential.get("other", {}).get("api_key", ""), flush=True)
     print(sys.argv[-1], flush=True)
     time.sleep(30)
 print("DONE")
@@ -93,6 +100,11 @@ class RunnerTest(unittest.TestCase):
     def test_redacted_tail_keeps_the_diagnostic_suffix(self):
         value = runner.redact("prefix " + "x" * 350 + " actionable ending", (), limit=40)
         self.assertTrue(value.endswith("actionable ending"))
+
+    def test_redacted_tail_with_a_nonpositive_limit_is_empty(self):
+        for limit in (0, -1):
+            with self.subTest(limit=limit):
+                self.assertEqual(runner.redact("secret", (), limit=limit), "")
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -758,7 +770,8 @@ class RunnerTest(unittest.TestCase):
         # its content matches the whitespace-collapsed tail only through the collapsed secret the
         # runner registers, and neither value is credential-shaped enough for the other rules.
         key = Path(self.tmp.name) / "codex.json"
-        key.write_text("hunter-file9 = opendoor\nsecond = line\n")
+        key.write_text('{"access_token":"refresh-canary-should-not-leak",'
+                       '"other":{"api_key":"nested-canary-should-not-leak"}}')
         self.auth.write_text("hunter-agent=opendoor")
         self.flags = ["--credential", f"{self.auth}:/home/node/.pi/agent",
                       "--credential", f"{key}:/tmp/factory-home/.codex",
@@ -801,6 +814,8 @@ class RunnerTest(unittest.TestCase):
         self.assertNotIn("hunter-agent", tail)
 
         self.assertNotIn("opendoor", tail)
+        self.assertNotIn("refresh-canary-should-not-leak", tail)
+        self.assertNotIn("nested-canary-should-not-leak", tail)
         self.assertNotIn("factory.workorder/v1", tail)
         self.assertNotIn("Fix the app", tail)
 

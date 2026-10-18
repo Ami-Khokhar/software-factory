@@ -3,6 +3,8 @@ before the two-strike block, a block is deferred while the policy still has an u
 accepted relay task the relay lost is re-queued without a strike, and an escalation is an incident
 that re-arms only when its material facts change."""
 import json
+import sqlite3
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -13,7 +15,7 @@ from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
 from factory_mcp.store import Store
-from tests.fakes import FakeGit, FakeGitHub, FakeRelay, result_line
+from tests.fakes import FakeGit, FakeGitHub, FakeRelay, result_line, workitem
 from tests.test_plan import FIRST, REPO, SECOND, plan
 
 ID = "o/r#7"
@@ -92,6 +94,29 @@ class SalvageTest(ForemanCase):
     """ADR-0086: a timed-out pass's partial work is kept on a scratch branch and the next pass
     finishes it. These are runner timeouts — a failed Result line — not relay kills."""
     workers = POOL
+
+    def test_a_migrated_legacy_wip_is_retired_when_the_workitem_is_reconciled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / "factory.sqlite3")
+            legacy = Store(path)
+            legacy.put(workitem(id=ID, repo=REPO, issueNumber=7, state="blocked", branch="factory/7",
+                                blockedOn="verify failed", attempts=["verify failed"],
+                                wip={"branch": "factory-wip/7", "sha": "partial", "workOrder": "old-order",
+                                     "moves": 1}))
+            legacy.close()
+            with sqlite3.connect(path) as db:
+                db.execute("PRAGMA user_version = 8")
+            store = Store(path)
+            github, relay = FakeGitHub(), FakeRelay()
+            github.add_issue(REPO, 7)
+            github.branches[(REPO, "factory-wip/7")] = "partial"
+            foreman = Foreman(store, github, Config(mcp_token="t", repos=frozenset({REPO})), relay)
+
+            wi = foreman.tick(ID)["workItem"]
+
+            self.assertIsNone(wi["wip"])
+            self.assertIn((REPO, "factory-wip/7"), github.deleted)
+            store.close()
 
     def keep_partial(self, diff="diff --git a/src/app.py b/src/app.py\n"):
         """One pass that ran out of clock with partial work, and the tick that keeps it."""

@@ -133,6 +133,8 @@ def redact(text, secrets, limit=DIAGNOSTIC_TAIL):
     """Bounded output for a Result: whitespace collapsed; copied credentials and configured secret
     values matched whole; environment values, credential-shaped text, known tokens and the
     WorkOrder's command payload replaced."""
+    if limit <= 0:
+        return ""
     line = " ".join((text or "").split())
     for secret in secrets:
         if secret:
@@ -141,6 +143,31 @@ def redact(text, secrets, limit=DIAGNOSTIC_TAIL):
     line = _ENV_VALUE.sub(r"\1=<redacted>", line)
     line = _CREDENTIAL.sub(r"\g<2>=<redacted>", line)
     return _TOKEN.sub("<redacted>", line)[-limit:]
+
+
+def credential_secrets(text):
+    """Return a copied credential's full contents and JSON string values for output redaction."""
+    secrets = set()
+    value = text.strip()
+    if value:
+        secrets.update((value, " ".join(value.split())))
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return secrets
+
+    def collect(item):
+        if isinstance(item, dict):
+            for child in item.values():
+                collect(child)
+        elif isinstance(item, list):
+            for child in item:
+                collect(child)
+        elif isinstance(item, str) and item.strip():
+            secrets.update((item.strip(), " ".join(item.split())))
+
+    collect(parsed)
+    return secrets
 
 
 def verification_summary(output, limit=DIAGNOSTIC_TAIL):
@@ -577,10 +604,7 @@ def main(argv=None):
         for directory, _ in credentials:
             for name in os.listdir(directory):
                 with open(os.path.join(directory, name)) as handle:
-                    value = handle.read().strip()
-                    if value:
-                        secrets.add(value)
-                        secrets.add(" ".join(value.split()))
+                    secrets.update(credential_secrets(handle.read()))
         harness_start = time.monotonic()
         code, out, err = sandbox.run([*harness, text], seconds * 0.7, work, harness=True)
         echoed = out + err
