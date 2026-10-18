@@ -3,6 +3,8 @@ before the two-strike block, a block is deferred while the policy still has an u
 accepted relay task the relay lost is re-queued without a strike, and an escalation is an incident
 that re-arms only when its material facts change."""
 import json
+import sqlite3
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -13,7 +15,7 @@ from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
 from factory_mcp.store import Store
-from tests.fakes import FakeGit, FakeGitHub, FakeRelay, result_line
+from tests.fakes import FakeGit, FakeGitHub, FakeRelay, result_line, workitem
 from tests.test_plan import FIRST, REPO, SECOND, plan
 
 ID = "o/r#7"
@@ -25,13 +27,13 @@ PARTIAL_WORK = ("A worker ran out of time. Its unfinished work is the commit you
                 "Keep what is right, fix or remove the rest, and finish.")
 
 
-def timeout_result(order_id, diff="diff --git a/src/app.py b/src/app.py\n"):
+def timeout_result(order_id, base_sha, diff="diff --git a/src/app.py b/src/app.py\n"):
     """A Result from a pass that ran out of clock (ADR-0086): failed with the timeout error,
     carrying the partial patch the runner salvaged."""
     return "working...\n" + json.dumps({
         "schemaVersion": "factory.result/v1", "workOrderId": order_id, "status": "failed",
         "error": "the harness timed out",
-        "patch": {"format": "unified", "diff": diff},
+        "patch": {"format": "unified", "diff": diff, "baseSha": base_sha},
         "evidence": [], "startedAt": "2026-09-24T00:00:00Z", "finishedAt": "2026-09-24T00:10:00Z"})
 
 
@@ -93,10 +95,36 @@ class SalvageTest(ForemanCase):
     finishes it. These are runner timeouts — a failed Result line — not relay kills."""
     workers = POOL
 
+    def test_a_migrated_legacy_wip_is_retired_when_the_workitem_is_reconciled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / "factory.sqlite3")
+            legacy = Store(path)
+            legacy.put(workitem(id=ID, repo=REPO, issueNumber=7, state="blocked", branch="factory/7",
+                                blockedOn="verify failed", attempts=["verify failed"],
+                                wip={"branch": "factory-wip/7", "sha": "partial", "workOrder": "old-order",
+                                     "moves": 1}))
+            legacy.close()
+            with sqlite3.connect(path) as db:
+                db.execute("PRAGMA user_version = 8")
+            store = Store(path)
+            github, relay = FakeGitHub(), FakeRelay()
+            github.add_issue(REPO, 7)
+            github.branches[(REPO, "factory-wip/7")] = "partial"
+            foreman = Foreman(store, github, Config(mcp_token="t", repos=frozenset({REPO})), relay)
+
+            wi = foreman.tick(ID)["workItem"]
+
+            self.assertIsNone(wi["wip"])
+            self.assertIn((REPO, "factory-wip/7"), github.deleted)
+            store.close()
+
     def keep_partial(self, diff="diff --git a/src/app.py b/src/app.py\n"):
         """One pass that ran out of clock with partial work, and the tick that keeps it."""
         wi, task = self.dispatch()
-        self.relay.finish(task["id"], output=timeout_result(wi["activeWorkOrderId"], diff))
+        order = self.foreman.store.workorders(ID)[-1]
+        base_sha = order.get("continuationSha") or (order.get("headSha") if order["kind"] == "fix"
+                                                      else order["baseSha"])
+        self.relay.finish(task["id"], output=timeout_result(wi["activeWorkOrderId"], base_sha, diff))
         return self.tick()
 
     def test_a_timed_out_pass_keeps_its_partial_work_for_the_next_pass(self):
@@ -107,7 +135,8 @@ class SalvageTest(ForemanCase):
                          ("ready", "factory-wip/7", "c1", 1))
         wi, _ = self.dispatch()  # the rescue pass bases itself on the kept work
         order = self.foreman.store.workorders(ID)[-1]
-        self.assertEqual(order["baseSha"], "c1")
+        self.assertEqual(order["baseSha"], "base0")
+        self.assertEqual(order["continuationSha"], "c1")
         self.assertEqual(order["findingsToAddress"][0]["problem"], PARTIAL_WORK)
 
     def test_a_third_timeout_does_not_move_the_wip_again(self):
@@ -116,6 +145,28 @@ class SalvageTest(ForemanCase):
         wi = self.keep_partial()  # that rescue times out again: no third salvage push
         self.assertEqual((wi["state"], wi["wip"]["moves"], wi["wip"]["sha"]), ("blocked", 2, "c1"))
         self.assertEqual(len([p for p in self.git.pushes if p["branch"] == "factory-wip/7"]), 2)
+
+    def test_an_implement_checkpoint_survives_a_stable_base_and_is_kept_for_the_running_rescue(self):
+        self.keep_partial()  # the implement pass timed out; its checkpoint continues from base0
+        wi, _ = self.dispatch()  # the rescue pass bases itself on the kept work
+        self.assertEqual((wi["state"], wi["wip"]["sha"]), ("implementing", "c1"))
+        self.assertNotIn((REPO, "factory-wip/7"), self.github.deleted)
+        self.github.branches[(REPO, "main")] = "base1"  # the base moves while the rescue runs
+        wi = self.tick()
+        self.assertEqual((wi["state"], wi["wip"]["sha"]), ("implementing", "c1"))  # kept for the pass
+        self.assertNotIn((REPO, "factory-wip/7"), self.github.deleted)
+        self.relay.finish(wi["providerTaskId"], output=result_line(wi["activeWorkOrderId"]))
+        wi = self.tick()
+        self.assertIsNone(wi["wip"])  # the pass concluded; the checkpoint is retired
+
+    def test_an_implement_checkpoint_is_retired_when_the_default_branch_moves_before_the_next_pass(self):
+        self.keep_partial()
+        self.github.branches[(REPO, "main")] = "base1"  # before the rescue pass starts
+        wi = self.tick()
+        self.assertIsNone(wi.get("wip"))
+        self.assertIn((REPO, "factory-wip/7"), self.github.deleted)
+        order = self.foreman.store.workorders(ID)[-1]
+        self.assertIsNone(order.get("continuationSha"))  # a fresh pass, not a stale base
 
     def test_a_completed_result_retires_the_scratch_branch(self):
         self.keep_partial()

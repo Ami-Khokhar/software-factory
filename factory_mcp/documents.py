@@ -17,12 +17,13 @@ PATCH_KEYS = {"format", "diff", "baseSha"}
 EVIDENCE_KEYS = {"kind", "command", "exit", "tail"}
 
 
-def workorder(wi, kind, attempt, config, base_sha=None, findings=(), lessons=()):
+def workorder(wi, kind, attempt, config, base_sha=None, findings=(), lessons=(), continuation_sha=None):
     key = f"{wi['id']}:r{wi.get('gateRound', 0)}:{kind}:a{attempt}"
     remote = {"remoteVerify": True} if config.remote_verify(wi["repo"]) else {}  # ADR-0045
     return {**remote, "schemaVersion": "factory.workorder/v1", "id": key, "workItemId": wi["id"],
             "round": wi.get("gateRound", 0), "kind": kind, "repo": wi["repo"], "baseSha": base_sha,
-            "headSha": wi.get("headSha") if kind == "fix" else None, "goal": wi["goal"],
+            "headSha": wi.get("headSha") if kind == "fix" else None,
+            "continuationSha": continuation_sha, "goal": wi["goal"],
             "description": wi.get("description") or "", "acceptance": wi["acceptance"],
             "constraints": {"maxChangedLines": 600, "maxChangedLinesAdvisory": True,
                             "maxSourceChangedLines": config.source_target,
