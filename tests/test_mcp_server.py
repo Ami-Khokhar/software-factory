@@ -71,6 +71,16 @@ class McpServerTest(unittest.TestCase):
                                   "factory_set_worker", "factory_register_worker"})
         self.assertTrue(all(t["inputSchema"]["type"] == "object" for t in tools))
 
+    def test_the_register_worker_tool_names_a_template_and_forbids_other_fields(self):
+        """A caller may choose which approved sandboxed template to copy, and nothing else: the
+        schema carries `template` and forbids additional properties, so a command, credential,
+        env or image cannot ride along on the call."""
+        tools = {t["name"]: t for t in self.rpc("tools/list")["result"]["tools"]}
+        schema = tools["factory_register_worker"]["inputSchema"]
+        self.assertEqual(schema["additionalProperties"], False)
+        self.assertEqual(set(schema["required"]), {"worker", "model", "by"})
+        self.assertIn("template", schema["properties"])
+
     def test_the_agent_token_lists_and_runs_only_the_driving_tools(self):
         """Day Desk drives with FACTORY_AGENT_TOKEN (ADR-0030). The token, not the model, decides what
         it may call. A new tool joins AGENT_TOOLS on purpose."""
