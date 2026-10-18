@@ -126,8 +126,13 @@ def _migrate_8(wi):
     return dict(wi, wallMsOverride=wi.get("wallMsOverride"))
 
 
+# Migration 9: initialize the durable Day Desk retry intent for older WorkItems.
+def _migrate_9(wi):
+    return dict(wi, pendingRetry=wi.get("pendingRetry"))
+
+
 MIGRATIONS = {1: _migrate_1, 2: _migrate_2, 3: _migrate_3, 4: _migrate_4, 5: _migrate_5,
-              6: _migrate_6, 7: _migrate_7, 8: _migrate_8}
+              6: _migrate_6, 7: _migrate_7, 8: _migrate_8, 9: _migrate_9}
 
 
 def canonical_inputs(inputs):
@@ -152,6 +157,10 @@ def now():
 
 class Conflict(Exception):
     """A write named a stateVersion that is no longer current."""
+
+
+class LeaseBusy(Conflict):
+    """A retry write no longer holds the WorkItem lease it acquired."""
 
 
 class Store:
@@ -213,6 +222,65 @@ class Store:
                     (read_version + 1, body, doc["id"], read_version))
                 if cursor.rowcount != 1:
                     raise Conflict(f"{doc['id']} changed since version {read_version}")
+        return stored
+
+    def _put_locked(self, doc, stored):
+        body = json.dumps(stored, sort_keys=True)
+        cursor = self._db.execute(
+            "UPDATE workitems SET state_version = ?, doc = ? WHERE id = ? AND state_version = ?",
+            (stored["stateVersion"], body, doc["id"], doc["stateVersion"]))
+        if cursor.rowcount != 1:
+            raise Conflict(f"{doc['id']} changed since version {doc['stateVersion']}")
+
+    def _require_lease_locked(self, workitem_id, holder):
+        row = self._db.execute("SELECT holder, expires FROM leases WHERE workitem_id = ?",
+                               (workitem_id,)).fetchone()
+        if not row or row[0] != holder or row[1] <= time.time():
+            raise LeaseBusy(f"{workitem_id} lease changed before the retry was recorded")
+
+    def queue_retry(self, doc, request_id, inputs, holder):
+        """Record one retry intent and its request identity without spending the allowance."""
+        fingerprint = _fingerprint(inputs)
+        with self._lock, self._transaction():
+            self._require_lease_locked(doc["id"], holder)
+            row = self._db.execute("SELECT operation, inputs_fingerprint, phase FROM requests "
+                                   "WHERE request_id = ?", (request_id,)).fetchone()
+            if row:
+                if row[0] != "retry" or row[1] != fingerprint:
+                    raise Conflict(f"request {request_id} is already journalled with different inputs")
+                saved = self._db.execute("SELECT doc FROM workitems WHERE id = ?", (doc["id"],)).fetchone()
+                return {"workItem": json.loads(saved[0]) if saved else None, "phase": row[2], "reused": True}
+            stored = dict(doc, stateVersion=doc["stateVersion"] + 1, updatedAt=now())
+            self._put_locked(doc, stored)
+            at = now()
+            self._db.execute("INSERT INTO requests VALUES (?, 'retry', ?, 'queued', ?, ?)",
+                             (request_id, fingerprint, at, at))
+            self._db.execute("INSERT INTO audit (at, workitem_id, action, detail) VALUES (?, ?, ?, ?)",
+                             (at, doc["id"], "retry_queued", json.dumps(inputs, sort_keys=True)))
+        return {"workItem": stored, "phase": "queued", "reused": False}
+
+    def cancel_retry(self, doc, request_id, action, detail, holder):
+        """Atomically clear a queued intent when a person takes over or its facts become stale."""
+        with self._lock, self._transaction():
+            self._require_lease_locked(doc["id"], holder)
+            row = self._db.execute("SELECT operation, phase FROM requests WHERE request_id = ?",
+                                   (request_id,)).fetchone()
+            if not row or row != ("retry", "queued"):
+                raise Conflict(f"retry request {request_id} is no longer queued")
+            current = self._db.execute("SELECT doc FROM workitems WHERE id = ?", (doc["id"],)).fetchone()
+            pending = json.loads(current[0]).get("pendingRetry") if current else None
+            if not pending or pending.get("requestId") != request_id:
+                raise Conflict(f"{doc['id']} no longer carries retry request {request_id}")
+            stored = dict(doc, stateVersion=doc["stateVersion"] + 1, updatedAt=now())
+            self._put_locked(doc, stored)
+            if action != "retry_cancelled":
+                self._db.execute("INSERT INTO audit (at, workitem_id, action, detail) VALUES (?, ?, ?, ?)",
+                                 (now(), doc["id"], "retry_cancelled",
+                                  json.dumps({"requestId": request_id, "supersededBy": action}, sort_keys=True)))
+            self._db.execute("INSERT INTO audit (at, workitem_id, action, detail) VALUES (?, ?, ?, ?)",
+                             (now(), doc["id"], action, json.dumps(detail, sort_keys=True)))
+            self._db.execute("UPDATE requests SET phase = 'cancelled', updated_at = ? WHERE request_id = ?",
+                             (now(), request_id))
         return stored
 
     def log(self, action, detail, workitem_id=None):

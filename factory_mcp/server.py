@@ -9,7 +9,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import mcp, tools
+from . import diagnostics, mcp, tools
 from .config import Config
 from .foreman import Foreman
 from .github import GitHub
@@ -85,8 +85,13 @@ def make_server(config, store, github=None, relay=None):
     server.tools = {"owner": tools.build(store, foreman), "agent": tools.build(store, foreman, agent=True)}
 
     def audit(caller):
-        return lambda name, args, ok: store.log(
-            f"tool:{name}", {"args": args, "ok": ok, "caller": caller}, workitem_id=args.get("id"))
+        def write(name, args, ok):
+            saved = dict(args)
+            if name == "factory_queue_retry" and isinstance(saved.get("evidence"), str):
+                saved["evidence"] = diagnostics.sanitize(saved["evidence"])
+            store.log(f"tool:{name}", {"args": saved, "ok": ok, "caller": caller},
+                      workitem_id=args.get("id"))
+        return write
     server.audit = {caller: audit(caller) for caller in server.tools}
     return server
 

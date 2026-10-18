@@ -14,7 +14,7 @@ from . import (diagnostics, documents, gate_secrets, jev_rank, lessons, patches,
 from .github import GitHubError
 from .mcp import ToolError
 from .relay import RelayError, RelayLimitError
-from .store import REQUEST_PHASES, Conflict, now
+from .store import REQUEST_PHASES, Conflict, LeaseBusy, now
 from .verdict import blocking, fingerprint
 
 # States that need a person. Entering one posts a comment on the issue, so the owner hears of it.
@@ -468,12 +468,17 @@ class Foreman:
         incident = self._next_incident(old, new, action, detail)
         if incident is not None:
             new = dict(new, incident=incident)
-        stored = self.store.put(new)
-        detail = dict(detail, **{"from": old["state"], "to": stored["state"]})
-        escalated = stored["state"] in ATTENTION and old["state"] != stored["state"]
+        detail = dict(detail, **{"from": old["state"], "to": new["state"]})
+        # stored carries the same state and reason as new, so the escalation is the same either way
+        escalated = new["state"] in ATTENTION and old["state"] != new["state"]
         if escalated:  # the weekly report groups these (metrics.escalation_reasons)
-            detail["escalation"] = self._reason(stored)
-        self.store.log(action, detail, old["id"])
+            detail["escalation"] = self._reason(new)
+        pending = old.get("pendingRetry")
+        if pending and new.get("pendingRetry") is None:
+            stored = self.store.cancel_retry(new, pending["requestId"], action, detail, self.holder)
+        else:
+            stored = self.store.put(new)
+            self.store.log(action, detail, old["id"])
         if escalated:
             self._notify(stored)
         return stored
@@ -1316,7 +1321,7 @@ class Foreman:
             if agent and not owner_asked and wi.get("incident") is not None:
                 # Day Desk's answer is spent on this incident; the next one it may answer is a new record
                 new = dict(new, incident=dict(wi["incident"], agentAnswered=True))
-            return self._write(wi, dict(new, blockedOn=None, attempts=[], recovery=None,
+            return self._write(wi, dict(new, blockedOn=None, attempts=[], recovery=None, pendingRetry=None,
                                         infraRetries=0), "human_resolved",
                                resolution=resolution, note=note, by=by, **rerun, **({"agent": True} if agent else {}),
                                **({"ownerAsked": True} if owner_asked else {}))
@@ -1385,6 +1390,66 @@ class Foreman:
         self.store.log("allowance_approved", {"planId": plan_id, "actions": actions,
                                               "remaining": remaining, "by": by, "scope": scope})
         return {"planId": plan_id, "actions": actions, "remaining": remaining, "scope": scope}
+
+    def queue_retry(self, workitem_id, plan_id, request_id, by, evidence, agent=False):
+        """Persist one scoped Day Desk retry decision without spending or dispatching it."""
+        fields = (workitem_id, plan_id, request_id, by, evidence)
+        if not all(isinstance(value, str) and value.strip() for value in fields):
+            raise ToolError("queueing a retry needs the WorkItem, plan id, requestId, caller and evidence")
+        if len(request_id) > 128 or len(plan_id) > 128 or len(by) > 100 or len(evidence) > 5000:
+            raise ToolError("requestId and planId are at most 128 characters, by is at most 100, and "
+                            "evidence is at most 5000")
+        workitem_id, plan_id, request_id, by = (value.strip() for value in
+                                                 (workitem_id, plan_id, request_id, by))
+        if agent and by.lower() != "day-desk":
+            raise ToolError("Day Desk queues retries with `day-desk` as by; it cannot act as the owner")
+        evidence = diagnostics.sanitize(evidence)
+        if not evidence:
+            raise ToolError("retry evidence is empty after sanitization")
+        if not self.store.acquire(workitem_id, self.holder):
+            return {"status": "retryable", "reason": "workitem_busy", "requestId": request_id}
+        try:
+            wi = self.store.get(workitem_id)
+            inputs = {"workItemId": workitem_id, "planId": plan_id, "by": by, "evidence": evidence}
+            if self.store.request(request_id):
+                replay = self.store.queue_retry({"id": workitem_id}, request_id, inputs, self.holder)
+                return {"status": replay["phase"], "requestId": request_id, "workItem": replay["workItem"]}
+            if wi is None:
+                raise ToolError(f"No WorkItem {workitem_id}")
+            if wi["state"] not in ("human_waiting", "blocked"):
+                raise ToolError(f"{workitem_id} is {wi['state']}; a retry queues only while it waits on a person")
+            if wi.get("waitingOn") is not None or self._worker_live(wi):
+                raise ToolError(f"{workitem_id} is waiting on a dependency or has a live worker")
+            stop = self._safety_stop(wi)
+            if stop:
+                raise ToolError(f"{workitem_id}'s escalation falls under a safety stop ({stop}); the owner decides")
+            cause = self._env_paused(wi)
+            if cause:
+                raise ToolError(f"{workitem_id}'s environment failed ({cause}) and is not repaired; the owner decides")
+            used = len(self.store.workorders(workitem_id)) - (wi.get("passesBefore") or 0)
+            if used >= self.config.max_passes:
+                raise ToolError(f"{workitem_id} used its {used} passes of budget; only the owner's retry buys "
+                                "a fresh budget")
+            allowance = self.store.allowance(plan_id)
+            scope = allowance.get("scope") if allowance else None
+            if not allowance or "retry" not in allowance["actions"] or not scope \
+                    or allowance["remaining"] < 1:
+                raise ToolError(f"plan allowance {plan_id!r} does not currently cover this retry")
+            if wi["repo"] != scope["repo"] or scope["items"] and workitem_id not in scope["items"]:
+                raise ToolError(f"plan allowance {plan_id!r} does not cover {workitem_id}")
+            incident = wi.get("incident") or {}
+            pending = {"requestId": request_id, "planId": plan_id, "by": by, "evidence": evidence,
+                       "status": "queued", "queuedAt": now(), "waitingState": wi["state"],
+                       "incidentId": incident.get("id"), "gateRound": wi.get("gateRound", 0),
+                       "headSha": wi.get("headSha")}
+            queued = self.store.queue_retry(dict(wi, pendingRetry=pending), request_id, inputs, self.holder)
+            return {"status": queued["phase"], "requestId": request_id, "workItem": queued["workItem"]}
+        except LeaseBusy:
+            return {"status": "retryable", "reason": "workitem_busy", "requestId": request_id}
+        except Conflict as exc:
+            raise ToolError(str(exc)) from None
+        finally:
+            self.store.release(workitem_id, self.holder)
 
     def use_allowance(self, workitem_id, plan_id, action, note, by):
         """Day Desk's recovery decision inside an owner-approved plan allowance (ADR-0069): a retry

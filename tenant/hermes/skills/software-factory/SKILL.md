@@ -224,7 +224,7 @@ close the WorkItem with the owner's words.
 The driving job runs this section when the escalations you may answer change. For each line of
 factory_status's workItems with `agentMayResolve` true:
 
-1. Call factory_status with its id and read `reason`, `needFromYou` and `tried`, and how many of
+1. Call factory_status with its id and read `reason`, `needFromYou`, `tried` and `pendingRetry`, and how many of
    the WorkItem's own passes its attempts used. Then read factory_status with no id once: its
    `planAllowances` list the owner-approved plan allowances, each with its `planId`, the `repo` it
    covers and — when the owner listed exact members — those WorkItem ids, the `actions` it
@@ -234,22 +234,18 @@ factory_status's workItems with `agentMayResolve` true:
    repeated runs of this job read the same facts again, so you answer each escalation once,
    whichever route answers it; the tool re-arms one more answer only when a WorkItem's blocking
    facts materially change, and an unchanged escalation waits for the owner.
-2. Route through the allowance when every fact lines up: the reason shows an ordinary fixable
+2. For this rollout, route an ordinary fixable failure through the allowance only when every fact lines up: the reason shows an ordinary fixable
    cause, a current scoped allowance covers this item exactly — the same repo, the item named
    among its members when it names any, `retry` among its actions, `remaining` at least 1 — and
-   the WorkItem's own pass budget is not spent. Call factory_use_allowance with that `planId`,
-   action `retry`, your note as the evidence and `day-desk` as `by`. The tool re-checks the same
-   facts again at the spend, in one transaction with the count — the safety stops, a confirmed
-   environment fault, the membership, both the allowance's `remaining` and the item's pass
-   budget — so a refusal spends nothing, a repeat of a landed spend is refused, and two callers
-   racing cannot both spend. Then read it back: factory_status with the id shows the WorkItem no
-   longer waiting and an `allowanceUse` naming that `planId` with a `remaining` one lower than
-   before; that readback of the one usage is the only success you may report for the call. When
-   a factory_use_allowance call times out or its answer is unclear, read factory_status with the
-   id first: its history and `allowanceUse` show whether the spend landed, and you call again
-   only when neither shows one; when the tool says the WorkItem is being ticked, leave it for the
-   next run of this job. Eligibility is not safety: an owner-approved allowance never covers an
-   environment limit, a protected path, a HUMAN verdict or access trouble.
+   the WorkItem's own pass budget is not spent. Create one stable `requestId` and call
+   factory_queue_retry with the `planId`, your note as evidence and `day-desk` as `by`. This release
+   durably queues and reads back the intent. It does not spend the allowance or start a worker.
+   If `pendingRetry` is already present, do not queue a second request. If the call times out or
+   its answer is unclear, read factory_status and report the saved request id and `queued` status.
+   A `retryable` result with `workitem_busy` may be retried with that same requestId. The automatic
+   consumer will be delivered separately; do not say the WorkItem retried until a WorkOrder appears.
+   Eligibility is not safety: an owner-approved allowance never covers an environment limit, a
+   protected path, a HUMAN verdict or access trouble.
 3. Otherwise the scope cannot spend — no allowance covers this repo or item, its actions lack
    `retry`, its `remaining` is 0, or the item's pass budget is spent, and an allowance buys no
    fresh budget — and your answer goes through factory_resolve_human. Choose, from the facts

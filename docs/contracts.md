@@ -64,6 +64,14 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   already uses that same scalar explicitly. A changed relay cap blocks an overridden dispatch
   before saving a WorkOrder or spending a pass and concludes any open recovery. A transport
   failure instead leaves the item pending for the next tick. Existing orders and the global default stay fixed.
+- **`WorkItem.pendingRetry` is one durable Day Desk retry intent (ADR-0095).** Null or
+  absent means none. `factory_queue_retry` writes it with its request-journal row in one
+  transaction, sanitized and bounded, spending nothing and starting nothing: a replay of the
+  same `requestId` with the same inputs returns the stored request, changed inputs conflict, and
+  a lease held by another tick answers `retryable`/`workitem_busy`. New items and migration 9
+  initialize it to null. A human resolution cancels a queued intent and its journal row in the
+  same write; spending the allowance and starting the WorkOrder for a queued intent belongs to
+  the follow-up consumer, not to this phase.
 - **`WorkItem.stateVersion` is optimistic concurrency.** Every durable write
   increments it; a transition that writes on a stale version loses.
 - **`human_waiting` is not terminal.** `closed`, `cancelled` and `exhausted`

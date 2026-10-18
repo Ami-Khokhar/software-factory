@@ -88,16 +88,17 @@ class ProfileTest(unittest.TestCase):
         return text[text.index("## Drive the factory"):text.index("## Teach the factory a lesson")]
 
     def test_the_drive_guidance_routes_a_scoped_remaining_item_through_the_allowance(self):
-        """ADR-0069/ADR-0075: the driving job reads the current scoped approved allowances first,
-        spends factory_use_allowance on an in-scope, actionable item with allowance and pass budget
-        left, and reports only the exact factory_status readback of that one usage."""
+        """ADR-0069/ADR-0075/ADR-0095: the driving job reads the current scoped approved allowances
+        first, then durably queues factory_queue_retry on an in-scope, actionable item with
+        allowance and pass budget left, and reports only the factory_status readback of that
+        queued request — never a recovery this phase did not run."""
         section = self.drive_section()
-        route = section.index("factory_use_allowance")
+        route = section.index("factory_queue_retry")
         fallback = section.index("factory_resolve_human")
         self.assertLess(route, fallback)  # the allowance is the route when the facts line up
         for phrase in ("planAllowances", "planId", "`retry` ", "`remaining` at least 1",
-                       "pass budget", "day-desk", "allowanceUse", "longer waiting",
-                       "one lower", "readback of the one usage"):
+                       "pass budget", "day-desk", "requestId", "pendingRetry", "workitem_busy",
+                       "saved request id and `queued` status"):
             self.assertIn(phrase, section)
 
     def test_the_drive_guidance_sends_uncovered_and_unsafe_items_to_the_owner(self):

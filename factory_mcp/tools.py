@@ -11,7 +11,7 @@ from .mcp import Tool, ToolError
 AGENT_TOOLS = frozenset({"factory_status", "factory_repo_check", "factory_lessons", "factory_report",
                          "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
                          "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
-                         "factory_use_allowance", "factory_merge_setup_pr",
+                         "factory_use_allowance", "factory_queue_retry", "factory_merge_setup_pr",
                          "factory_docker_status", "factory_docker_control",
                          "factory_set_worker", "factory_register_worker", "factory_set_timeout"})
 WAITING = ("human_waiting", "blocked")
@@ -44,7 +44,8 @@ def _gate_pins(foreman):
 
 def build(store, foreman, agent=False):
     def summary_of(wi):
-        row = {key: wi.get(key) for key in ("id", "state", "prNumber", "blockedOn", "waitingOn", "updatedAt")}
+        row = {key: wi.get(key) for key in ("id", "state", "prNumber", "blockedOn", "waitingOn",
+                                            "pendingRetry", "updatedAt")}
         if wi["state"] in WAITING:
             row["agentMayResolve"] = agent_may_resolve(wi, store.history(wi["id"]))
         elif wi["state"] == "exhausted":
@@ -417,10 +418,28 @@ def build(store, foreman, agent=False):
              "write", lambda args: foreman.approve_plan_allowance(
                  args["planId"], args["actions"], args["remaining"], args["by"], args["repo"],
                  args.get("items"))),
+        Tool("factory_queue_retry",
+             "Queue one approved Day Desk retry and read it back. This phase records a durable intent "
+             "without spending the allowance or starting a worker; automatic dispatch arrives in a "
+             "follow-up release. Repeating the same requestId is idempotent. A lease collision returns "
+             "status retryable with reason workitem_busy; retry that same requestId.",
+             {"type": "object", "required": ["id", "planId", "requestId", "by", "evidence"],
+              "additionalProperties": False,
+              "properties": {"id": {"type": "string", "minLength": 1, "maxLength": 200},
+                             "planId": {"type": "string", "minLength": 1, "maxLength": 128},
+                             "requestId": {"type": "string", "minLength": 1, "maxLength": 128,
+                                           "description": "stable id for this decision; reuse it on a retry"},
+                             "by": {"type": "string", "minLength": 1, "maxLength": 100,
+                                    "description": "Day Desk identifies itself as day-desk"},
+                             "evidence": {"type": "string", "minLength": 1, "maxLength": 5000,
+                                          "description": "bounded evidence, stored after sanitization"}}},
+             "write", lambda args: foreman.queue_retry(args["id"], args["planId"], args["requestId"],
+                                                       args["by"], args["evidence"], agent=agent)),
         Tool("factory_use_allowance",
-             "Day Desk's recovery decision inside the owner-approved plan allowance (ADR-0069): retry "
-             "a waiting WorkItem on the decision evidence, without ownerAsked and without spending "
-             "Day Desk's one own answer. Refused when the escalation is a safety stop, when a "
+             "Recover a waiting WorkItem immediately inside an owner-approved plan allowance "
+             "(ADR-0069), without ownerAsked and without buying fresh passes. The owner's direct "
+             "decision; Day Desk may also queue through factory_queue_retry, which stays durable "
+             "across an interrupted chat. Refused when the escalation is a safety stop, when a "
              "confirmed environment fault is not repaired, when the action is outside the "
              "allowance's scope, or when the allowance is exhausted: then the owner decides.",
              {"type": "object", "required": ["id", "planId", "action", "note", "by"],
