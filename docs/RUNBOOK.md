@@ -256,6 +256,30 @@ registry if it is already running. Deploying this configuration is a step on the
 from the implementation that lands in this repository; the existing GLM workers stay, so a
 DeepSeek outage falls back to them.
 
+The same restricted path registers a sandboxed OpenCode worker, whose template pins its free model
+in one `--model provider/name` argument (opencode has no separate `--models` flag). Add the
+template to `~/.config/agent-relay/agents.json` once, by hand as above (replace the host paths):
+
+```json
+{
+  "id": "opencode-mimo-factory",
+  "name": "opencode (mimo-v2.6-flash-free), sandboxed factory worker",
+  "command": "python3",
+  "args": ["/absolute/path/to/software-factory/worker/runner.py",
+           "--credential", "/Users/you/.local/share/opencode/auth.json:/tmp/factory-home/.local/share/opencode",
+           "--", "opencode", "run", "--model", "opencode/mimo-v2.6-flash-free"],
+  "cwd": "/absolute/path/to/factory-work",
+  "allowedRoots": ["/absolute/path/to/factory-work"],
+  "timeoutMs": 1500000,
+  "inheritEnv": ["HOME", "PATH"],
+  "image": "factory-worker:latest"
+}
+```
+
+Further OpenCode free-model pins then register through `factory_register_worker` with
+`template: "opencode-mimo-factory"` (below): only the model changes, and only within the `opencode`
+provider, until a separately approved template says otherwise.
+
 Routing hard wall (ADR-0085): no pass ever runs in the gate reviewer's model family. `_dispatch`
 and the deferred attempt read `reviewer_model` and `strong_reviewer_model` from the repo's
 `.github/pr-gatekeeper.json` on the default branch (the gate's config — the factory reads that
@@ -275,13 +299,21 @@ Day Desk steers two worker decisions itself, within the same allowlist and crede
   `FACTORY_WORKERS` may be named — an unknown id is refused before the edit. It is refused while a
   worker is running and on a closed, cancelled or exhausted WorkItem. The next tick reads the new
   lines, so this is how a retry is steered to another model.
-- `factory_register_worker` (`worker`, `model`, `by`) adds a worker to the relay's `agents.json` by
-  copying the approved template (`FACTORY_WORKER_TEMPLATE`, default `pi-glm-factory`) and pinning
-  only `model`: the command, credential mount, env, cwd, allowedRoots, image and timeout are the
-  template's, and the provider stays the template's too. It refuses a duplicate id and an id or
-  model outside a safe name, then reloads the relay. It needs `FACTORY_AGENTS_FILE` set to the
-  relay's registry path, and it never adds the worker to `FACTORY_WORKERS` — a registered worker
-  runs nothing until you list it there and its pilot (below) is green. Both tools are write tools on
+- `factory_register_worker` (`worker`, `model`, `by`, optional `template`) adds a worker to the
+  relay's `agents.json` by copying an approved sandboxed template (`template`, default
+  `FACTORY_WORKER_TEMPLATE`, currently `pi-glm-factory`; the sandboxed OpenCode worker
+  `opencode-mimo-factory` is another) and pinning only `model`: the command, credential mount, env,
+  cwd, allowedRoots, image and timeout are the template's, and the provider stays the template's
+  too, so `model` may be bare or `provider/model` under that provider and a change of provider is
+  refused. The template must itself run `python3` `worker/runner.py` with a harness after `--` —
+  a discovered, unsandboxed relay agent, an unknown template id, a command or path injected into a
+  template, an unsafe model name, and every attempt to change the credential, image or env
+  boundary are refused before the registry is written; the write stays duplicate-checked and
+  atomic. It needs `FACTORY_AGENTS_FILE` set to the relay's registry path, and it never adds the
+  worker to `FACTORY_WORKERS` — the steps stay separate: this tool only registers, the deploy
+  above puts the file on the host, the pilot (below) is the health check, listing the id in
+  `FACTORY_WORKERS` is the promotion, and only a real pilot line proves execution — the tests run
+  this against fixture registries and claim no live pass. Both tools are write tools on
   Day Desk's driving token, so Hermes asks you before each call.
 
 ### Provider health pilot (ADR-0076)
