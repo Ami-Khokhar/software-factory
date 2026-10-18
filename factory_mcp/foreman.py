@@ -800,6 +800,12 @@ class Foreman:
                     + ", ".join(sorted(excluded)))), "no_worker")
             return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=(
                 f"{wi['repo']} is local-only and FACTORY_WORKERS has no local worker")), "no_worker")
+        if wi.get("wallMsOverride") is not None:
+            try:
+                self._check_timeout(wi["wallMsOverride"])
+            except RelayError as exc:
+                return self._write(wi, dict(wi, state="human_waiting", blockedOn=str(exc)),
+                                   "timeout_unavailable")
         recovery = self._recovery_decision(wi, avoid, from_worker, category, worker)
         attempt = sum(1 for o in orders if o["round"] == wi.get("gateRound", 0) and o["kind"] == kind)
         base = self.github.branch_head(wi["repo"], self._default_branch(wi["repo"]))
@@ -1565,6 +1571,44 @@ class Foreman:
                                                     **({"agent": True} if agent else {})}, workitem_id)
             if wi.get("waitingOn") is not None:  # the next tick sets it again if the wait goes on
                 wi = self.store.put(dict(wi, waitingOn=None))
+            return wi
+        finally:
+            self.store.release(workitem_id, self.holder)
+
+    def _check_timeout(self, wall_ms):
+        cap = self.relay.limits()["maxTimeoutMs"]
+        if cap is not None and wall_ms > cap:
+            raise RelayError(f"requested wallMs {wall_ms} exceeds relay maxTimeoutMs {cap}")
+
+    def set_timeout(self, workitem_id, wall_ms, by, agent=False):
+        """Set or clear a bounded timeout between passes, without retrying or buying passes."""
+        if not isinstance(by, str) or not by.strip():
+            raise ToolError("changing a timeout needs the name of the person who asked")
+        if not isinstance(workitem_id, str) or not workitem_id:
+            raise ToolError("id must name a known WorkItem")
+        minimum = max(60000, self.config.wall_ms)
+        if wall_ms is not None and (type(wall_ms) is not int or not minimum <= wall_ms <= 3600000):
+            raise ToolError(f"wallMs must be an integer from {minimum} to 3600000, or null for the default")
+        if not self.store.acquire(workitem_id, self.holder):
+            raise ToolError(f"{workitem_id} is being ticked; try again")
+        try:
+            wi = self.store.get(workitem_id)
+            if wi is None:
+                raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
+            if wi["state"] in workitem.TERMINAL or wi["state"] in ("merged", "merge_pending"):
+                raise ToolError(f"{workitem_id} is {wi['state']}; its timeout cannot change")
+            if self._worker_live(wi):
+                raise ToolError(f"{workitem_id} has a worker running now; wait for it to finish")
+            effective = wall_ms if wall_ms is not None else self.config.wall_ms
+            try:
+                self._check_timeout(effective)
+            except RelayError as exc:
+                raise ToolError(str(exc)) from None
+            before = wi.get("wallMsOverride")
+            wi = self.store.put(dict(wi, wallMsOverride=wall_ms))
+            self.store.log("timeout_changed", {"by": by, "was": before, "now": wall_ms,
+                                              "effectiveWallMs": effective,
+                                              **({"agent": True} if agent else {})}, workitem_id)
             return wi
         finally:
             self.store.release(workitem_id, self.holder)

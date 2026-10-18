@@ -29,6 +29,10 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual((DRIVE["trust"], DRIVE["headers"]["Authorization"]), ("full", "Bearer ${FACTORY_AGENT_TOKEN}"))
         self.assertNotIn("tools", DRIVE)  # the token's AGENT_TOOLS is the list (ADR-0048)
         self.assertEqual((OWNER["trust"], OWNER["headers"]["Authorization"]), ("full", "Bearer ${FACTORY_MCP_TOKEN}"))
+        driving = tools.build(None, None, agent=True)
+        timeout = driving["factory_set_timeout"].listing()
+        self.assertFalse(timeout["annotations"]["readOnlyHint"])
+        self.assertFalse(timeout["inputSchema"]["additionalProperties"])
         real = set(tools.build(None, None))
         self.assertEqual(set(OWNER["tools"]["include"]), real - tools.AGENT_TOOLS - {"factory_tick", "factory_intake"})
 

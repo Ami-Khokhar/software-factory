@@ -41,6 +41,7 @@ FACTORY_MCP_TOKEN=<secret> FACTORY_REPOS=owner/repo FACTORY_GITHUB_TOKEN=<token>
 | `FACTORY_PORT` | The port on 127.0.0.1, default 43125. factory-mcp speaks plain HTTP, so it listens on loopback only |
 | `FACTORY_WORKERS` | Relay agents with locality, preferred first, e.g. `pi-glm-factory:local` |
 | `FACTORY_AGENTS_FILE` | The relay's `agents.json`; set, `factory_register_worker` may add a worker by copying the template (ADR-0077). Empty: that tool is refused |
+| `FACTORY_WALL_MS` | Default per-pass wall budget. `factory_set_timeout` sets an audited per-WorkItem override up to 3600000ms without changing this default or starting a retry |
 | `FACTORY_WORKER_TEMPLATE` | The agent `factory_register_worker` copies, default `pi-glm-factory` |
 | `FACTORY_LOCAL_ONLY_REPOS` | Repos whose work may only go to `local` workers |
 | `FACTORY_MAX_PASSES`, `FACTORY_WALL_MS` | WorkOrder budget: worker passes per WorkItem (4), wall time per pass (20 min) |

@@ -62,6 +62,17 @@ class Relay:
         """The task, or None when the relay no longer knows it (it keeps tasks in memory)."""
         return self._call("GET", f"/v1/tasks/{task_id}")
 
+    def limits(self):
+        """The live relay's supported task timeout; an unreadable limit fails closed."""
+        health = self._call("GET", "/healthz")
+        limits = health.get("limits") if isinstance(health, dict) else None
+        if not isinstance(limits, dict) or "maxTimeoutMs" not in limits:
+            raise RelayError("relay did not report maxTimeoutMs; cannot approve a task timeout")
+        cap = limits["maxTimeoutMs"]
+        if cap is not None and (type(cap) is not int or cap <= 0):
+            raise RelayError("relay reported an invalid maxTimeoutMs")
+        return limits
+
     def reload(self):
         """POST /v1/admin/reload: the relay re-reads agents.json, so a worker registered since it
         started is discovered without a restart. Localhost-only in the relay."""

@@ -68,8 +68,20 @@ class McpServerTest(unittest.TestCase):
                                   "factory_docker_control", "factory_approve_plan_allowance",
                                   "factory_use_allowance", "factory_authorize_setup_merge",
                                   "factory_revoke_setup_merge", "factory_merge_setup_pr",
-                                  "factory_set_worker", "factory_register_worker"})
+                                  "factory_set_worker", "factory_register_worker", "factory_set_timeout"})
         self.assertTrue(all(t["inputSchema"]["type"] == "object" for t in tools))
+
+    def test_the_agent_timeout_tool_persists_without_starting_a_worker(self):
+        from tests.fakes import FakeRelay
+        self.server.foreman.relay = FakeRelay()
+        self.store.put(workitem(state="blocked", blockedOn="timeout"))
+        response = self.rpc("tools/call", {"name": "factory_set_timeout", "arguments": {
+            "id": "o/r#1", "wallMs": 3600000, "by": "owner"}}, token=AGENT)["result"]
+        self.assertFalse(response["isError"])
+        saved = json.loads(response["content"][0]["text"])["workItem"]
+        self.assertEqual((saved["state"], saved["wallMsOverride"]), ("blocked", 3600000))
+        self.assertEqual(self.store.workorders("o/r#1"), [])
+        self.assertEqual(self.server.foreman.relay.tasks, {})
 
     def test_the_register_worker_tool_names_a_template_and_forbids_other_fields(self):
         """A caller may choose which approved sandboxed template to copy, and nothing else: the
@@ -90,7 +102,7 @@ class McpServerTest(unittest.TestCase):
                                   "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
                                   "factory_use_allowance", "factory_merge_setup_pr",
                                   "factory_docker_status", "factory_docker_control",
-                                  "factory_set_worker", "factory_register_worker"})
+                                  "factory_set_worker", "factory_register_worker", "factory_set_timeout"})
         refused = self.rpc("tools/call", {"name": "factory_bootstrap_repo",
                                           "arguments": {"repo": "o/r", "by": "day-desk"}}, token=AGENT)
         self.assertIn("error", refused)  # an unknown tool for this token, not a call that ran

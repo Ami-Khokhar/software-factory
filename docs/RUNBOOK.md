@@ -294,6 +294,18 @@ only excluded workers waits for a person with `every allowed worker is in the re
 
 Day Desk steers two worker decisions itself, within the same allowlist and credential boundary:
 
+- `factory_set_timeout` (`id`, `wallMs`, `by`) sets a durable wall-budget override for one
+  WorkItem. Supply an integer at least the current `FACTORY_WALL_MS` (and 60000), at most
+  3600000, or `null` to clear it. The live relay's `maxTimeoutMs` must also support the effective
+  budget; an unreadable or exceeded cap refuses the change. Live workers and terminal items
+  are refused. Setting it only stores the value and an audit event: it never retries, dispatches,
+  resets passes, or grants an allowance. The agent token exposes this write tool too.
+  For an approved longer run, call it while the item is blocked, read back
+  `factory_status.workItem.wallMsOverride`, then separately authorize the retry. Verify the next
+  stored WorkOrder's `budget.wallMs`, relay task's `timeoutMs`, and actual Result phases before
+  calling the experiment successful. A global env change is unnecessary. Old WorkOrders retain
+  their frozen budget. The runner still reserves 60 seconds, assigns 70% of the remaining time
+  to coding and 25% to verification, and subtracts checkout-lock wait time.
 - `factory_set_worker` (`id`, `workers`, `by`) replaces a WorkItem's issue `Worker:` lines with the
   agent ids given, in order; `[]` falls back to `FACTORY_WORKERS` order. Only agents in
   `FACTORY_WORKERS` may be named — an unknown id is refused before the edit. It is refused while a

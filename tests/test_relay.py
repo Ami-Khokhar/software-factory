@@ -37,6 +37,8 @@ class Api(BaseHTTPRequestHandler):
 
     def do_GET(self):
         Api.auth.append(self.headers.get("Authorization"))
+        if self.path == "/healthz":
+            return self.reply(200, Api.health)
         task = Api.tasks.get(self.path.rsplit("/", 1)[-1])
         return self.reply(200, task) if task else self.reply(404, {"error": "unknown task"})
 
@@ -44,6 +46,7 @@ class Api(BaseHTTPRequestHandler):
 class RelayClientTest(unittest.TestCase):
     def setUp(self):
         Api.bodies, Api.tasks, Api.auth = [], {}, []
+        Api.health = {"limits": {"maxTimeoutMs": None}}
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.token_file = Path(tmp.name, "token")  # absent until a test writes it
@@ -58,6 +61,18 @@ class RelayClientTest(unittest.TestCase):
     def tearDown(self):
         self.server.shutdown()
         self.server.server_close()
+
+    def test_limits_reads_the_live_cap_and_refuses_missing_or_malformed_caps(self):
+        self.token_file.write_text("file-token")
+        for cap in (None, 3600000):
+            Api.health = {"limits": {"maxTimeoutMs": cap}}
+            self.assertEqual(self.relay.limits()["maxTimeoutMs"], cap)
+            self.assertEqual(Api.auth[-1], "Bearer file-token")
+        for health in ({}, {"limits": {}}, {"limits": {"maxTimeoutMs": True}},
+                       {"limits": {"maxTimeoutMs": -1}}, {"limits": {"maxTimeoutMs": "3600000"}}):
+            Api.health = health
+            with self.assertRaises(RelayError):
+                self.relay.limits()
 
     def test_submit_sends_the_task_with_its_checkout(self):
         task = self.relay.submit("pi", "the WorkOrder", "o/r#7:r0:implement:a0", 60000, cwd="/work/o/r")

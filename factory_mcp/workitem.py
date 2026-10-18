@@ -184,7 +184,7 @@ def intake(repo, issue):
     return {"schemaVersion": "factory.workitem/v1", "id": workitem_id(repo, issue["number"]),
             "repo": repo, "issueNumber": issue["number"], "goal": issue["title"],
             "description": description(issue.get("body")), "acceptance": criteria,
-            "paths": paths_listed(issue.get("body")) or None,
+            "paths": paths_listed(issue.get("body")) or None, "wallMsOverride": None,
             "branch": branch_for(issue["number"]), "prNumber": None,
             "headSha": None, "reviewedSha": None, "gateRound": 0, "attempts": [], "blockers": [],
             "state": state, "stateVersion": 0, "createdAt": stamp, "updatedAt": stamp}
