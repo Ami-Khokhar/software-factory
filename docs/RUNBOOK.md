@@ -290,14 +290,15 @@ before, because the gate does not review it. So with the default config, `pi-dee
 never takes a pass on a gated repo — it is the reviewer — and an issue whose `Worker:` line names
 only excluded workers waits for a person with `every allowed worker is in the reviewer family <f>`.
 
-### Choosing and registering a worker from Day Desk (ADR-0077)
+### Choosing workers and timeouts from Day Desk (ADR-0077, ADR-0089)
 
-Day Desk steers two worker decisions itself, within the same allowlist and credential boundary:
+Day Desk steers worker and timeout decisions within the same allowlist and credential boundary:
 
 - `factory_set_timeout` (`id`, `wallMs`, `by`) sets a durable wall-budget override for one
   WorkItem. Supply an integer at least the current `FACTORY_WALL_MS` (and 60000), at most
   3600000, or `null` to clear it. The live relay's `maxTimeoutMs` must also support the effective
-  budget; an unreadable or exceeded cap refuses the change. Live workers and terminal items
+  budget when setting an override; an unreadable or exceeded cap refuses that change. Clearing
+  always restores the default, even during a relay outage. Live workers and terminal items
   are refused. Setting it only stores the value and an audit event: it never retries, dispatches,
   resets passes, or grants an allowance. The agent token exposes this write tool too.
   For an approved longer run, call it while the item is blocked, read back
@@ -325,8 +326,18 @@ Day Desk steers two worker decisions itself, within the same allowlist and crede
   worker to `FACTORY_WORKERS` — the steps stay separate: this tool only registers, the deploy
   above puts the file on the host, the pilot (below) is the health check, listing the id in
   `FACTORY_WORKERS` is the promotion, and only a real pilot line proves execution — the tests run
-  this against fixture registries and claim no live pass. Both tools are write tools on
+  this against fixture registries and claim no live pass. All three tools are write tools on
   Day Desk's driving token, so Hermes asks you before each call.
+
+The timeout check reads `GET /healthz` -> `limits.maxTimeoutMs` from agent-relay (verified
+against relay revision `3ecf6b72973a5d9dbebb92bb8bfeb9a90f41802c` in the real rehearsal).
+A positive integer is the global cap, `null` means no global cap. Missing or malformed values
+require a relay upgrade/repair. A transport outage leaves an overridden dispatch pending for the
+next tick, without spending a pass. A readable incompatible cap concludes any open recovery
+and escalates before a WorkOrder is saved. The registered agent's `timeoutMs` is its default,
+not a cap: the factory explicitly submits the effective WorkOrder budget. Run
+`python3 scripts/rehearsal.py /absolute/path/to/agent-relay` before deployment to check this
+contract against the actual relay server, including its configured cap.
 
 ### Provider health pilot (ADR-0076)
 

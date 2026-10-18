@@ -29,7 +29,10 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 - **agent-relay** ([repo](https://github.com/Ami-Khokhar/agent-relay)) runs worker tasks.
   factory-mcp submits one task per WorkOrder over HTTP and reads it on later ticks; it never waits.
   Each call carries the relay's token, which factory-mcp reads on every call from
-  `AGENT_RELAY_TOKEN` or the file the relay writes on its first start.
+  `AGENT_RELAY_TOKEN` or the file the relay writes on its first start. Timeout overrides read
+  `/healthz`'s `limits.maxTimeoutMs` (positive global cap or null), verified against relay
+  `3ecf6b72973a5d9dbebb92bb8bfeb9a90f41802c` by `scripts/rehearsal.py`. An explicit task
+  timeout overrides the registered agent's default `timeoutMs`; it cannot exceed the global cap.
 - **worker/runner.py** is what a relay agent runs: the agent's harness (pi, Codex, OpenCode, ...)
   works in a Docker sandbox with copies of the login files the agent names and no GitHub
   credential, and the runner turns its edits into a patch Result (ADR-0026, ADR-0028).

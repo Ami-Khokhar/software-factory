@@ -58,11 +58,12 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   Null or absent uses `FACTORY_WALL_MS`. New items and migration 8 initialize it to null.
   `factory_set_timeout` accepts integers from max(60000, the configured default) to 3600000,
   or null, while no worker is live and before a terminal state. The relay's live timeout cap
-  must support the effective value. Its `timeout_changed` audit records `was`, `now`,
+  must support a newly set value. Clearing needs no relay access. Its `timeout_changed` audit records `was`, `now`,
   `effectiveWallMs`, and `by`. Setting it neither retries nor changes pass accounting or grants.
   New implement and fix WorkOrders copy the effective value into `budget.wallMs`; relay submit
   already uses that same scalar explicitly. A changed relay cap blocks an overridden dispatch
-  before saving a WorkOrder or spending a pass. Existing orders and the global default stay fixed.
+  before saving a WorkOrder or spending a pass and concludes any open recovery. A transport
+  failure instead leaves the item pending for the next tick. Existing orders and the global default stay fixed.
 - **`WorkItem.stateVersion` is optimistic concurrency.** Every durable write
   increments it; a transition that writes on a stale version loses.
 - **`human_waiting` is not terminal.** `closed`, `cancelled` and `exhausted`

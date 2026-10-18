@@ -10,6 +10,10 @@ class RelayError(Exception):
     pass
 
 
+class RelayLimitError(RelayError):
+    """A reported timeout cap is incompatible; unlike a transport failure it needs a person."""
+
+
 def token():
     """The relay's API token, found as agent-relay's own MCP client finds it: AGENT_RELAY_TOKEN,
     else the file at AGENT_RELAY_TOKEN_FILE (default ~/.config/agent-relay/token), which the relay
@@ -67,10 +71,10 @@ class Relay:
         health = self._call("GET", "/healthz")
         limits = health.get("limits") if isinstance(health, dict) else None
         if not isinstance(limits, dict) or "maxTimeoutMs" not in limits:
-            raise RelayError("relay did not report maxTimeoutMs; cannot approve a task timeout")
+            raise RelayLimitError("relay did not report maxTimeoutMs; upgrade the relay before setting a timeout")
         cap = limits["maxTimeoutMs"]
         if cap is not None and (type(cap) is not int or cap <= 0):
-            raise RelayError("relay reported an invalid maxTimeoutMs")
+            raise RelayLimitError("relay reported an invalid maxTimeoutMs; repair its limit before setting a timeout")
         return limits
 
     def reload(self):

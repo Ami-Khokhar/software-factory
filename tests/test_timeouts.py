@@ -122,7 +122,7 @@ class TimeoutTest(unittest.TestCase):
         self.relay.down = True
         before = self.store.get(ID)
         with self.assertRaisesRegex(ToolError, 'relay'):
-            self.set_timeout(None)
+            self.set_timeout(3600000)
         self.assertEqual(self.store.get(ID), before)
 
     def test_a_reduced_relay_cap_stops_dispatch_without_spending_a_pass(self):
@@ -132,6 +132,43 @@ class TimeoutTest(unittest.TestCase):
         self.assertEqual(wi['state'], 'human_waiting')
         self.assertIn('relay', wi['blockedOn'])
         self.assertEqual(self.store.workorders(ID), [])
+        self.assertEqual(self.relay.tasks, {})
+
+    def test_timeout_refusal_concludes_the_open_recovery(self):
+        wi = self.set_timeout(3600000)
+        record = {'id': 'r-pending', 'action': 'block_deferred', 'category': 'timeout (unknown cause)',
+                  'fromWorker': 'codex', 'toWorker': 'pi-glm', 'at': '2026-10-18T00:00:00Z'}
+        self.store.put(dict(wi, recovery=record))
+        self.relay.max_timeout_ms = 1800000
+        wi = self.foreman.tick(ID)['workItem']
+        self.assertEqual((wi['state'], wi['recovery']), ('human_waiting', None))
+        results = [h['detail'] for h in self.store.history(ID) if h['action'] == 'recovery_result']
+        self.assertEqual(results, [dict(recoveryId='r-pending', action='block_deferred',
+                                       category='timeout (unknown cause)', fromWorker='codex',
+                                       toWorker='pi-glm', succeeded=False, escalationAvoided=False)])
+        self.assertEqual(self.store.workorders(ID), [])
+
+    def test_relay_transport_failure_preserves_the_pending_recovery_for_next_tick(self):
+        wi = self.set_timeout(3600000)
+        record = {'id': 'r-pending', 'action': 'block_deferred', 'category': 'timeout (unknown cause)',
+                  'fromWorker': 'codex', 'toWorker': 'pi-glm', 'at': '2026-10-18T00:00:00Z'}
+        self.store.put(dict(wi, recovery=record))
+        self.relay.down = True
+        wi = self.foreman.tick(ID)['workItem']
+        self.assertEqual((wi['state'], wi['recovery']), ('ready', record))
+        self.assertEqual(self.store.workorders(ID), [])
+        self.assertEqual(self.relay.tasks, {})
+        self.assertNotIn('recovery_result', [h['action'] for h in self.store.history(ID)])
+        self.relay.down = False
+        self.assertEqual(self.foreman.tick(ID)['workItem']['state'], 'implementing')
+
+    def test_clear_restores_default_even_when_the_relay_is_down_or_cap_is_lower(self):
+        self.set_timeout(3600000)
+        self.relay.max_timeout_ms = 1200000
+        self.relay.down = True
+        wi = self.set_timeout(None)
+        self.assertIsNone(wi['wallMsOverride'])
+        self.assertEqual(documents.workorder(wi, 'fix', 0, self.config)['budget']['wallMs'], 1800000)
         self.assertEqual(self.relay.tasks, {})
 
     def test_exhausted_pass_budget_still_stops_dispatch(self):
@@ -162,6 +199,12 @@ class TimeoutTest(unittest.TestCase):
             self.assertIsNone(migrated['wallMsOverride'])
             self.assertEqual(documents.workorder(migrated, 'implement', 0, self.config)['budget']['wallMs'], 1800000)
             reopened.close()
+
+    def test_default_above_the_override_ceiling_has_an_actionable_error_and_can_clear(self):
+        self.foreman.config = Config(mcp_token='t', repos=frozenset({'o/r'}), wall_ms=4000000)
+        with self.assertRaisesRegex(ToolError, 'default|FACTORY_WALL_MS'):
+            self.set_timeout(3600000)
+        self.assertIsNone(self.set_timeout(None)['wallMsOverride'])
 
     def test_schema_accepts_only_a_bounded_optional_override(self):
         validator = Draft202012Validator(json.loads((ROOT/'schemas/workitem.schema.json').read_text()))

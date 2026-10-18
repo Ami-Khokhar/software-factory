@@ -2203,10 +2203,11 @@ same service budget. Changing the service default would extend unrelated work to
 **Decision.** `factory_set_timeout` stores an optional `wallMsOverride` under the WorkItem
 lease and audits the previous, requested and effective values. An integer must be at least
 max(60000, FACTORY_WALL_MS), at most 3600000, and supported by the relay's live cap. Null clears
-it. Live workers and terminal items refuse changes. Both driving and owner tokens expose this
+it without needing relay access. Live workers and terminal items refuse changes. Both driving and owner tokens expose this
 write tool. The tool neither retries nor buys passes or allowances. New implement and fix orders
 freeze the effective budget, which is also the relay's explicit timeout. An overridden dispatch
-rechecks the cap before spending a pass. Existing runner phase allocations stay unchanged.
+rechecks the cap before spending a pass. Incompatible reported caps conclude open recovery
+records before escalation; transport outages remain retryable ticks. Existing phase allocations stay unchanged.
 
 **Consequence.** The owner can approve a bounded experiment for one blocked task. Store migration
 8 initializes old items to null, preserving their default behavior. Applying the override and

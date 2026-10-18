@@ -13,7 +13,7 @@ from . import (diagnostics, documents, gate_secrets, jev_rank, lessons, patches,
                routing, setup_merge, sizing, workitem)
 from .github import GitHubError
 from .mcp import ToolError
-from .relay import RelayError
+from .relay import RelayError, RelayLimitError
 from .store import REQUEST_PHASES, Conflict, now
 from .verdict import blocking, fingerprint
 
@@ -803,8 +803,9 @@ class Foreman:
         if wi.get("wallMsOverride") is not None:
             try:
                 self._check_timeout(wi["wallMsOverride"])
-            except RelayError as exc:
-                return self._write(wi, dict(wi, state="human_waiting", blockedOn=str(exc)),
+            except RelayLimitError as exc:
+                self._finish_recovery(wi, False)
+                return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=str(exc)),
                                    "timeout_unavailable")
         recovery = self._recovery_decision(wi, avoid, from_worker, category, worker)
         attempt = sum(1 for o in orders if o["round"] == wi.get("gateRound", 0) and o["kind"] == kind)
@@ -1578,7 +1579,8 @@ class Foreman:
     def _check_timeout(self, wall_ms):
         cap = self.relay.limits()["maxTimeoutMs"]
         if cap is not None and wall_ms > cap:
-            raise RelayError(f"requested wallMs {wall_ms} exceeds relay maxTimeoutMs {cap}")
+            raise RelayLimitError(f"requested wallMs {wall_ms} exceeds relay maxTimeoutMs {cap}; "
+                                  "raise the relay cap or clear the override before retrying")
 
     def set_timeout(self, workitem_id, wall_ms, by, agent=False):
         """Set or clear a bounded timeout between passes, without retrying or buying passes."""
@@ -1587,6 +1589,9 @@ class Foreman:
         if not isinstance(workitem_id, str) or not workitem_id:
             raise ToolError("id must name a known WorkItem")
         minimum = max(60000, self.config.wall_ms)
+        if wall_ms is not None and minimum > 3600000:
+            raise ToolError("FACTORY_WALL_MS already exceeds the largest supported override (3600000); "
+                            "clear the override or lower the service default before setting one")
         if wall_ms is not None and (type(wall_ms) is not int or not minimum <= wall_ms <= 3600000):
             raise ToolError(f"wallMs must be an integer from {minimum} to 3600000, or null for the default")
         if not self.store.acquire(workitem_id, self.holder):
@@ -1600,10 +1605,11 @@ class Foreman:
             if self._worker_live(wi):
                 raise ToolError(f"{workitem_id} has a worker running now; wait for it to finish")
             effective = wall_ms if wall_ms is not None else self.config.wall_ms
-            try:
-                self._check_timeout(effective)
-            except RelayError as exc:
-                raise ToolError(str(exc)) from None
+            if wall_ms is not None:
+                try:
+                    self._check_timeout(effective)
+                except RelayError as exc:
+                    raise ToolError(str(exc)) from None
             before = wi.get("wallMsOverride")
             wi = self.store.put(dict(wi, wallMsOverride=wall_ms))
             self.store.log("timeout_changed", {"by": by, "was": before, "now": wall_ms,
