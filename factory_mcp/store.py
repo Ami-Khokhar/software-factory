@@ -134,8 +134,12 @@ def _migrate_8(wi):
     return dict(wi, wallMsOverride=wi.get("wallMsOverride"))
 
 
-# Migration 9 adds the sanitized worker health/quarantine cache. It does not change WorkItems.
+# Migration 9: mark older salvage checkpoints for safe retirement on the next tick.
 def _migrate_9(wi):
+    """Mark pre-provenance checkpoints so the Foreman can retire their scratch branches."""
+    wip = wi.get("wip")
+    if isinstance(wip, dict) and "provenanceVersion" not in wip:
+        return dict(wi, wip=dict(wip, provenanceVersion=0))
     return wi
 
 

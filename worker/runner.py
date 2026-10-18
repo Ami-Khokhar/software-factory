@@ -124,6 +124,8 @@ _ENV_VALUE = re.compile(r"\b([A-Z][A-Z0-9_]{2,})=\S+")
 _CREDENTIAL = re.compile(
     r"(?i)\b(access|auth)?[-_ ]?(token|password|passwd|passphrase|secret|bearer|authorization|"
     r"credential|api[-_ ]?key|private[-_ ]?key)s?(\s*[=:]\s*|\s+)\S+")
+_SECRET_KEY = re.compile(r"(?i)token|secret|password|passwd|passphrase|bearer|authorization|credential|key")
+_SECRET_MIN_LENGTH = 8  # a shorter value is likely metadata ("api", "us-east-1"), not a secret
 _TOKEN = re.compile(r"(?i)\bgh[pousr]_[A-Za-z0-9]{6,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b"
                     r"|\bAKIA[0-9A-Z]{16}\b|\bBearer\s+\S+")
 _WORKORDER_PAYLOAD = re.compile(r"(?s)\{.*?factory\.workorder/v1.*?\}")
@@ -133,6 +135,8 @@ def redact(text, secrets, limit=DIAGNOSTIC_TAIL):
     """Bounded output for a Result: whitespace collapsed; copied credentials and configured secret
     values matched whole; environment values, credential-shaped text, known tokens and the
     WorkOrder's command payload replaced."""
+    if limit <= 0:
+        return ""
     line = " ".join((text or "").split())
     for secret in secrets:
         if secret:
@@ -140,7 +144,35 @@ def redact(text, secrets, limit=DIAGNOSTIC_TAIL):
     line = _WORKORDER_PAYLOAD.sub(" ", line)
     line = _ENV_VALUE.sub(r"\1=<redacted>", line)
     line = _CREDENTIAL.sub(r"\g<2>=<redacted>", line)
-    return _TOKEN.sub("<redacted>", line)[:limit]
+    return _TOKEN.sub("<redacted>", line)[-limit:]
+
+
+def credential_secrets(text):
+    """Return a copied credential's full contents and JSON string values for output redaction."""
+    secrets = set()
+    value = text.strip()
+    if value:
+        secrets.update((value, " ".join(value.split())))
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return secrets
+
+    def collect(item, key=""):
+        if isinstance(item, dict):
+            for name, child in item.items():
+                collect(child, name)
+        elif isinstance(item, list):
+            for child in item:
+                collect(child, key)
+        elif isinstance(item, str) and item.strip():
+            # A credential-shaped key or a value too long to be metadata (`type`, `region`)
+            # is worth redacting; a short metadata value would mangle the tail instead.
+            if _SECRET_KEY.search(key) or len(item.strip()) >= _SECRET_MIN_LENGTH:
+                secrets.update((item.strip(), " ".join(item.split())))
+
+    collect(parsed)
+    return secrets
 
 
 def verification_summary(output, limit=DIAGNOSTIC_TAIL):
@@ -207,16 +239,27 @@ def prepare(cwd, order, branch, work):
     WorkOrder builds on. Returns that commit. The copy has no remote, so a push has nowhere to go."""
     git(cwd, "fetch", "-q", "--prune", "origin")
     if order["kind"] == "fix":
-        base = order.get("headSha")
+        base = order.get("continuationSha") or order.get("headSha")
         git(cwd, "fetch", "-q", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}")
+        if order.get("continuationSha"):
+            remote_head = git(cwd, "rev-parse", f"refs/remotes/origin/{branch}")
+            if remote_head != order.get("headSha"):
+                raise WorkerError("the reviewed PR head moved after the checkpoint was checked")
     else:
-        base = order.get("baseSha") or git(cwd, "rev-parse", "origin/HEAD")
+        base = order.get("continuationSha") or order.get("baseSha") or git(cwd, "rev-parse", "origin/HEAD")
     if not base:
         raise WorkerError("the WorkOrder names no commit to build on")
     git(cwd, "cat-file", "-e", f"{base}^{{commit}}")
     # The default branch's head, where the whole pull request's size is read from (ADR-0040).
     default = git(cwd, "rev-parse", "origin/HEAD")
     git(cwd, "cat-file", "-e", f"{default}^{{commit}}")
+    if order.get("continuationSha"):
+        checkpoint = order["workItemId"].rsplit("#", 1)[-1]
+        scratch = git(cwd, "rev-parse", f"refs/remotes/origin/factory-wip/{checkpoint}")
+        if scratch != order["continuationSha"]:
+            raise WorkerError("the checkpoint branch moved after it was checked")
+        if default != order.get("baseSha"):
+            raise WorkerError("the default branch base moved after the checkpoint was checked")
     git(os.path.dirname(work), "clone", "-q", "--no-hardlinks", "--no-checkout", cwd, work)
     git(work, "fetch", "-q", cwd, "+refs/remotes/origin/*:refs/remotes/source/*")
     git(work, "remote", "remove", "origin")
@@ -572,10 +615,7 @@ def main(argv=None):
         for directory, _ in credentials:
             for name in os.listdir(directory):
                 with open(os.path.join(directory, name)) as handle:
-                    value = handle.read().strip()
-                    if value:
-                        secrets.add(value)
-                        secrets.add(" ".join(value.split()))
+                    secrets.update(credential_secrets(handle.read()))
         harness_start = time.monotonic()
         code, out, err = sandbox.run([*harness, text], seconds * 0.7, work, harness=True)
         echoed = out + err

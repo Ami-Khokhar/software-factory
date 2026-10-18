@@ -147,6 +147,20 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(row["status"], "healthy")
         self.assertEqual(json.loads(row["report"]), health)
         self.assertEqual(reopened.all(), [])
+
+    def test_migration_marks_a_legacy_wip_for_safe_retirement(self):
+        store = Store(self.path)
+        wi = workitem(wip={"branch": "factory-wip/1", "sha": "partial", "workOrder": "old-order",
+                           "moves": 1})
+        store.put(wi)
+        store.close()
+        with sqlite3.connect(self.path) as db:
+            db.execute("PRAGMA user_version = 8")
+
+        reopened = Store(self.path)
+        migrated = reopened.get(wi["id"])
+        self.assertEqual(migrated["wip"]["provenanceVersion"], 0)
+        self.assertEqual(migrated["wip"]["branch"], "factory-wip/1")
         reopened.close()
 
     def test_identical_request_resumes_same_operation(self):

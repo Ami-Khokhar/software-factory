@@ -650,7 +650,9 @@ image build or profile update stops the deploy with its message, which the job s
 and runs again on the next update: a state file names the last commit for which every step
 succeeded. The profile is updated only when Hermes names the deployed checkout as its source.
 A change to `tenant/hermes/config.yaml` is reported, not applied, because the live file also holds
-the owner's model and Telegram settings. The deploy does not restart Day Desk's gateway, which runs
+the owner's model and Telegram settings. ADR-0093 constrains repeat delivery: an identical
+repeated failure is delivered once and suppressed until its result changes. The deploy does not
+restart Day Desk's gateway, which runs
 the job.
 
 **Consequence.** A merge goes live within 10 minutes with no person, and a broken commit never
@@ -2263,6 +2265,48 @@ caller's exposed schema set is hashed so owner and Day Desk token views are comp
 right tool surface. Cache hints guide clients, but an already connected client still needs an
 explicit reload. No stored WorkItem or worker document changes.
 
+## ADR-0092 — A salvage checkpoint carries its exact source and may continue a gate fix
+
+**Context.** ADR-0086 preserved partial work only for implementation passes. A timed-out gate fix
+therefore repeated the same changes from the reviewed PR head. The old `wip` record also did not
+say which WorkOrder, kind, reviewed PR head, or default-branch base produced its scratch commit, so
+the Foreman could not tell whether that checkpoint was still valid after GitHub changed.
+
+**Decision.** Salvage a failed implement or fix Result only when its patch names the exact base the
+worker was given. Record the source WorkOrder, kind, PR head, default-branch base, scratch branch
+and scratch SHA. Before another dispatch, verify that the source WorkOrder agrees, the scratch
+branch still points at the saved SHA, the default branch has not moved, and for a fix the live PR
+head still equals the reviewed head. Otherwise delete and clear the checkpoint. A fix continuation
+keeps its reviewed `headSha` and carries a separate `continuationSha`; the worker starts from that
+SHA. The failed Result still records a failed attempt, and a checkpoint never satisfies evidence
+or pushes to the PR branch. Diagnostic sanitizers take their bounded suffix after redaction so a
+long prefix cannot hide the actionable end of a failure.
+
+**Consequence.** A timeout during a fix keeps verified provenance for the next pass and stale
+partial work is discarded after branch or base drift. Existing checkpoints without provenance
+are marked provenance version 0 by migration 9, then their recorded scratch branch is retired on
+the next tick. Independent verification and the normal protected-path, size, and push guards
+still decide whether a completed Result can reach the PR.
+
+## ADR-0093 — Scheduled factory notices follow material progress and keep delivery separate from acceptance
+
+**Context.** The no-agent watcher reported escalations but had no durable signal for progress, while
+the update wrapper suppressed duplicate text by exiting successfully even when `factory update`
+failed. A source merge or deploy could also read as task completion before a live issue accepted it.
+
+**Decision.** The watcher fingerprints state, blocker, dependency, PR, head, gate round and worker,
+not timestamps or state versions. Its first progress run establishes a baseline, terminal items in
+that baseline are silent, and owner blockers keep their existing delivery and agent-grace rules. The
+update wrapper delivers the first distinct failure with its nonzero status, stores the full latest
+diagnostic locally, and suppresses identical repeats until the result changes. A successful source
+deploy reports the deployed revision and says runtime acceptance remains unverified. The deployed
+commit marker still advances only after all deploy steps succeed.
+
+**Consequence.** Unchanged scheduled runs stay quiet, meaningful transitions and new owner blockers
+remain visible, and an unchanged current HEAD that matches the completed deployment marker skips
+verification. An incomplete deployment leaves that marker behind, so the next update still runs its
+pending work. Merge, closure and source deployment never stand in for live runtime acceptance.
+
 ## ADR-0094 — Worker health checks use the deployed runner and cannot activate workers
 
 **Context.** A relay registry can hold agents that are not sandboxed factory workers, and a
@@ -2286,4 +2330,3 @@ before a separate activation decision, while every probe remains inside the depl
 The short-lived binding makes later activation and dispatch-preflight checks fail closed after a
 model, credential file or image changes. This slice does not activate workers or consume health
 records during dispatch.
-
