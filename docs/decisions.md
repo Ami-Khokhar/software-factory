@@ -650,7 +650,9 @@ image build or profile update stops the deploy with its message, which the job s
 and runs again on the next update: a state file names the last commit for which every step
 succeeded. The profile is updated only when Hermes names the deployed checkout as its source.
 A change to `tenant/hermes/config.yaml` is reported, not applied, because the live file also holds
-the owner's model and Telegram settings. The deploy does not restart Day Desk's gateway, which runs
+the owner's model and Telegram settings. ADR-0093 constrains repeat delivery: an identical
+repeated failure is delivered once and suppressed until its result changes. The deploy does not
+restart Day Desk's gateway, which runs
 the job.
 
 **Consequence.** A merge goes live within 10 minutes with no person, and a broken commit never

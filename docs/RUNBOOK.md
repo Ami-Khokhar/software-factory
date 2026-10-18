@@ -773,7 +773,7 @@ hermes -p day-desk cron create "every 10m" --no-agent --script factory-update.sh
 what it chose for each: through the plan allowance when one covers the WorkItem, reading the
 `allowanceUse` spend back before it answers, else through its own factory_resolve_human answer. `factory-watch` tells you of an escalation Day Desk may not answer, or one
 it left for 30 minutes, and of an exhausted WorkItem either way; unchanged scheduled runs are quiet.
-It also reports material state, head, PR and gate-round transitions after its first progress baseline.
+It also reports material state, head, PR, gate-round and worker transitions after its first progress baseline.
 A merge or issue closure message says that runtime acceptance still needs confirmation. Without
 `FACTORY_AGENT_TOKEN`, the watcher tells you of every owner blocker at once. To retry an exhausted
 WorkItem, reply to the alert in Telegram:

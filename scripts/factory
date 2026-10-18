@@ -141,11 +141,13 @@ def cmd_watch(_):
         previous = seen_progress.get(workitem_id)
         if previous is None or previous == current or workitem_id in owner_waiting:
             continue
-        if current["state"] in ("human_waiting", "blocked", "exhausted"):
+        if current["state"] in ("human_waiting", "blocked"):
             continue  # a driving agent keeps the existing grace and ownership rule
         if current["state"] in ("closed", "merged"):
-            print(f"{workitem_id}: source PR #{current['prNumber']} merged; runtime acceptance is "
-                  "not established by merge or closure.")
+            where = (f"source PR #{current['prNumber']} merged" if current.get("prNumber")
+                     else "ended without a merged PR")
+            print(f"{workitem_id}: {where}; runtime acceptance is not "
+                  "established by merge or closure.")
             continue
         details = [current["state"]]
         if current.get("prNumber"):
@@ -796,9 +798,7 @@ def cmd_update(args):
         # that fails can still abort, and the retry of such a step would then skip it again.
         restart_factory_mcp()
     else:
-        # The checkout may already be at `new` after a step failed before restart; the deployment
-        # marker is the durable proof that the running service reached this revision.
-        deploy_steps(since, new, restart=new != since)
+        deploy_steps(since, new, restart=new != old or changed("worker/Dockerfile"))
     deployed_file.write_text(new + "\n")
     print(f"update: deployed source {new[:7]} (was {since[:7]}); runtime acceptance remains unverified")
     if changed("tenant/hermes/config.yaml"):

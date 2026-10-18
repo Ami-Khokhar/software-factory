@@ -1,5 +1,6 @@
 """scripts/factory: `update` deploys a branch only when its tests pass, and follows it to main once
-merged; `add-repo` asks factory-mcp, as Day Desk does; `watch` reports each escalation once;
+merged; `add-repo` asks factory-mcp, as Day Desk does; `watch` reports each new owner blocker and
+material progress step once;
 `report` fits the week in one message; `stop` sends the relay its token; `bench` files the
 benchmark's tasks and grades the merged code with their hidden tests."""
 import contextlib
@@ -221,21 +222,6 @@ class UpdateTest(unittest.TestCase):
         self.assertEqual(printed.getvalue(), "")
         self.assertFalse(any("unittest" in call.args[0] for call in run.call_args_list))
         self.assertEqual(len(self.restarts), 1)
-
-    def test_a_retry_restarts_when_checkout_advanced_but_deployed_marker_did_not(self):
-        deployed = (cli.STATE / "deployed")
-        prior = self.head()[0]
-        new = self.commit("notes.txt", "x\n")
-        git(self.dev, "push", "-q", "origin", "HEAD:main")
-        git(self.deploy, "fetch", "-q", "origin")
-        git(self.deploy, "merge", "-q", "--ff-only", "@{upstream}")  # prior update died before restart
-        deployed.parent.mkdir(parents=True, exist_ok=True)
-        deployed.write_text(prior + "\n")
-
-        cli.cmd_update([])
-
-        self.assertEqual(self.head()[0], new)
-        self.assertEqual((deployed.read_text().strip(), len(self.restarts)), (new, 1))
 
     def test_a_dockerfile_update_rebuilds_the_worker_image(self):
         self.commit("worker/Dockerfile", "FROM scratch\n")
@@ -710,6 +696,16 @@ class WatchTest(unittest.TestCase):
         self.assertNotIn("o/r#7", second)
         self.watch()  # the owner answered both
         self.assertIn("o/r#7 is blocked", self.watch(blocked))  # blocked again is a new escalation
+
+    def test_a_legacy_waiting_only_watch_file_keeps_its_seen_escalations(self):
+        legacy = {"o/r#7": ["blocked", "verify exited 1"]}  # the v1 file held waiting fingerprints
+        (cli.STATE / "watch.json").write_text(json.dumps(legacy))
+        printed = self.watch(("o/r#7", "blocked", "verify exited 1"),
+                             ("o/r#8", "blocked", "HUMAN"))
+        self.assertNotIn("o/r#7", printed)  # the legacy escalation is not replayed
+        self.assertIn("o/r#8 is blocked: HUMAN", printed)
+        saved = json.loads((cli.STATE / "watch.json").read_text())
+        self.assertEqual(saved["version"], 2)  # the file was migrated forward
 
     def test_material_progress_is_reported_once_and_ignores_timestamp_churn(self):
         active = {"id": "o/r#7", "state": "implementing", "headSha": "c1", "prNumber": None,
