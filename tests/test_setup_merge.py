@@ -190,6 +190,28 @@ class SetupMergeTest(unittest.TestCase):
                              (pr["prNumber"], MERGE, True))
             self.assertEqual(self.foreman.store.request(request_id)["phase"], "done")
 
+    def test_a_new_setup_cycle_never_adopts_the_previous_cycles_merge(self):
+        first = self.setup_pr()
+        self.green()
+        self.foreman.merge_setup_pr(REPO, 'owner', 'cycle-1')
+        self.github.pull(REPO, first['prNumber'])['merge_commit_sha'] = 'first-merge'
+        self.github.contents.pop((REPO, GATE_CONFIG))
+        self.github.push(REPO, 'main', 'base1')
+        second = self.foreman.bootstrap_repo(REPO, VERIFY, 'owner')
+        plan = repos.bootstrap_plan(self.github, REPO, VERIFY)
+        for name, text in plan['files'].items():
+            self.github.contents[(REPO, name, HEAD)] = text
+        self.foreman.authorize_setup_merge(REPO, VERIFY, 'owner')
+        self.green()
+        merged = self.foreman.merge_setup_pr(REPO, 'owner', 'cycle-2')
+        self.assertEqual((merged['prNumber'], merged['alreadyMerged'], merged['mergeSha']),
+                         (second['prNumber'], False, MERGE))
+        old = self.foreman.merge_setup_pr(REPO, 'owner', 'cycle-1')
+        self.assertEqual((old['prNumber'], old['mergeSha'], old['alreadyMerged']),
+                         (first['prNumber'], 'first-merge', True))
+        again = self.foreman.merge_setup_pr(REPO, 'owner', 'cycle-2')
+        self.assertEqual((again['prNumber'], again['mergeSha']), (second['prNumber'], MERGE))
+
     def test_a_refreshed_setup_pr_merges_on_the_branch_the_factory_created(self):
         """A plan refreshed after creation renames no branch: the factory's own PR, journalled when
         bootstrap created it, still merges under a grant for the refreshed digest, and an
@@ -214,13 +236,11 @@ class SetupMergeTest(unittest.TestCase):
         self.assertEqual(len(self.github.pulls), 1)  # no duplicate merge, no duplicate PR
 
     def test_a_forged_setup_branch_the_factory_never_created_never_merges(self):
-        """A branch name is a marker anyone with push access can forge: even the authorized
-        digest's exact branch name, carrying canonical content with a green check, refuses when
-        the factory's journal records no setup PR it created or adopted there."""
+        """A genuinely never-journalled branch refuses even with canonical content and checks."""
         self.setup_pr()
         self.github.close_issue(REPO, 100)  # the factory's own setup PR was closed by hand
         plan = repos.bootstrap_plan(self.github, REPO, VERIFY)
-        branch = "factory-bootstrap/" + plan["fingerprint"][:16]  # the exact authorized name
+        branch = "factory-bootstrap/never-created"
         self.github.push(REPO, branch, "forged-sha", files=[(name, 1, 0) for name in plan["files"]])
         for name, text in plan["files"].items():
             self.github.contents[(REPO, name, "forged-sha")] = text

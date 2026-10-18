@@ -74,9 +74,6 @@ def _journalled_setups(store, repo):
 def _exact_setup_pr(store, github, repo, base):
     """The one setup PR the factory created that may merge, or a refusal that keeps a duplicate or
     deputy from ever being merged instead (never duplicate PRs or dispatch prematurely)."""
-    merged = _merged_setup(store, github, repo)
-    if merged:
-        raise ToolError(f"{repo}'s setup PR #{merged[0]['number']} is already merged")
     open_ = _setups_of(github, repo, base)
     if len(open_) > 1:
         numbers = ", ".join(f"#{pr['number']}" for pr in open_)
@@ -121,20 +118,37 @@ def _at_head(github, repo, plan, pr):
     return None
 
 
-def _merged_setup(store, github, repo):
-    """The merged setup PRs the factory journalled for `repo`, for resuming an ambiguous merge:
-    the journal pins to the PRs the factory created, so this needs no fresh digest of a setup
-    that just landed. It reads only while the grant row still stands, as it must for any merge
-    this tool journalled."""
+def _merged_setup(store, github, repo, request_id):
+    """Resume this request's exact journalled PR, or the latest created/adopted cycle.
+
+    An older cycle's merged PR cannot complete a request for the current open setup.
+    A done request keeps its own target even after a later setup cycle has landed.
+    """
     if not store.setup_merge(repo):
         return []
-    merged = {}
-    for branch, number in dict.fromkeys(_journalled_setups(store, repo)):
-        for pr in github.pulls_for_branch(repo, branch):
-            if pr["number"] == number and _setup_repo_head(pr) == repo.lower() \
-                    and (pr.get("merged_at") or pr.get("merged")):
-                merged[pr["number"]] = pr
-    return list(merged.values())
+    history = store.global_history()
+    target = next((entry["detail"] for entry in reversed(history)
+                   if entry["action"] == "setup_merge_journalled"
+                   and entry["detail"].get("repo", "").lower() == repo.lower()
+                   and entry["detail"].get("requestId") == request_id), None)
+    pairs = _journalled_setups(store, repo)
+    pair = next((pair for pair in reversed(pairs)
+                 if target is None or pair[1] == target.get("prNumber")), None)
+    if pair is None:
+        return []
+    branch, number = pair
+    try:
+        pr = github.pull(repo, number)
+    except GitHubError as exc:
+        if exc.status == 404:
+            return []
+        raise
+    if (pr["number"] == number and pr["head"]["ref"] == branch
+            and _setup_repo_head(pr) == repo.lower()
+            and (target is None or pr["head"]["sha"] == target.get("headSha"))
+            and (pr.get("merged_at") or pr.get("merged"))):
+        return [pr]
+    return []
 
 
 def merge(store, github, repo, by, request_id):
@@ -142,7 +156,7 @@ def merge(store, github, repo, by, request_id):
     request = store.open_request(request_id, "merge_setup_pr", {"repo": repo})
     if request["phase"] == "done":
         return _adopt(store, github, repo, by, request_id)  # a retry of a finished merge
-    merged = _merged_setup(store, github, repo)
+    merged = _merged_setup(store, github, repo, request_id)
     if len(merged) == 1:  # an interrupted or ambiguous merge already went through
         if request["phase"] == "started":  # a fresh request adopting the landed merge must
             store.advance_request(request_id, "pushing")  # first pass through the journal, or
@@ -150,9 +164,6 @@ def merge(store, github, repo, by, request_id):
                                                  "prNumber": merged[0]["number"],
                                                  "headSha": merged[0]["head"]["sha"]})
         return _readback(store, github, repo, merged[0]["number"], by, request_id, already=True)
-    if len(merged) > 1:
-        raise ToolError(f"{repo} shows several merged setup PRs for its approved branch; a person "
-                        "inspects GitHub and the store stays as it is")
     _, plan = authorized_plan(store, github, repo)
     pr = _exact_setup_pr(store, github, repo, plan["default_branch"])
     if (reason := _at_head(github, repo, plan, pr)) is not None:
@@ -171,7 +182,7 @@ def merge(store, github, repo, by, request_id):
 
 def _adopt(store, github, repo, by, request_id):
     """The done phase replayed: read back the merged setup PR the journal names, and never merge again."""
-    merged = _merged_setup(store, github, repo)
+    merged = _merged_setup(store, github, repo, request_id)
     if len(merged) != 1:
         raise ToolError(f"the merge {request_id} of {repo} is journalled done, but the repo shows "
                         f"{len(merged)} merged setup PRs for the branches the factory journalled; "

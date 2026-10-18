@@ -431,7 +431,7 @@ whether the repo's own checks pass once merged; it merges no other repository, p
 `factory_revoke_setup_merge` takes the authorization back. Without a grant, nothing merges
 without you (ADR-0074). The guarded merge takes the setup PR the factory itself created or
 adopted, as its audit journal records: a branch name, even one carrying the authorized digest,
-never authorizes a PR the factory did not create (ADR-0089), so a refresh that rewrites the PR's
+never authorizes a PR the factory did not create (ADR-0090), so a refresh that rewrites the PR's
 files after creation — the branch keeps its original name — still merges under a new grant for
 the refreshed digest. Tell Day Desk to call `factory_repo_check` and only then to go on, after
 the merge:

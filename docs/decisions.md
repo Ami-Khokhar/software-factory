@@ -2227,7 +2227,10 @@ check proved nothing: anyone with push access can create a branch carrying the a
 factory itself created or adopted: the audit journal's `bootstrap_pr` and `bootstrap_pr_updated`
 entries record the (branch, PR number) pairs the factory pushed to, and the open PR must be on
 one of them. The resumed-merge lookup uses the same journal, so an interrupted or repeated request
-reconciles the PR even when the branch no longer matches the grant's digest. The grant still pins
+reconciles the PR even when the branch no longer matches the grant's digest. A request that
+already journalled its target replays only that PR and head. A fresh request examines only the
+latest created/adopted setup cycle, so an earlier merged setup cannot complete a new cycle's
+request. The grant still pins
 the digest of the current canonical plan, and every other guard stands unchanged: exact paths,
 per-file content, default-branch base, live head, green pr-gatekeeper run and no blocking verdict.
 A branch name — even the exact authorized one — never authorizes anything on its own.
