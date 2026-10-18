@@ -41,10 +41,12 @@ _WORKORDER_PAYLOAD = re.compile(r"(?s)\{.*?factory\.workorder/v1.*?\}")
 def sanitize(text, limit=MAX_CONTEXT):
     """One bounded line for the audit and the WorkOrder: whitespace collapsed, credentials,
     environment values and the WorkOrder's command payload redacted."""
+    if limit <= 0:
+        return ""
     line = _WORKORDER_PAYLOAD.sub(" ", " ".join((text or "").split()))
     line = _ENV_VALUE.sub(r"\1=<redacted>", line)
     line = _CREDENTIAL.sub(r"\g<2>=<redacted>", line)
-    return _TOKEN.sub("<redacted>", line)[:limit]
+    return _TOKEN.sub("<redacted>", line)[-limit:]
 
 
 def diagnose(order, result):

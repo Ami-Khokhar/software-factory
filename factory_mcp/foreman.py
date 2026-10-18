@@ -434,6 +434,7 @@ class Foreman:
                 detail["blocking"] = [{"fingerprint": f["fingerprint"], "problem": f["problem"]}
                                       for f in verdict["findings"] if f["severity"] == "blocking"]
             wi = self._write(wi, new, "reconcile", **detail)
+            wi = self._retire_stale_wip(wi, facts)
             wi = self.act(wi, facts)
             if wi.get("wip") and (wi["state"] in workitem.TERMINAL or wi["state"] == "merged"):
                 wi = self._retire_wip(wi)  # a merge or an end ends salvage (ADR-0086)
@@ -810,12 +811,16 @@ class Foreman:
         recovery = self._recovery_decision(wi, avoid, from_worker, category, worker)
         attempt = sum(1 for o in orders if o["round"] == wi.get("gateRound", 0) and o["kind"] == kind)
         base = self.github.branch_head(wi["repo"], self._default_branch(wi["repo"]))
-        if kind == "implement" and wi.get("wip"):  # the rescue pass builds on the kept partial (ADR-0086)
-            base = wi["wip"]["sha"]
+        continuation = wi.get("wip")
+        if continuation and continuation.get("kind") != kind:
+            wi = self._retire_wip(wi)
+            continuation = None
+        if continuation:  # the rescue pass builds on the kept partial (ADR-0086)
             findings = [dict(fingerprint=fingerprint(None, PARTIAL_WORK), path=None, line=None,
                              problem=PARTIAL_WORK, fix=None, test=None)] + list(findings)
         order = documents.workorder(wi, kind, attempt, self.config, base, findings,
-                                    self._lessons(wi, findings))
+                                    self._lessons(wi, findings),
+                                    continuation.get("sha") if continuation else None)
         self.store.save_workorder(order)
         wi = self._write(wi, dict(wi, state="dispatching", activeWorkOrderId=order["id"], worker=worker,
                                   recovery=recovery),
@@ -852,7 +857,7 @@ class Foreman:
         errors = documents.check_result(result, order)
         if not errors and result["status"] != "completed":
             errors = [f"worker reported {result['status']}: {result.get('error')}"]
-            if (order["kind"] == "implement" and self.config.salvage and result.get("patch")
+            if (self.config.salvage and result.get("patch")
                     and OUT_OF_TIME.search(result.get("error") or "")):
                 wi = self._salvage(wi, order, result)  # keep the partial; the fail below still runs
         diagnosis = diagnostics.diagnose(order, result)
@@ -901,14 +906,48 @@ class Foreman:
             self.store.log("salvage_declined", {"reason": "the wip has moved forward twice"}, wi["id"])
             return wi
         branch = f"factory-wip/{wi['issueNumber']}"
+        expected_base = ((order.get("continuationSha") or order.get("headSha"))
+                         if order["kind"] == "fix" else order.get("continuationSha") or order.get("baseSha"))
+        if not expected_base or result["patch"].get("baseSha") != expected_base:
+            self.store.log("salvage_declined", {"reason": "the partial patch does not name the WorkOrder base",
+                                                 "workOrder": order["id"]}, wi["id"])
+            return wi
         try:
             sha = self.push_patch(wi, order, result["patch"], branch=branch)
         except patches.PatchError as exc:  # a refused patch is no partial to keep
             self.store.log("salvage_declined", {"reason": str(exc)}, wi["id"])
             return wi
         return self._write(wi, dict(wi, wip={"branch": branch, "sha": sha, "workOrder": order["id"],
-                                             "moves": moves}), "salvaged",
+                                             "kind": order["kind"], "headSha": order.get("headSha"),
+                                             "baseSha": order.get("baseSha"), "moves": moves,
+                                             "provenanceVersion": 1}), "salvaged",
                            workOrder=order["id"], sha=sha)
+
+    def _retire_stale_wip(self, wi, facts):
+        """Discard a checkpoint when the PR head or default base it continues from has moved.
+        A checkpoint the in-flight pass was given as its base is kept until that pass concludes:
+        its Result must apply on the checkpoint's exact SHA, and deleting the scratch branch
+        mid-pass would discard the pass's work and strike the attempt."""
+        wip = wi.get("wip")
+        if not wip:
+            return wi
+        active = next((order for order in self.store.workorders(wi["id"])
+                       if wi.get("activeWorkOrderId") and order["id"] == wi["activeWorkOrderId"]), None)
+        if active and active.get("continuationSha") == wip.get("sha"):
+            return wi
+        current_base = self.github.branch_head(wi["repo"], self._default_branch(wi["repo"]))
+        current_head = facts.get("pr", {}).get("headSha") if facts.get("pr") else None
+        source = next((order for order in self.store.workorders(wi["id"])
+                       if order["id"] == wip.get("workOrder")), None)
+        current_wip = self.github.branch_head(wi["repo"], wip["branch"])
+        stale = (wip.get("provenanceVersion") != 1 or source is None
+                 or source.get("kind") != wip.get("kind")
+                 or source.get("headSha") != wip.get("headSha")
+                 or source.get("baseSha") != wip.get("baseSha")
+                 or current_wip != wip.get("sha")
+                 or current_base != wip.get("baseSha")
+                 or (wip.get("kind") == "fix" and current_head != wip.get("headSha")))
+        return self._retire_wip(wi) if stale else wi
 
     def _retire_wip(self, wi):
         """A completed Result, a merge or an end retires the salvage scratch branch (ADR-0086):
@@ -958,7 +997,9 @@ class Foreman:
         pending = wi.get("remoteVerify")
         repo = wi["repo"]
         if pending is None:
-            base = patch.get("baseSha") or (order["headSha"] if order["kind"] == "fix" else order["baseSha"])
+            base = patch.get("baseSha") or (order.get("continuationSha") or order["headSha"]
+                                             if order["kind"] == "fix" else
+                                             order.get("continuationSha") or order["baseSha"])
             if self.github.file(repo, REMOTE_VERIFY_WORKFLOW, base) is None:  # the scratch branch is built on it
                 reason = (f"{repo} has no {REMOTE_VERIFY_WORKFLOW}, which runs its verify on a macOS runner: "
                           "add it (docs/RUNBOOK.md, Remote verify setup), then retry")
@@ -1005,7 +1046,9 @@ class Foreman:
     def push_patch(self, wi, order, patch, branch=None, force=None):
         """Apply the Result's patch on the WorkOrder's base and push it to the WorkItem's branch
         (ADR-0017), or to a scratch `branch`. Returns the pushed commit."""
-        base = patch.get("baseSha") or (order["headSha"] if order["kind"] == "fix" else order["baseSha"])
+        base = patch.get("baseSha") or (order.get("continuationSha") or order["headSha"]
+                                         if order["kind"] == "fix" else
+                                         order.get("continuationSha") or order["baseSha"])
         limits = order["constraints"]
         return patches.apply(self.config.git_url.format(repo=wi["repo"]), self.config.github_token,
                              branch or wi["branch"], base, patch, f"{wi['goal']} (#{wi['issueNumber']})\n\n"

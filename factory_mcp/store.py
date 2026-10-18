@@ -126,8 +126,17 @@ def _migrate_8(wi):
     return dict(wi, wallMsOverride=wi.get("wallMsOverride"))
 
 
+# Migration 9: mark older salvage checkpoints for safe retirement on the next tick.
+def _migrate_9(wi):
+    """Mark pre-provenance checkpoints so the Foreman can retire their scratch branches."""
+    wip = wi.get("wip")
+    if isinstance(wip, dict) and "provenanceVersion" not in wip:
+        return dict(wi, wip=dict(wip, provenanceVersion=0))
+    return wi
+
+
 MIGRATIONS = {1: _migrate_1, 2: _migrate_2, 3: _migrate_3, 4: _migrate_4, 5: _migrate_5,
-              6: _migrate_6, 7: _migrate_7, 8: _migrate_8}
+              6: _migrate_6, 7: _migrate_7, 8: _migrate_8, 9: _migrate_9}
 
 
 def canonical_inputs(inputs):

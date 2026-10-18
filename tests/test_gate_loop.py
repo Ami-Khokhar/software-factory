@@ -81,6 +81,80 @@ class GateLoopTest(unittest.TestCase):
         self.assertEqual(self.github.issues[(REPO, 7)]["state"], "closed")
         self.assertEqual(self.foreman.store.history(ID)[-1]["action"], "issue_closed")
 
+    def test_a_timed_out_fix_continues_from_its_exact_checkpoint(self):
+        self.gate("CHANGES", 1, "c1", MISSING_TEST)
+        wi = self.tick()
+        order = self.foreman.store.workorders(ID)[-1]
+        partial = {"schemaVersion": "factory.result/v1", "workOrderId": order["id"], "status": "failed",
+                   "patch": {"format": "unified", "diff": "partial", "baseSha": "c1"},
+                   "evidence": [], "error": "the harness timed out",
+                   "startedAt": "2026-09-24T00:00:00Z", "finishedAt": "2026-09-24T00:01:00Z"}
+        self.relay.finish(wi["providerTaskId"], output=json.dumps(partial))
+        wi = self.tick()
+        checkpoint = wi["wip"]
+        self.assertEqual((wi["state"], checkpoint["kind"], checkpoint["headSha"], checkpoint["baseSha"]),
+                         ("changes_requested", "fix", "c1", "base0"))
+        self.assertIn("the harness timed out", wi["attempts"][-1])
+        self.assertEqual(self.git.pushes[-1]["branch"], checkpoint["branch"])
+        wi = self.tick()
+        resumed = self.foreman.store.workorders(ID)[-1]
+        self.assertEqual((resumed["kind"], resumed["headSha"], resumed["continuationSha"]),
+                         ("fix", "c1", checkpoint["sha"]))
+
+    def test_a_moved_pr_head_or_default_base_retires_a_fix_checkpoint(self):
+        for moved in ("head", "base"):
+            with self.subTest(moved=moved):
+                self.setUp()
+                self.gate("CHANGES", 1, "c1", MISSING_TEST)
+                wi = self.tick()
+                order = self.foreman.store.workorders(ID)[-1]
+                partial = {"schemaVersion": "factory.result/v1", "workOrderId": order["id"], "status": "failed",
+                           "patch": {"format": "unified", "diff": "partial", "baseSha": "c1"},
+                           "evidence": [], "error": "the harness timed out",
+                           "startedAt": "2026-09-24T00:00:00Z", "finishedAt": "2026-09-24T00:01:00Z"}
+                self.relay.finish(wi["providerTaskId"], output=json.dumps(partial))
+                wi = self.tick()
+                branch = wi["wip"]["branch"]
+                if moved == "head":
+                    self.github.push(REPO, "factory/7", "person-head")
+                else:
+                    self.github.branches[(REPO, "main")] = "base1"
+                wi = self.tick()
+                if wi["state"] != "implementing":
+                    wi = self.tick()
+                resumed = self.foreman.store.workorders(ID)[-1]
+                self.assertIsNone(resumed.get("continuationSha"))
+                self.assertIn((REPO, branch), self.github.deleted)
+
+    def timed_out_fix_checkpoint(self):
+        """One CHANGES round whose fix pass times out, leaving a fix checkpoint. Returns the
+        checkpoint record."""
+        self.gate("CHANGES", 1, "c1", MISSING_TEST)
+        wi = self.tick()
+        order = self.foreman.store.workorders(ID)[-1]
+        partial = {"schemaVersion": "factory.result/v1", "workOrderId": order["id"], "status": "failed",
+                   "patch": {"format": "unified", "diff": "partial", "baseSha": "c1"},
+                   "evidence": [], "error": "the harness timed out",
+                   "startedAt": "2026-09-24T00:00:00Z", "finishedAt": "2026-09-24T00:01:00Z"}
+        self.relay.finish(wi["providerTaskId"], output=json.dumps(partial))
+        wi = self.tick()
+        return wi["wip"]
+
+    def test_a_running_continuation_keeps_its_checkpoint_when_the_default_base_moves(self):
+        checkpoint = self.timed_out_fix_checkpoint()
+        wi = self.tick()  # dispatch the continuation: the worker holds the checkpoint as its base
+        self.assertEqual((wi["state"], self.foreman.store.workorders(ID)[-1]["continuationSha"]),
+                         ("implementing", checkpoint["sha"]))
+        self.github.branches[(REPO, "main")] = "base1"  # the default base moves while the pass runs
+        wi = self.tick()
+        self.assertEqual((wi["state"], wi["wip"]["sha"]), ("implementing", checkpoint["sha"]))
+        self.assertNotIn((REPO, checkpoint["branch"]), self.github.deleted)  # the base still exists
+        self.git.sha = "c3"
+        self.relay.finish(wi["providerTaskId"], output=result_line(wi["activeWorkOrderId"]))
+        wi = self.tick()
+        self.assertEqual((wi["state"], wi.get("wip")), ("reviewing", None))
+        self.assertEqual(self.git.pushes[-1]["base"], checkpoint["sha"])  # applied on its exact base
+
     def merge(self, head):
         """The gate decides MERGE on `head` and PR 100 merges. Returns whether the WorkItem counts as
         merged with no person."""
