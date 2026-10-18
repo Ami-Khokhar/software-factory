@@ -72,7 +72,8 @@ class McpServerTest(unittest.TestCase):
                                   "factory_docker_control", "factory_approve_plan_allowance",
                                   "factory_use_allowance", "factory_queue_retry", "factory_authorize_setup_merge",
                                   "factory_revoke_setup_merge", "factory_merge_setup_pr",
-                                  "factory_set_worker", "factory_register_worker", "factory_set_timeout"})
+                                  "factory_set_worker", "factory_register_worker", "factory_set_timeout",
+                                  "factory_check_worker", "factory_reload_workers"})
         self.assertTrue(all(t["inputSchema"]["type"] == "object" for t in tools))
 
     def test_the_agent_timeout_tool_persists_without_starting_a_worker(self):
@@ -106,10 +107,28 @@ class McpServerTest(unittest.TestCase):
                                   "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
                                   "factory_use_allowance", "factory_queue_retry", "factory_merge_setup_pr",
                                   "factory_docker_status", "factory_docker_control",
-                                  "factory_set_worker", "factory_register_worker", "factory_set_timeout"})
+                                  "factory_set_worker", "factory_register_worker", "factory_set_timeout",
+                                  "factory_check_worker", "factory_reload_workers"})
         refused = self.rpc("tools/call", {"name": "factory_bootstrap_repo",
                                           "arguments": {"repo": "o/r", "by": "day-desk"}}, token=AGENT)
         self.assertIn("error", refused)  # an unknown tool for this token, not a call that ran
+
+    def test_worker_health_and_reload_are_bounded_driving_writes(self):
+        from unittest import mock
+        from tests.fakes import FakeRelay
+        from factory_mcp import tools as factory_tools
+        self.server.foreman.relay = FakeRelay()
+        with mock.patch.object(factory_tools.worker_ops, "check", return_value={"status": "ok"}) as check:
+            result = self.rpc("tools/call", {"name": "factory_check_worker", "arguments": {
+                "worker": "opencode-mimo-factory", "by": "Day Desk"}}, token=AGENT)["result"]
+        self.assertFalse(result["isError"])
+        check.assert_called_once_with(self.store, self.server.foreman.config,
+                                      "opencode-mimo-factory", "Day Desk", agent=True)
+        result = self.rpc("tools/call", {"name": "factory_reload_workers", "arguments": {
+            "by": "Day Desk"}}, token=AGENT)["result"]
+        self.assertFalse(result["isError"])
+        self.assertEqual(self.server.foreman.relay.reloads, 1)
+        self.assertEqual(self.server.foreman.relay.tasks, {})
 
     def test_a_call_with_the_agent_token_is_audited_as_the_agents(self):
         self.store.put(workitem())

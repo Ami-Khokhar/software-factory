@@ -70,6 +70,14 @@ CREATE TABLE IF NOT EXISTS setup_merges (
   approved_by TEXT NOT NULL,
   approved_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS worker_health (
+  worker_id TEXT PRIMARY KEY,
+  binding TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('healthy', 'quarantined')),
+  checked_at TEXT NOT NULL,
+  valid_until TEXT NOT NULL,
+  report TEXT NOT NULL
+);
 """
 # Migration 1: WorkItem fields the contract no longer has (#27).
 REMOVED_FIELDS = ("parentGoalId", "baseSha", "provider", "sessionHandle", "sessionNative", "sessionUrl")
@@ -402,6 +410,22 @@ class Store:
                 "ORDER BY started_at, request_id").fetchall()
         return [dict(zip(("requestId", "operation", "inputsFingerprint", "phase"), row))
                 for row in rows]
+
+    def put_worker_health(self, worker_id, binding, status, checked_at, valid_until, report):
+        """Store only the sanitized health document and its configuration binding."""
+        with self._lock:
+            self._db.execute("INSERT INTO worker_health VALUES (?, ?, ?, ?, ?, ?) "
+                             "ON CONFLICT(worker_id) DO UPDATE SET binding=excluded.binding, "
+                             "status=excluded.status, checked_at=excluded.checked_at, "
+                             "valid_until=excluded.valid_until, report=excluded.report",
+                             (worker_id, binding, status, checked_at, valid_until, report))
+
+    def worker_health(self, worker_id):
+        with self._lock:
+            row = self._db.execute("SELECT worker_id, binding, status, checked_at, valid_until, report "
+                                   "FROM worker_health WHERE worker_id = ?", (worker_id,)).fetchone()
+        return (dict(zip(("worker", "binding", "status", "checkedAt", "validUntil", "report"), row))
+                if row else None)
 
     @contextmanager
     def _transaction(self):

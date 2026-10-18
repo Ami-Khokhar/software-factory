@@ -285,11 +285,13 @@ def docker_status():
         return None
 
 
-def ensure_docker(wait=120, poll=2):
+def ensure_docker(wait=120, poll=2, start=True):
     """Start Docker (OrbStack) when it does not answer, so the first pass after a reboot needs no
-    person."""
+    person. Health-only probes pass `start=False` to avoid changing host service state."""
     if docker_status() == 0:
         return
+    if not start:
+        raise WorkerError("docker is not available", NO_DOCKER)
     for cmd in (["orb", "start"], ["open", "-g", "-a", "OrbStack"]):
         try:
             if subprocess.run(cmd, capture_output=True, timeout=wait).returncode == 0:
@@ -356,14 +358,18 @@ class Sandbox:
         return done.returncode, done.stdout, done.stderr
 
 
-def preflight(order, image, harness_argv, credential_specs, env_specs, scratch, work, verify):
+def preflight(order, image, harness_argv, credential_specs, env_specs, scratch, work, verify,
+              start_docker=True):
     """Checks the environment before the coding harness runs: the Docker daemon, the configured
     worker image, the harness inside it, the configured credential files and the base commit's
     verify command. Each failure raises WorkerError with its preflight code (ADR-0051), so the
     failed pass pauses as the environment instead of spending the budget on a broken one.
     Returns the credentials' 0700 copies and the harness env.
     """
-    ensure_docker()
+    if start_docker:
+        ensure_docker()
+    else:
+        ensure_docker(start=False)
     try:
         done = subprocess.run(["docker", "image", "inspect", image], capture_output=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired):

@@ -125,6 +125,12 @@ standard in the repo's AGENTS.md ask:
   unknown or cross-provider template is refused. The new worker is NOT in
   FACTORY_WORKERS and runs nothing until the owner lists it there and its provider-health pilot
   passes. Tell the owner both steps are theirs.
+- Before you say a registered worker is ready to use, call factory_check_worker with its id and
+  `day-desk` as `by`. Report only its sanitized status. A healthy record lasts 15 minutes and is
+  tied to the current config, credential-file metadata and image. This checks the synthetic probe
+  only; it does not add or activate the worker. When the owner has changed the relay registry and
+  asks you to refresh the relay, call factory_reload_workers with `day-desk` as `by`. It reloads
+  the registry only and never changes FACTORY_WORKERS.
 
 Show the owner the whole plan in chat: each issue in order, with its title and acceptance, and
 which issues run side by side. Before you ask for the yes, list the pre-flight the plan needs: the

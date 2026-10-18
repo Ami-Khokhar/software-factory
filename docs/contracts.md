@@ -9,6 +9,30 @@ or state is in a schema only if the factory writes it and something acts on it.
 
 See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md).
 
+## Worker health operations
+
+`factory_check_worker` accepts only a registered worker id and the caller name. It reads the relay
+registry, and admits only a Python 3 invocation of this deployment's exact `worker/runner.py`, one
+of the `pi`, `codex` or `opencode` harnesses, a pinned model, existing supported runner flags and
+copied credential files. Secret-bearing `--env` keys are refused before a child starts. The
+operation runs one synthetic probe through `scripts/provider_health.py`, closes child stdin, uses
+a fixed deadline, and tags its Docker container with a unique probe label for targeted cleanup.
+Only `factory.health/v1` status and allowlisted event fields are returned and stored. Raw child
+stdout, stderr, provider text, credential contents and environment values are discarded.
+
+SQLite keeps one latest health or quarantine record per worker. Its binding is a digest over the
+registered worker configuration, pinned model, credential paths and file metadata, and Docker
+image identity. No credential file contents are read. A record expires after 15 minutes; a later
+configuration change yields a different binding. A successful probe creates no WorkOrder and
+does not add or change the worker in `FACTORY_WORKERS`.
+Credential-file readability is not provider authentication; only a returned `factory.health/v1`
+status of `ok` proves the synthetic response was received.
+
+`factory_reload_workers` accepts only the caller name and invokes agent-relay's fixed
+`POST /v1/admin/reload` operation. It does not edit the relay registry, change `FACTORY_WORKERS`,
+start a task or retry work. Both operations are driving-token writes. Worker activation and
+dispatch-preflight consumption of these records are separate operations.
+
 ## The four documents
 
 | Document | Direction | Producer | Consumer | Schema |

@@ -1,14 +1,15 @@
 """The factory tools that Day Desk (Hermes) and the factory CLI call. Each one declares its effect."""
 from datetime import datetime, timezone
 
-from . import docker, lessons, metrics, repos, runtime
+from . import docker, lessons, metrics, repos, runtime, worker_ops
 from .foreman import MAX_ALLOWANCE, MAX_PLAN_ISSUES, RECOVERY_ACTIONS, Foreman, agent_may_resolve
 from .github import GitHubError
 from .mcp import Tool, ToolError
 
 # What Day Desk may call when it drives the factory with FACTORY_AGENT_TOKEN (ADR-0030). Setting up
 # a repo, its gate secrets, and the lessons workers read stay with the owner's token.
-AGENT_TOOLS = frozenset({"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons", "factory_report",
+AGENT_TOOLS = frozenset({"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons",
+                         "factory_report", "factory_check_worker", "factory_reload_workers",
                          "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
                          "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
                          "factory_use_allowance", "factory_queue_retry", "factory_merge_setup_pr",
@@ -353,6 +354,23 @@ def build(store, foreman, agent=False):
              "write", lambda args: foreman.register_worker(
                  args["worker"], args["model"], args["by"], template=args.get("template"),
                  agent=agent)),
+        Tool("factory_check_worker",
+             "Run one bounded synthetic provider-health check for a registered sandboxed worker. "
+             "Uses only the worker's existing pinned model, credential mounts, safe environment, "
+             "image and supported harness. Stores sanitized health or quarantine status for 15 minutes. "
+             "Never starts a WorkOrder or activates the worker.",
+             {"type": "object", "required": ["worker", "by"], "additionalProperties": False,
+              "properties": {"worker": {"type": "string", "minLength": 1},
+                             "by": {"type": "string", "minLength": 1}}}, "write",
+             lambda args: worker_ops.check(store, foreman.config,
+                                           args["worker"], args["by"], agent=agent)),
+        Tool("factory_reload_workers",
+             "Ask the running relay to reload its existing worker registry through its fixed local "
+             "reload endpoint. Does not edit the registry, change FACTORY_WORKERS, start a task or "
+             "retry work.",
+             {"type": "object", "required": ["by"], "additionalProperties": False,
+              "properties": {"by": {"type": "string", "minLength": 1}}}, "write",
+             lambda args: worker_ops.reload(store, foreman.relay, args["by"], agent=agent)),
         Tool("factory_replace_issue",
              "The owner's replacement of a WorkItem that is waiting on recovery (human_waiting or "
              "blocked) with ordered "
