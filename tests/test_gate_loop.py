@@ -283,6 +283,23 @@ class GateLoopTest(unittest.TestCase):
         self.assertEqual(found[0], "merge-conflict")
         self.assertNotIn(fingerprint("src/app.py", "No test for the error"), found)
 
+    def test_a_live_head_changes_verdict_survives_a_later_comment_for_another_head(self):
+        self.gate("CHANGES", 1, "c1", BAD_NAME)
+        self.tick()
+        self.pass_("c2")
+        self.gate("CHANGES", 2, "c2", MISSING_TEST)
+        self.gate("MERGE", 1, "c1")  # a delayed comment from the earlier head
+
+        wi = self.tick()
+
+        self.assertEqual(wi["state"], "implementing")
+        order = self.foreman.store.workorders(ID)[-1]
+        self.assertEqual((order["kind"], order["round"], order["headSha"]), ("fix", 2, "c2"))
+        self.assertEqual([f["problem"] for f in order["findingsToAddress"]], [MISSING_TEST["problem"]])
+        blocker = next(b for b in wi["blockers"]
+                       if b["fingerprint"] == fingerprint("src/app.py", "No test for the error"))
+        self.assertFalse(blocker["resolved"])
+
     def test_a_pr_that_cannot_be_read_on_its_own_is_not_taken_as_conflicting(self):
         def gone(repo, number):
             raise GitHubError(404, "Not Found")

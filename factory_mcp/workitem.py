@@ -232,12 +232,19 @@ def gate_run(github, repo, sha):
             "startedAt": runs[0].get("started_at") or runs[0].get("run_started_at")} if runs else None
 
 
-def current_verdict(wi, facts):
-    """The latest verdict if it is for the PR's head and newer than the one already accepted."""
-    if not facts["verdicts"] or not facts["pr"]:
+def verdict_for_head(facts):
+    """The latest trusted verdict for the PR's live head, regardless of later stale comments."""
+    if not facts["pr"]:
         return None
-    latest = facts["verdicts"][-1]
-    if latest["headSha"] != facts["pr"]["headSha"] or latest["round"] < wi.get("gateRound", 0):
+    head = facts["pr"]["headSha"]
+    return next((verdict for verdict in reversed(facts["verdicts"])
+                 if verdict["headSha"] == head), None)
+
+
+def current_verdict(wi, facts):
+    """The latest verdict for the PR's head if newer than the one already accepted."""
+    latest = verdict_for_head(facts)
+    if latest is None or latest["round"] < wi.get("gateRound", 0):
         return None  # stale: reviewed an older commit, or an older round
     if latest["headSha"] == wi.get("reviewedSha") and latest["round"] == wi.get("gateRound"):
         return None  # already accepted
@@ -290,8 +297,11 @@ def reconcile(wi, facts):
         return dict(wi, state="human_waiting", blockedOn="PR closed without merge")
     verdict = current_verdict(wi, facts)
     if verdict:
+        index = next(i for i in range(len(facts["verdicts"]) - 1, -1, -1)
+                     if facts["verdicts"][i] is verdict)
         wi.update(gateRound=verdict["round"], reviewedSha=verdict["headSha"],
-                  state=OUTCOME_STATE[verdict["outcome"]], blockers=blockers(facts["verdicts"]))
+                  state=OUTCOME_STATE[verdict["outcome"]],
+                  blockers=blockers(facts["verdicts"][:index + 1], latest=verdict))
         if verdict["outcome"] == "HUMAN":
             wi["blockedOn"] = "pr-gatekeeper decided HUMAN; read the latest gate comment"
         stuck = [b["fingerprint"] for b in wi["blockers"] if not b["resolved"]

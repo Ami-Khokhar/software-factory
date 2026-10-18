@@ -1,15 +1,15 @@
 """The factory tools that Day Desk (Hermes) and the factory CLI call. Each one declares its effect."""
 from datetime import datetime, timezone
 
-from . import docker, lessons, metrics, repos, worker_ops
+from . import docker, lessons, metrics, repos, runtime, worker_ops
 from .foreman import MAX_ALLOWANCE, MAX_PLAN_ISSUES, RECOVERY_ACTIONS, Foreman, agent_may_resolve
 from .github import GitHubError
 from .mcp import Tool, ToolError
 
 # What Day Desk may call when it drives the factory with FACTORY_AGENT_TOKEN (ADR-0030). Setting up
 # a repo, its gate secrets, and the lessons workers read stay with the owner's token.
-AGENT_TOOLS = frozenset({"factory_status", "factory_repo_check", "factory_lessons", "factory_report",
-                         "factory_check_worker", "factory_reload_workers",
+AGENT_TOOLS = frozenset({"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons",
+                         "factory_report", "factory_check_worker", "factory_reload_workers",
                          "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
                          "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
                          "factory_use_allowance", "factory_merge_setup_pr",
@@ -44,6 +44,8 @@ def _gate_pins(foreman):
 
 
 def build(store, foreman, agent=False):
+    runtime_schemas = []
+
     def summary_of(wi):
         row = {key: wi.get(key) for key in ("id", "state", "prNumber", "blockedOn", "waitingOn", "updatedAt")}
         if wi["state"] in WAITING:
@@ -123,6 +125,14 @@ def build(store, foreman, agent=False):
              {"type": "object", "required": ["action"], "additionalProperties": False,
               "properties": {"action": {"type": "string", "enum": ["start", "stop"]}}}, "write",
              lambda args: docker.control(args["action"], store, foreman.runtime_lock)),
+        Tool("factory_runtime_status",
+             "Read sanitized live runtime facts: revision, workers/model/image, credential-file "
+             "availability, service health, effective timeout and schema-cache differences. With id, "
+             "probe exact-head GitHub read permissions through the factory identity. Never tests a "
+             "provider, starts work, or reveals credentials/environment values.",
+             {"type": "object", "properties": {"id": {"type": "string", "minLength": 1}},
+              "additionalProperties": False}, "read", lambda args: runtime.report(
+                  foreman, runtime_schemas, args.get("id"))),
         Tool("factory_status",
              "Show one WorkItem with its history, or, when no id is given, a summary of all "
              "WorkItems and the repos the factory works on.",
@@ -493,4 +503,5 @@ def build(store, foreman, agent=False):
                              "by": {"type": "string", "minLength": 1, "description": "who retired it"}}},
              "write", lambda args: foreman.retire_lesson(args["repo"], args["fingerprint"], args["by"])),
     ]
+    runtime_schemas.extend(tool.listing() for tool in tools if not agent or tool.name in AGENT_TOOLS)
     return {tool.name: tool for tool in tools if not agent or tool.name in AGENT_TOOLS}

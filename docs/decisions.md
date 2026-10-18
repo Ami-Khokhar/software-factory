@@ -2241,6 +2241,28 @@ carrying the authorized name with canonical content, now refuses where the diges
 check would have let them through. A journal without the PR's record fails closed to a person.
 This supersedes ADR-0074's sentence that the merged PR's branch must match the grant's digest.
 
+## ADR-0091 — Runtime visibility is read-only and cache findings stay observational
+
+**Context.** A missing capability or an expired-looking worker could be a stale MCP schema, an
+unavailable credential file, a relay limit or a GitHub permission gap. Guessing from profile
+configuration could trigger an unnecessary repair or retry, while a diagnostic that returned
+credential contents or raw API errors would widen the exposure of the factory's secrets.
+
+**Decision.** `factory_runtime_status` reports sanitized runtime facts through a read-only tool.
+It may read the current tool schemas, the Hermes disk cache, the worker registry, credential-file
+readability, Docker image identifiers, relay limits and—when given a known WorkItem—its PR and
+comments/checks/workflow runs at the live PR head. It reports only status and counts for those
+probes, never credential/environment values, cache contents or raw API error bodies. File
+readability is not provider authentication. Disk cache differences are explicitly observations;
+they do not establish what an active chat has cached. `tools/list` advertises zero TTL and private
+scope, and the report directs a stale active chat to `/reload-mcp`.
+
+**Consequence.** Day Desk can diagnose discovery and read-permission friction before proposing a
+repair, while this tool cannot dispatch work or modify host and WorkItem state. The current
+caller's exposed schema set is hashed so owner and Day Desk token views are compared against the
+right tool surface. Cache hints guide clients, but an already connected client still needs an
+explicit reload. No stored WorkItem or worker document changes.
+
 ## ADR-0094 — Worker health checks use the deployed runner and cannot activate workers
 
 **Context.** A relay registry can hold agents that are not sandboxed factory workers, and a
