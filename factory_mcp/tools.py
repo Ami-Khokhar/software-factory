@@ -44,7 +44,8 @@ def _gate_pins(foreman):
 
 def build(store, foreman, agent=False):
     def summary_of(wi):
-        row = {key: wi.get(key) for key in ("id", "state", "prNumber", "blockedOn", "waitingOn", "updatedAt")}
+        row = {key: wi.get(key) for key in ("id", "state", "prNumber", "blockedOn", "waitingOn",
+                                             "headSha", "gateRound", "worker", "updatedAt")}
         if wi["state"] in WAITING:
             row["agentMayResolve"] = agent_may_resolve(wi, store.history(wi["id"]))
         elif wi["state"] == "exhausted":
@@ -124,7 +125,7 @@ def build(store, foreman, agent=False):
              lambda args: docker.control(args["action"], store, foreman.runtime_lock)),
         Tool("factory_status",
              "Show one WorkItem with its history, or, when no id is given, a summary of all "
-             "WorkItems and the repos the factory works on.",
+             "WorkItems, their current PR/head/gate round/worker, and the repos the factory works on.",
              {"type": "object", "properties": {"id": {"type": "string", "description": "owner/repo#issue"}},
               "additionalProperties": False},
              "read", status),

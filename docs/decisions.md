@@ -2241,3 +2241,22 @@ carrying the authorized name with canonical content, now refuses where the diges
 check would have let them through. A journal without the PR's record fails closed to a person.
 This supersedes ADR-0074's sentence that the merged PR's branch must match the grant's digest.
 
+## ADR-0096 — Scheduled factory notices follow material progress and keep delivery separate from acceptance
+
+**Context.** The no-agent watcher reported escalations but had no durable signal for progress, while
+the update wrapper suppressed duplicate text by exiting successfully even when `factory update`
+failed. A source merge or deploy could also read as task completion before a live issue accepted it.
+
+**Decision.** The watcher fingerprints state, blocker, dependency, PR, head, gate round and worker,
+not timestamps or state versions. Its first progress run establishes a baseline, terminal items in
+that baseline are silent, and owner blockers keep their existing delivery and agent-grace rules. The
+update wrapper delivers the first distinct failure with its nonzero status, stores the full latest
+diagnostic locally, and suppresses identical repeats until the result changes. A successful source
+deploy reports the deployed revision and says runtime acceptance remains unverified. The deployed
+commit marker still advances only after all deploy steps succeed.
+
+**Consequence.** Unchanged scheduled runs stay quiet, meaningful transitions and new owner blockers
+remain visible, and an unchanged current HEAD that matches the completed deployment marker skips
+verification. An incomplete deployment leaves that marker behind, so the next update still runs its
+pending work. Merge, closure and source deployment never stand in for live runtime acceptance.
+

@@ -620,7 +620,7 @@ real-container side of the same checks.
 | The relay's API token | `~/.config/agent-relay/token` (mode 600), written by the relay on its first start; factory-mcp and `factory stop` read it. `AGENT_RELAY_TOKEN` in the settings or secrets overrides it |
 | WorkItem store and audit log | `~/.local/state/factory-mcp/factory.sqlite3` |
 | Logs | `~/.local/state/factory-mcp/server.log`, `~/.local/state/agent-relay/relay.log` |
-| Deploy records | `~/.local/state/factory-mcp/deployed`: the last commit for which every deploy step succeeded; `last-update.txt`: the last message the `factory-update` job sent |
+| Deploy records | `~/.local/state/factory-mcp/deployed`: the last commit for which every deploy step succeeded; `last-update.txt`: the last successful update message sent; `last-update-failure.txt`: the full latest failed update and exit status, retained after duplicate delivery is suppressed |
 | Worker checkouts | `$FACTORY_CHECKOUT_ROOT/<owner>/<repo>` |
 | Worker definitions | The agents in `FACTORY_WORKERS`, in `~/.config/agent-relay/agents.json` |
 | launchd services | `com.agent-relay`, `com.software-factory.factory-mcp` in `~/Library/LaunchAgents` |
@@ -629,12 +629,16 @@ real-container side of the same checks.
 A merged change deploys itself: the `factory-update` job below runs `factory update` every 10
 minutes (ADR-0031). It fast-forwards the deployed checkout (and moves it to `main` when its branch
 is merged), runs the tests there, and restarts factory-mcp only if they pass. A failing test keeps
-the old version running, and the job sends you why. It also rebuilds the worker image when
+the old version running, and the job sends you why once for that stable failure. Repeated failures
+stay quiet until the output or status changes; the full latest failure remains in
+`last-update-failure.txt`. It also rebuilds the worker image when
 `worker/Dockerfile` changed, rebuilds Day Desk's sandbox image when `tenant/hermes/sandbox/`
 changed, and runs `hermes profile update day-desk -y` when `tenant/hermes/` changed. Roll out one deploy at
 a time (ADR-0055): verify the deployed factory-mcp accepts what each producer change emits — the
 worker image especially — pilot it on one owner-approved live issue, and only then let the next
-change follow. A failed
+change follow. A successful source deploy is not runtime acceptance: the update reports the source
+revision and deploy steps only. Pilot the deployed behavior on one owner-approved live issue before
+calling that change accepted. A failed
 build or profile update stops the deploy with its message, and the next update runs it again from
 the deploy record, which names the last commit for which every step succeeded. After a profile
 update succeeds, the deploy also verifies the live profile's tool discovery: it asks factory-mcp
@@ -748,19 +752,8 @@ printf '#!/usr/bin/env bash\nexport PATH="/opt/homebrew/bin:/usr/local/bin:$PATH
   > ~/.hermes/profiles/day-desk/scripts/factory-drive-queue.sh
 hermes -p day-desk cron create "every 5m" --monitor-script factory-drive-queue.sh --skill software-factory \
   --deliver telegram --name factory-drive "Run the 'Drive the factory' section of the software-factory skill."
-cat > ~/.hermes/profiles/day-desk/scripts/factory-update.sh <<'SH'
-#!/usr/bin/env bash
-# Sends what factory update printed only when it differs from the last run: a commit whose tests
-# fail stays on origin, and each run would report it again.
-export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
-last="$HOME/.local/state/factory-mcp/last-update.txt"
-# Hermes's PATH may find another python3, without requirements.txt: name the one you installed it for
-out="$(/usr/bin/python3 "$HOME/.local/bin/factory" update 2>&1)"
-[ -z "$out" ] && exit 0  # nothing to deploy
-[ "$out" = "$(cat "$last" 2>/dev/null)" ] && exit 0
-printf '%s\n' "$out" > "$last"
-printf '%s\n' "$out"
-SH
+cp ~/.local/share/software-factory/tenant/hermes/scripts/factory-update.sh \
+  ~/.hermes/profiles/day-desk/scripts/factory-update.sh
 chmod +x ~/.hermes/profiles/day-desk/scripts/factory-update.sh
 hermes -p day-desk cron create "every 10m" --no-agent --script factory-update.sh --deliver telegram \
   --name factory-update
@@ -769,12 +762,15 @@ hermes -p day-desk cron create "every 10m" --no-agent --script factory-update.sh
 `factory-drive` runs the model only when the escalations Day Desk may answer change, and tells you
 what it chose for each: through the plan allowance when one covers the WorkItem, reading the
 `allowanceUse` spend back before it answers, else through its own factory_resolve_human answer. `factory-watch` tells you of an escalation Day Desk may not answer, or one
-it left for 30 minutes, and of an exhausted WorkItem either way; without `FACTORY_AGENT_TOKEN` it
-tells you of every one at once. To retry an exhausted WorkItem, reply to the alert in Telegram:
+it left for 30 minutes, and of an exhausted WorkItem either way; unchanged scheduled runs are quiet.
+It also reports material state, head, PR and gate-round transitions after its first progress baseline.
+A merge or issue closure message says that runtime acceptance still needs confirmation. Without
+`FACTORY_AGENT_TOKEN`, the watcher tells you of every owner blocker at once. To retry an exhausted
+WorkItem, reply to the alert in Telegram:
 Day Desk retries it with a fresh budget, as `factory retry` does (ADR-0043).
 
-`factory-watch` sends one message for each WorkItem that newly waits on you, and an error message
-when factory-mcp does not answer. `factory-report` sends the week in one message every Monday at
+`factory-watch` sends one message for each new owner blocker and each material progress transition,
+and an error message when factory-mcp does not answer. `factory-report` sends the week in one message every Monday at
 09:00 (ADR-0025): the autonomy rate of the WorkItems that ended in the last 7 days and in the 7
 days before, how many went to a person or ran out of passes and the 3 most frequent reasons why,
 the new lesson candidates and the lessons flagged as not working. Run `factory report` to see it
