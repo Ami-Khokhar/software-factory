@@ -90,6 +90,10 @@ def sh(cwd, *args):
 
 
 class RunnerTest(unittest.TestCase):
+    def test_redacted_tail_keeps_the_diagnostic_suffix(self):
+        value = runner.redact("prefix " + "x" * 350 + " actionable ending", (), limit=40)
+        self.assertTrue(value.endswith("actionable ending"))
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name)
@@ -181,11 +185,11 @@ class RunnerTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
 
     def run_order(self, mode, kind="implement", repo="o/r", head=None, remote_verify=False,
-                  max_lines=600, ceiling=None, omit_ceiling=False):
+                  max_lines=600, ceiling=None, omit_ceiling=False, continuation=None):
         wi = workitem(id="o/r#7", repo=repo, issueNumber=7, goal="Fix the app", headSha=head)
         config = Config(mcp_token="t", repos=frozenset(),
                         remote_verify_repos=frozenset({repo}) if remote_verify else frozenset())
-        order = documents.workorder(wi, kind, 0, config, self.base)
+        order = documents.workorder(wi, kind, 0, config, self.base, continuation_sha=continuation)
         order["constraints"]["maxChangedLines"] = max_lines
         order["constraints"]["maxSourceChangedLines"] = max_lines
         if omit_ceiling:
@@ -288,6 +292,14 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(list(self.phases_of(result)), [
             "checkout", "environment setup", "harness execution", "patch collection"])
         self.assertEqual(documents.check_result(result, order), [])
+
+    def test_a_fix_continuation_starts_from_the_checkpoint_while_retaining_the_reviewed_head(self):
+        sh(self.checkout, "push", "-q", "origin", f"{self.base}:refs/heads/factory/7")
+        sh(self.checkout, "push", "-q", "origin", f"{self.base}:refs/heads/factory-wip/7")
+        result, order = self.run_order("fix", kind="fix", head=self.base, continuation=self.base)
+        self.assertEqual((order["headSha"], order["continuationSha"], result["patch"]["baseSha"]),
+                         (self.base, self.base, self.base))
+        self.assertEqual(result["status"], "completed")
 
     def test_a_timeout_with_no_change_returns_no_patch_and_todays_error(self):
         result, order = self.run_order("salvage-nomod")

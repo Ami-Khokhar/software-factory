@@ -44,7 +44,7 @@ def sanitize(text, limit=MAX_CONTEXT):
     line = _WORKORDER_PAYLOAD.sub(" ", " ".join((text or "").split()))
     line = _ENV_VALUE.sub(r"\1=<redacted>", line)
     line = _CREDENTIAL.sub(r"\g<2>=<redacted>", line)
-    return _TOKEN.sub("<redacted>", line)[:limit]
+    return _TOKEN.sub("<redacted>", line)[-limit:]
 
 
 def diagnose(order, result):

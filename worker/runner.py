@@ -140,7 +140,7 @@ def redact(text, secrets, limit=DIAGNOSTIC_TAIL):
     line = _WORKORDER_PAYLOAD.sub(" ", line)
     line = _ENV_VALUE.sub(r"\1=<redacted>", line)
     line = _CREDENTIAL.sub(r"\g<2>=<redacted>", line)
-    return _TOKEN.sub("<redacted>", line)[:limit]
+    return _TOKEN.sub("<redacted>", line)[-limit:]
 
 
 def verification_summary(output, limit=DIAGNOSTIC_TAIL):
@@ -207,16 +207,27 @@ def prepare(cwd, order, branch, work):
     WorkOrder builds on. Returns that commit. The copy has no remote, so a push has nowhere to go."""
     git(cwd, "fetch", "-q", "--prune", "origin")
     if order["kind"] == "fix":
-        base = order.get("headSha")
+        base = order.get("continuationSha") or order.get("headSha")
         git(cwd, "fetch", "-q", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}")
+        if order.get("continuationSha"):
+            remote_head = git(cwd, "rev-parse", f"refs/remotes/origin/{branch}")
+            if remote_head != order.get("headSha"):
+                raise WorkerError("the reviewed PR head moved after the checkpoint was checked")
     else:
-        base = order.get("baseSha") or git(cwd, "rev-parse", "origin/HEAD")
+        base = order.get("continuationSha") or order.get("baseSha") or git(cwd, "rev-parse", "origin/HEAD")
     if not base:
         raise WorkerError("the WorkOrder names no commit to build on")
     git(cwd, "cat-file", "-e", f"{base}^{{commit}}")
     # The default branch's head, where the whole pull request's size is read from (ADR-0040).
     default = git(cwd, "rev-parse", "origin/HEAD")
     git(cwd, "cat-file", "-e", f"{default}^{{commit}}")
+    if order.get("continuationSha"):
+        checkpoint = order["workItemId"].rsplit("#", 1)[-1]
+        scratch = git(cwd, "rev-parse", f"refs/remotes/origin/factory-wip/{checkpoint}")
+        if scratch != order["continuationSha"]:
+            raise WorkerError("the checkpoint branch moved after it was checked")
+        if default != order.get("baseSha"):
+            raise WorkerError("the default branch base moved after the checkpoint was checked")
     git(os.path.dirname(work), "clone", "-q", "--no-hardlinks", "--no-checkout", cwd, work)
     git(work, "fetch", "-q", cwd, "+refs/remotes/origin/*:refs/remotes/source/*")
     git(work, "remote", "remove", "origin")

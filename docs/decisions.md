@@ -2262,3 +2262,25 @@ repair, while this tool cannot dispatch work or modify host and WorkItem state. 
 caller's exposed schema set is hashed so owner and Day Desk token views are compared against the
 right tool surface. Cache hints guide clients, but an already connected client still needs an
 explicit reload. No stored WorkItem or worker document changes.
+
+## ADR-0092 — A salvage checkpoint carries its exact source and may continue a gate fix
+
+**Context.** ADR-0086 preserved partial work only for implementation passes. A timed-out gate fix
+therefore repeated the same changes from the reviewed PR head. The old `wip` record also did not
+say which WorkOrder, kind, reviewed PR head, or default-branch base produced its scratch commit, so
+the Foreman could not tell whether that checkpoint was still valid after GitHub changed.
+
+**Decision.** Salvage a failed implement or fix Result only when its patch names the exact base the
+worker was given. Record the source WorkOrder, kind, PR head, default-branch base, scratch branch
+and scratch SHA. Before another dispatch, verify that the source WorkOrder agrees, the scratch
+branch still points at the saved SHA, the default branch has not moved, and for a fix the live PR
+head still equals the reviewed head. Otherwise delete and clear the checkpoint. A fix continuation
+keeps its reviewed `headSha` and carries a separate `continuationSha`; the worker starts from that
+SHA. The failed Result still records a failed attempt, and a checkpoint never satisfies evidence
+or pushes to the PR branch. Diagnostic sanitizers take their bounded suffix after redaction so a
+long prefix cannot hide the actionable end of a failure.
+
+**Consequence.** A timeout during a fix keeps verified provenance for the next pass and stale
+partial work is discarded after branch or base drift. Existing checkpoints without provenance
+are retired. Independent verification and the normal protected-path, size, and push guards still
+decide whether a completed Result can reach the PR.

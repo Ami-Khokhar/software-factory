@@ -81,6 +81,51 @@ class GateLoopTest(unittest.TestCase):
         self.assertEqual(self.github.issues[(REPO, 7)]["state"], "closed")
         self.assertEqual(self.foreman.store.history(ID)[-1]["action"], "issue_closed")
 
+    def test_a_timed_out_fix_continues_from_its_exact_checkpoint(self):
+        self.gate("CHANGES", 1, "c1", MISSING_TEST)
+        wi = self.tick()
+        order = self.foreman.store.workorders(ID)[-1]
+        partial = {"schemaVersion": "factory.result/v1", "workOrderId": order["id"], "status": "failed",
+                   "patch": {"format": "unified", "diff": "partial", "baseSha": "c1"},
+                   "evidence": [], "error": "the harness timed out",
+                   "startedAt": "2026-09-24T00:00:00Z", "finishedAt": "2026-09-24T00:01:00Z"}
+        self.relay.finish(wi["providerTaskId"], output=json.dumps(partial))
+        wi = self.tick()
+        checkpoint = wi["wip"]
+        self.assertEqual((wi["state"], checkpoint["kind"], checkpoint["headSha"], checkpoint["baseSha"]),
+                         ("changes_requested", "fix", "c1", "base0"))
+        self.assertIn("the harness timed out", wi["attempts"][-1])
+        self.assertEqual(self.git.pushes[-1]["branch"], checkpoint["branch"])
+        wi = self.tick()
+        resumed = self.foreman.store.workorders(ID)[-1]
+        self.assertEqual((resumed["kind"], resumed["headSha"], resumed["continuationSha"]),
+                         ("fix", "c1", checkpoint["sha"]))
+
+    def test_a_moved_pr_head_or_default_base_retires_a_fix_checkpoint(self):
+        for moved in ("head", "base"):
+            with self.subTest(moved=moved):
+                self.setUp()
+                self.gate("CHANGES", 1, "c1", MISSING_TEST)
+                wi = self.tick()
+                order = self.foreman.store.workorders(ID)[-1]
+                partial = {"schemaVersion": "factory.result/v1", "workOrderId": order["id"], "status": "failed",
+                           "patch": {"format": "unified", "diff": "partial", "baseSha": "c1"},
+                           "evidence": [], "error": "the harness timed out",
+                           "startedAt": "2026-09-24T00:00:00Z", "finishedAt": "2026-09-24T00:01:00Z"}
+                self.relay.finish(wi["providerTaskId"], output=json.dumps(partial))
+                wi = self.tick()
+                branch = wi["wip"]["branch"]
+                if moved == "head":
+                    self.github.push(REPO, "factory/7", "person-head")
+                else:
+                    self.github.branches[(REPO, "main")] = "base1"
+                wi = self.tick()
+                if wi["state"] != "implementing":
+                    wi = self.tick()
+                resumed = self.foreman.store.workorders(ID)[-1]
+                self.assertIsNone(resumed.get("continuationSha"))
+                self.assertIn((REPO, branch), self.github.deleted)
+
     def merge(self, head):
         """The gate decides MERGE on `head` and PR 100 merges. Returns whether the WorkItem counts as
         merged with no person."""

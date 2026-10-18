@@ -100,6 +100,14 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   `{branch, sha, startedAt}` while the WorkItem is `implementing` and waits for the GitHub run on
   its scratch branch `factory-verify/<issue>-<n>`; it is `null` otherwise. No stored WorkItem
   needs a migration: a document without the field reads as not waiting.
+- **Timed-out checkpoints (ADR-0092).** `WorkItem.wip` records `{branch, sha, workOrder, kind,
+  headSha, baseSha, moves}`. The source WorkOrder must match its kind and saved heads, the scratch
+  branch must still point at `sha`, and the default branch must still point at `baseSha`. A fix
+  checkpoint also requires the PR's live head to remain `headSha`. A continuation WorkOrder keeps
+  the original default base in `baseSha` and carries `continuationSha` for the exact scratch commit
+  the worker starts from. A fix WorkOrder keeps the reviewed PR head in `headSha`. The timeout
+  Result remains failed; the checkpoint is context for another attempt, never
+  evidence of completion. Old checkpoints without this provenance are discarded.
 - **`WorkOrder.lessons` is data (ADR-0020).** At most 10 of the repo's
   owner-approved lessons, each `{fingerprint, text}` with text of at most 300
   characters, newest first; `[]` when the repo has none. The worker rules say to

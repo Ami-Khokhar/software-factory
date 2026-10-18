@@ -25,13 +25,13 @@ PARTIAL_WORK = ("A worker ran out of time. Its unfinished work is the commit you
                 "Keep what is right, fix or remove the rest, and finish.")
 
 
-def timeout_result(order_id, diff="diff --git a/src/app.py b/src/app.py\n"):
+def timeout_result(order_id, base_sha, diff="diff --git a/src/app.py b/src/app.py\n"):
     """A Result from a pass that ran out of clock (ADR-0086): failed with the timeout error,
     carrying the partial patch the runner salvaged."""
     return "working...\n" + json.dumps({
         "schemaVersion": "factory.result/v1", "workOrderId": order_id, "status": "failed",
         "error": "the harness timed out",
-        "patch": {"format": "unified", "diff": diff},
+        "patch": {"format": "unified", "diff": diff, "baseSha": base_sha},
         "evidence": [], "startedAt": "2026-09-24T00:00:00Z", "finishedAt": "2026-09-24T00:10:00Z"})
 
 
@@ -96,7 +96,10 @@ class SalvageTest(ForemanCase):
     def keep_partial(self, diff="diff --git a/src/app.py b/src/app.py\n"):
         """One pass that ran out of clock with partial work, and the tick that keeps it."""
         wi, task = self.dispatch()
-        self.relay.finish(task["id"], output=timeout_result(wi["activeWorkOrderId"], diff))
+        order = self.foreman.store.workorders(ID)[-1]
+        base_sha = order.get("continuationSha") or (order.get("headSha") if order["kind"] == "fix"
+                                                      else order["baseSha"])
+        self.relay.finish(task["id"], output=timeout_result(wi["activeWorkOrderId"], base_sha, diff))
         return self.tick()
 
     def test_a_timed_out_pass_keeps_its_partial_work_for_the_next_pass(self):
@@ -107,7 +110,8 @@ class SalvageTest(ForemanCase):
                          ("ready", "factory-wip/7", "c1", 1))
         wi, _ = self.dispatch()  # the rescue pass bases itself on the kept work
         order = self.foreman.store.workorders(ID)[-1]
-        self.assertEqual(order["baseSha"], "c1")
+        self.assertEqual(order["baseSha"], "base0")
+        self.assertEqual(order["continuationSha"], "c1")
         self.assertEqual(order["findingsToAddress"][0]["problem"], PARTIAL_WORK)
 
     def test_a_third_timeout_does_not_move_the_wip_again(self):
