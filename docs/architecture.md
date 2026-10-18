@@ -96,6 +96,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/jev_rank.py` | The opt-in Jev call that ranks a repo's lessons for one dispatch, with its fallbacks (ADR-0058) |
 | `factory_mcp/routing.py` | Which worker takes the next attempt: locality first, then one that has not failed |
 | `factory_mcp/metrics.py` | The escalation text, the autonomy rate, whether each lesson works, and the weekly report's numbers |
+| `factory_mcp/runtime.py` | Sanitized, read-only runtime facts and observational MCP schema-cache diagnostics (ADR-0091) |
 | `factory_mcp/config.py` | Settings from the environment and `repos.json` |
 | `worker/runner.py` | Runs one WorkOrder in the sandbox and prints its Result |
 | `worker/Dockerfile` | The sandbox image: git, Python, Node, pinned pi, Codex and OpenCode, and no GitHub credential |
@@ -141,7 +142,10 @@ A tick comes from the background loop or from `factory_tick`.
      merges. Then `closed`.
 3. **Entering `human_waiting`, `blocked` or `exhausted`** comments on the issue and mentions the
    owner. `factory watch` also tells the owner in Telegram of `human_waiting`, `blocked` and
-   `exhausted`: Day Desk can resolve the first two on its own and the owner can answer all three; Day Desk answers `exhausted`, or an incident it already answered, only when the owner asked for that choice in chat (ADR-0035, ADR-0043, ADR-0046, ADR-0081).
+   `exhausted`, and deduplicates material state, PR, head, gate-round and worker transitions. It
+   keeps Day Desk's grace rules, suppresses historical terminal items on its first progress baseline,
+   and says that merge or closure does not establish runtime acceptance (ADR-0035, ADR-0043,
+   ADR-0046, ADR-0081, ADR-0093).
 
 ## State machine
 
@@ -225,7 +229,8 @@ The states are the enum in `schemas/workitem.schema.json`.
 | One PR's size: 700 source lines target, 1000 source ceiling, 20 files binding, tests/docs separate, whole PR measured from the default branch (ADR-0040 with ADR-0079) | `factory_mcp/sizing.py` (the metric), `worker/runner.py` `collect` (whole PR, before the verify — source target warns, source ceiling refuses as size-only), `Foreman.check_pushed` (covers the file count, records `pr_size_advisory` with the totals), `patches.apply` (the push's own check, for a base that advanced), `Foreman._size_recovery` (proposes an acceptance-preserving decomposition) | `test_sizing`: `test_the_accepted_sizes_and_the_recovery_boundary`, `test_it_reports_source_tests_and_docs_separately`; `test_worker_runner`: `test_tests_and_docs_do_not_count_against_the_source_target`, `test_a_source_total_over_the_ceiling_is_a_size_only_recovery`, `test_a_hard_line_bound_still_refuses_when_the_workorder_names_it`; `test_actions`: `test_a_change_must_fit_one_pr`, `test_a_source_ceiling_excess_routes_to_a_decomposition_not_an_attempt`, `test_an_allowance_never_buys_a_planned_decomposition_without_the_owner`; `test_workers`: `test_a_patch_that_takes_the_branch_over_its_limits_is_never_pushed` |
 | GitHub holds the pushed commit | `Foreman.check_pushed` | `test_actions`: `test_bad_results_fail_attempts_then_block` |
 | One PR per WorkItem | `Foreman.open_pr` | `test_actions`: `test_a_result_for_a_branch_with_an_open_pr_joins_that_pr`, `test_open_pr_adopts_a_pr_opened_after_the_reconcile` |
-| A stale verdict is ignored | `workitem.current_verdict` | `test_actions`: `test_stale_verdict_ignored`; `test_reconcile`: `test_old_round_is_stale` |
+| A verdict is selected for the exact live PR head despite later comments for another head, and older rounds remain stale | `workitem.current_verdict`, `Foreman.act` | `test_gate_loop`: `test_a_live_head_changes_verdict_survives_a_later_comment_for_another_head`; `test_actions`: `test_stale_verdict_ignored`; `test_reconcile`: `test_old_round_is_stale` |
+| Transient GitHub GET resets, rate limits and server errors retry within a fixed wait bound; exhausted transport failures normalize to `GitHubError`; writes never retry | `GitHub._request` | `test_github`: `test_get_retries_bounded_rate_limits_and_server_errors`, `test_non_finite_retry_after_does_not_sleep_or_retry`, `test_get_retries_a_connection_reset`, `test_exhausted_get_transport_failures_are_github_errors`, `test_a_write_is_never_retried_after_a_server_error` |
 | The same problem twice goes to a person | `workitem.reconcile` | `test_gate_loop`: `test_same_problem_twice_goes_to_a_human` |
 | A merge without the gate is recorded | `workitem.reconcile` | `test_gate_loop`: `test_merge_without_a_merge_verdict_is_flagged` |
 | A PR that conflicts with its base is made again on the current base | `Foreman.act` | `test_gate_loop`: `test_a_pr_that_conflicts_with_main_is_made_again_on_the_current_main` |

@@ -108,6 +108,15 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   `{branch, sha, startedAt}` while the WorkItem is `implementing` and waits for the GitHub run on
   its scratch branch `factory-verify/<issue>-<n>`; it is `null` otherwise. No stored WorkItem
   needs a migration: a document without the field reads as not waiting.
+- **Timed-out checkpoints (ADR-0092).** `WorkItem.wip` records `{branch, sha, workOrder, kind,
+  headSha, baseSha, moves, provenanceVersion}`. The source WorkOrder must match its kind and saved heads, the scratch
+  branch must still point at `sha`, and the default branch must still point at `baseSha`. A fix
+  checkpoint also requires the PR's live head to remain `headSha`. A continuation WorkOrder keeps
+  the original default base in `baseSha` and carries `continuationSha` for the exact scratch commit
+  the worker starts from. A fix WorkOrder keeps the reviewed PR head in `headSha`. The timeout
+  Result remains failed; the checkpoint is context for another attempt, never
+  evidence of completion. Migration 9 marks old checkpoints as provenance version 0 so the Foreman
+  can delete their recorded scratch branch and clear them before dispatch.
 - **`WorkOrder.lessons` is data (ADR-0020).** At most 10 of the repo's
   owner-approved lessons, each `{fingerprint, text}` with text of at most 300
   characters, newest first; `[]` when the repo has none. The worker rules say to
@@ -220,6 +229,39 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
   the states and fields the WorkItem already has.
 - **Unknown properties are rejected** (`additionalProperties: false`) so a cell
   cannot smuggle vendor-specific fields across a boundary.
+
+## Runtime status and tool discovery
+
+`factory_runtime_status` is a read-only MCP operation, not a fifth worker
+document. It accepts an optional `id` naming a stored WorkItem. Without one it
+reports the running factory revision, configured worker order and registered
+sandboxed factory-runner status and timeout facts. It reports model, image and
+credential-file readability only for a `python3` entry whose first argument is
+an absolute `worker/runner.py` path with a harness after `--`. Such registered
+workers are enumerated even before they are in `FACTORY_WORKERS`. A configured
+worker that does not match this rule is marked `sandboxed: false` with no image
+claim; malformed argument lists are marked `invalid_args` with `sandboxed: null`.
+Credential paths use the
+runner's `expanduser` behavior. The report also includes the relay health and
+timeout cap and a comparison of the currently exposed tool
+schemas with Hermes' disk cache. With an item id, it also reports the stored
+and live PR head and whether comments, check runs and gate workflow runs can be
+read for that exact live head. A missing PR has no head-level diagnostics.
+
+Credential availability means only that the configured file is readable; the
+report never attempts provider authentication. Credential and environment
+values, raw API error bodies, and cache contents are not returned. GitHub
+permission failures are reduced to `forbidden`, and other probe failures to
+`unavailable`. Cache findings describe the readable disk cache only and do not
+claim to describe the active chat's schema. The response advises `/reload-mcp`
+when the active chat may have stale tools.
+
+MCP `tools/list` includes `ttlMs: 0` and `cacheScope: "private"` to signal that
+tool schemas should not be retained as shared cache entries. These hints do not
+refresh an already running client. The caller must reconnect or use
+`/reload-mcp` to rebuild its schemas. Runtime status only reads local files,
+Docker image metadata and GitHub/relay read endpoints; it does not start a
+worker, provider request, retry, allowance spend or host setting change.
 
 ## State machine
 

@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "worker"))
 import runner  # noqa: E402
 
 HARNESS = r'''
-import os, re, stat, subprocess, sys, time
+import json, os, re, stat, subprocess, sys, time
 mode = sys.argv[1]
 def git(*args):
     subprocess.run(["git", *args], check=True, capture_output=True)
@@ -75,7 +75,14 @@ if mode == "timeout":
     for directory in os.environ.get("CREDENTIAL_DIRS", "").split(":"):
         if os.path.isdir(directory):
             for name in sorted(os.listdir(directory)):
-                print(open(os.path.join(directory, name)).read(), flush=True)
+                text = open(os.path.join(directory, name)).read()
+                print(text, flush=True)
+                try:
+                    credential = json.loads(text)
+                except ValueError:
+                    continue
+                print(credential.get("access_token", ""), flush=True)
+                print(credential.get("other", {}).get("api_key", ""), flush=True)
     print(sys.argv[-1], flush=True)
     time.sleep(30)
 print("DONE")
@@ -90,6 +97,25 @@ def sh(cwd, *args):
 
 
 class RunnerTest(unittest.TestCase):
+    def test_redacted_tail_keeps_the_diagnostic_suffix(self):
+        value = runner.redact("prefix " + "x" * 350 + " actionable ending", (), limit=40)
+        self.assertTrue(value.endswith("actionable ending"))
+
+    def test_redacted_tail_with_a_nonpositive_limit_is_empty(self):
+        for limit in (0, -1):
+            with self.subTest(limit=limit):
+                self.assertEqual(runner.redact("secret", (), limit=limit), "")
+
+    def test_short_metadata_values_of_a_credential_file_are_not_redaction_secrets(self):
+        secrets = runner.credential_secrets(
+            '{"type": "api", "format": "json", "key": "k", "token": "ghp_abcdefghijklmnopqr"}')
+        self.assertNotIn("api", secrets)  # "type" names metadata, not a secret
+        self.assertNotIn("json", secrets)  # too short to be worth mangling the tail over
+        self.assertIn("k", secrets)  # a credential-shaped key still collects its value
+        self.assertIn("ghp_abcdefghijklmnopqr", secrets)
+        line = "type=api format=json OK factory.result/v1"
+        self.assertEqual(runner.redact(line, secrets, limit=100), line)  # the tail survives whole
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name)
@@ -181,11 +207,11 @@ class RunnerTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
 
     def run_order(self, mode, kind="implement", repo="o/r", head=None, remote_verify=False,
-                  max_lines=600, ceiling=None, omit_ceiling=False):
+                  max_lines=600, ceiling=None, omit_ceiling=False, continuation=None):
         wi = workitem(id="o/r#7", repo=repo, issueNumber=7, goal="Fix the app", headSha=head)
         config = Config(mcp_token="t", repos=frozenset(),
                         remote_verify_repos=frozenset({repo}) if remote_verify else frozenset())
-        order = documents.workorder(wi, kind, 0, config, self.base)
+        order = documents.workorder(wi, kind, 0, config, self.base, continuation_sha=continuation)
         order["constraints"]["maxChangedLines"] = max_lines
         order["constraints"]["maxSourceChangedLines"] = max_lines
         if omit_ceiling:
@@ -288,6 +314,58 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(list(self.phases_of(result)), [
             "checkout", "environment setup", "harness execution", "patch collection"])
         self.assertEqual(documents.check_result(result, order), [])
+
+    def fix_continuation_order(self, head, checkpoint):
+        """Push `head` as the reviewed PR head and a distinct `checkpoint` commit as the salvage
+        branch, then run one fix continuation built on `checkpoint`."""
+        sh(self.checkout, "push", "-q", "origin", f"{head}:refs/heads/factory/7")
+        sh(self.checkout, "push", "-q", "origin", f"{checkpoint}:refs/heads/factory-wip/7")
+        return self.run_order("fix", kind="fix", head=head, continuation=checkpoint)
+
+    def extra_commit(self, message):
+        """One more commit in the local checkout, past self.base."""
+        (self.checkout / "checkpoint.txt").write_text(message)
+        sh(self.checkout, "add", "-A")
+        sh(self.checkout, "-c", "user.name=w", "-c", "user.email=w@w", "commit", "-qm", "checkpoint")
+        return sh(self.checkout, "rev-parse", "HEAD")
+
+    def test_a_fix_continuation_starts_from_the_checkpoint_while_retaining_the_reviewed_head(self):
+        checkpoint = self.extra_commit("checkpoint\n")
+        result, order = self.fix_continuation_order(self.base, checkpoint)
+        self.assertEqual((order["headSha"], order["continuationSha"], result["patch"]["baseSha"]),
+                         (self.base, checkpoint, checkpoint))
+        self.assertEqual(result["status"], "completed")
+
+    def test_a_fix_continuation_refuses_when_the_reviewed_pr_head_moved(self):
+        checkpoint = self.extra_commit("checkpoint\n")
+        moved = self.extra_commit("person pushed\n")
+        sh(self.checkout, "push", "-q", "origin", f"{moved}:refs/heads/factory/7")
+        sh(self.checkout, "push", "-q", "origin", f"{checkpoint}:refs/heads/factory-wip/7")
+        result, _ = self.run_order("fix", kind="fix", head=self.base, continuation=checkpoint)
+        self.assertEqual((result["status"], result["error"]),
+                         ("failed", "the reviewed PR head moved after the checkpoint was checked"))
+
+    def test_a_fix_continuation_refuses_when_the_checkpoint_branch_moved(self):
+        checkpoint = self.extra_commit("checkpoint\n")
+        moved = self.extra_commit("a later salvage\n")
+        sh(self.checkout, "push", "-q", "origin", f"{self.base}:refs/heads/factory/7")
+        sh(self.checkout, "push", "-q", "origin", f"{moved}:refs/heads/factory-wip/7")
+        result, _ = self.run_order("fix", kind="fix", head=self.base, continuation=checkpoint)
+        self.assertEqual((result["status"], result["error"]),
+                         ("failed", "the checkpoint branch moved after it was checked"))
+
+    def test_a_fix_continuation_refuses_when_the_default_base_moved(self):
+        checkpoint = self.extra_commit("checkpoint\n")
+        sh(self.checkout, "push", "-q", "origin", f"{checkpoint}:refs/heads/factory-wip/7")
+        # the default branch advances after the checkpoint was taken (order.baseSha is self.base)
+        (self.checkout / "main-advanced.txt").write_text("new base\n")
+        sh(self.checkout, "add", "-A")
+        sh(self.checkout, "-c", "user.name=w", "-c", "user.email=w@w", "commit", "-qm", "base moved")
+        sh(self.checkout, "push", "-q", "origin", "main")
+        sh(self.checkout, "push", "-q", "origin", f"{self.base}:refs/heads/factory/7")
+        result, _ = self.run_order("fix", kind="fix", head=self.base, continuation=checkpoint)
+        self.assertEqual((result["status"], result["error"]),
+                         ("failed", "the default branch base moved after the checkpoint was checked"))
 
     def test_a_timeout_with_no_change_returns_no_patch_and_todays_error(self):
         result, order = self.run_order("salvage-nomod")
@@ -746,7 +824,8 @@ class RunnerTest(unittest.TestCase):
         # its content matches the whitespace-collapsed tail only through the collapsed secret the
         # runner registers, and neither value is credential-shaped enough for the other rules.
         key = Path(self.tmp.name) / "codex.json"
-        key.write_text("hunter-file9 = opendoor\nsecond = line\n")
+        key.write_text('{"access_token":"refresh-canary-should-not-leak",'
+                       '"other":{"api_key":"nested-canary-should-not-leak"}}')
         self.auth.write_text("hunter-agent=opendoor")
         self.flags = ["--credential", f"{self.auth}:/home/node/.pi/agent",
                       "--credential", f"{key}:/tmp/factory-home/.codex",
@@ -789,6 +868,8 @@ class RunnerTest(unittest.TestCase):
         self.assertNotIn("hunter-agent", tail)
 
         self.assertNotIn("opendoor", tail)
+        self.assertNotIn("refresh-canary-should-not-leak", tail)
+        self.assertNotIn("nested-canary-should-not-leak", tail)
         self.assertNotIn("factory.workorder/v1", tail)
         self.assertNotIn("Fix the app", tail)
 

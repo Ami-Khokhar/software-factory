@@ -55,3 +55,6 @@ FACTORY_MCP_TOKEN=<secret> FACTORY_REPOS=owner/repo FACTORY_GITHUB_TOKEN=<token>
 
 `python3 scripts/rehearsal.py <agent-relay checkout> [--lose-store]` runs one issue from
 `factory:ready` to `closed` with the real relay and a stand-in GitHub.
+
+Use `factory call factory_runtime_status` for a sanitized live revision, worker/model/image,
+credential-availability, service-health and timeout snapshot. It starts no work.

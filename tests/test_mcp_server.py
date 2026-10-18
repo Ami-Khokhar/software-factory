@@ -52,13 +52,17 @@ class McpServerTest(unittest.TestCase):
         status, body = self.post({"jsonrpc": "2.0", "method": "notifications/initialized"})
         self.assertEqual((status, body), (202, None))
 
+    def test_discovery_is_private_and_expires_cached_schemas(self):
+        result = self.rpc("tools/list")["result"]
+        self.assertEqual((result["ttlMs"], result["cacheScope"]), (0, "private"))
+
     def test_every_tool_declares_whether_it_writes(self):
         """An MCP client decides from readOnlyHint whether to ask a person first (Hermes does), so a
         write tool marked read would skip that question. A new tool must be added here on purpose."""
         tools = self.rpc("tools/list")["result"]["tools"]
         reads = {t["name"] for t in tools if t["annotations"]["readOnlyHint"] is True}
         writes = {t["name"] for t in tools if t["annotations"]["readOnlyHint"] is False}
-        self.assertEqual(reads, {"factory_status", "factory_repo_check", "factory_lessons",
+        self.assertEqual(reads, {"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons",
                                  "factory_report", "factory_docker_status"})
         self.assertEqual(writes, {"factory_intake", "factory_tick", "factory_resolve_human",
                                   "factory_propose_issue", "factory_add_repo", "factory_approve_issue",
@@ -97,7 +101,7 @@ class McpServerTest(unittest.TestCase):
         """Day Desk drives with FACTORY_AGENT_TOKEN (ADR-0030). The token, not the model, decides what
         it may call. A new tool joins AGENT_TOOLS on purpose."""
         listed = {t["name"] for t in self.rpc("tools/list", token=AGENT)["result"]["tools"]}
-        self.assertEqual(listed, {"factory_status", "factory_repo_check", "factory_lessons", "factory_report",
+        self.assertEqual(listed, {"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons", "factory_report",
                                   "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
                                   "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
                                   "factory_use_allowance", "factory_queue_retry", "factory_merge_setup_pr",
@@ -135,6 +139,14 @@ class McpServerTest(unittest.TestCase):
         self.assertFalse(result["isError"])
         row = json.loads(result["content"][0]["text"])["workItems"][0]
         self.assertEqual(row["blockedOn"], "4 worker passes used")
+
+    def test_a_summary_exposes_progress_fields_without_a_second_status_read(self):
+        self.store.put(dict(workitem(), state="reviewing", prNumber=15, headSha="c2", gateRound=2,
+                            worker="codex"))
+        result = self.rpc("tools/call", {"name": "factory_status", "arguments": {}})["result"]
+        row = json.loads(result["content"][0]["text"])["workItems"][0]
+        self.assertEqual((row["headSha"], row["prNumber"], row["gateRound"], row["worker"]),
+                         ("c2", 15, 2, "codex"))
 
     def test_protocol_errors(self):
         self.assertEqual(self.rpc("nope")["error"]["code"], -32601)

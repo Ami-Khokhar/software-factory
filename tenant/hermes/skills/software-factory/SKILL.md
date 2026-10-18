@@ -27,6 +27,12 @@ a GitHub macOS runner runs their verify, so an Xcode failure there is a real cod
 
 ## What needs the owner
 
+When a capability appears missing or a runtime fact is unclear, call factory_runtime_status
+(with the WorkItem id when relevant). Compare the live tool/schema and effective runtime facts
+before calling a capability absent. Credential-file readability is not provider authentication.
+A cached schema mismatch needs `/reload-mcp` in the active chat, not a broader token or another
+repair issue. Report only a real blocker or a material change, not the full diagnostic dump.
+
 Call factory_status with no id. First list the WorkItems in human_waiting, blocked or exhausted,
 each with its id and blockedOn. Then list the others with their state and PR number, and for each
 one with `waitingOn`, the issue it waits for. Report only what factory_status returns.
