@@ -124,6 +124,8 @@ _ENV_VALUE = re.compile(r"\b([A-Z][A-Z0-9_]{2,})=\S+")
 _CREDENTIAL = re.compile(
     r"(?i)\b(access|auth)?[-_ ]?(token|password|passwd|passphrase|secret|bearer|authorization|"
     r"credential|api[-_ ]?key|private[-_ ]?key)s?(\s*[=:]\s*|\s+)\S+")
+_SECRET_KEY = re.compile(r"(?i)token|secret|password|passwd|passphrase|bearer|authorization|credential|key")
+_SECRET_MIN_LENGTH = 8  # a shorter value is likely metadata ("api", "us-east-1"), not a secret
 _TOKEN = re.compile(r"(?i)\bgh[pousr]_[A-Za-z0-9]{6,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b"
                     r"|\bAKIA[0-9A-Z]{16}\b|\bBearer\s+\S+")
 _WORKORDER_PAYLOAD = re.compile(r"(?s)\{.*?factory\.workorder/v1.*?\}")
@@ -156,15 +158,18 @@ def credential_secrets(text):
     except (TypeError, ValueError):
         return secrets
 
-    def collect(item):
+    def collect(item, key=""):
         if isinstance(item, dict):
-            for child in item.values():
-                collect(child)
+            for name, child in item.items():
+                collect(child, name)
         elif isinstance(item, list):
             for child in item:
-                collect(child)
+                collect(child, key)
         elif isinstance(item, str) and item.strip():
-            secrets.update((item.strip(), " ".join(item.split())))
+            # A credential-shaped key or a value too long to be metadata (`type`, `region`)
+            # is worth redacting; a short metadata value would mangle the tail instead.
+            if _SECRET_KEY.search(key) or len(item.strip()) >= _SECRET_MIN_LENGTH:
+                secrets.update((item.strip(), " ".join(item.split())))
 
     collect(parsed)
     return secrets

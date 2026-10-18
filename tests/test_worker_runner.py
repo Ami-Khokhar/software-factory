@@ -106,6 +106,16 @@ class RunnerTest(unittest.TestCase):
             with self.subTest(limit=limit):
                 self.assertEqual(runner.redact("secret", (), limit=limit), "")
 
+    def test_short_metadata_values_of_a_credential_file_are_not_redaction_secrets(self):
+        secrets = runner.credential_secrets(
+            '{"type": "api", "format": "json", "key": "k", "token": "ghp_abcdefghijklmnopqr"}')
+        self.assertNotIn("api", secrets)  # "type" names metadata, not a secret
+        self.assertNotIn("json", secrets)  # too short to be worth mangling the tail over
+        self.assertIn("k", secrets)  # a credential-shaped key still collects its value
+        self.assertIn("ghp_abcdefghijklmnopqr", secrets)
+        line = "type=api format=json OK factory.result/v1"
+        self.assertEqual(runner.redact(line, secrets, limit=100), line)  # the tail survives whole
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name)
@@ -305,13 +315,57 @@ class RunnerTest(unittest.TestCase):
             "checkout", "environment setup", "harness execution", "patch collection"])
         self.assertEqual(documents.check_result(result, order), [])
 
+    def fix_continuation_order(self, head, checkpoint):
+        """Push `head` as the reviewed PR head and a distinct `checkpoint` commit as the salvage
+        branch, then run one fix continuation built on `checkpoint`."""
+        sh(self.checkout, "push", "-q", "origin", f"{head}:refs/heads/factory/7")
+        sh(self.checkout, "push", "-q", "origin", f"{checkpoint}:refs/heads/factory-wip/7")
+        return self.run_order("fix", kind="fix", head=head, continuation=checkpoint)
+
+    def extra_commit(self, message):
+        """One more commit in the local checkout, past self.base."""
+        (self.checkout / "checkpoint.txt").write_text(message)
+        sh(self.checkout, "add", "-A")
+        sh(self.checkout, "-c", "user.name=w", "-c", "user.email=w@w", "commit", "-qm", "checkpoint")
+        return sh(self.checkout, "rev-parse", "HEAD")
+
     def test_a_fix_continuation_starts_from_the_checkpoint_while_retaining_the_reviewed_head(self):
-        sh(self.checkout, "push", "-q", "origin", f"{self.base}:refs/heads/factory/7")
-        sh(self.checkout, "push", "-q", "origin", f"{self.base}:refs/heads/factory-wip/7")
-        result, order = self.run_order("fix", kind="fix", head=self.base, continuation=self.base)
+        checkpoint = self.extra_commit("checkpoint\n")
+        result, order = self.fix_continuation_order(self.base, checkpoint)
         self.assertEqual((order["headSha"], order["continuationSha"], result["patch"]["baseSha"]),
-                         (self.base, self.base, self.base))
+                         (self.base, checkpoint, checkpoint))
         self.assertEqual(result["status"], "completed")
+
+    def test_a_fix_continuation_refuses_when_the_reviewed_pr_head_moved(self):
+        checkpoint = self.extra_commit("checkpoint\n")
+        moved = self.extra_commit("person pushed\n")
+        sh(self.checkout, "push", "-q", "origin", f"{moved}:refs/heads/factory/7")
+        sh(self.checkout, "push", "-q", "origin", f"{checkpoint}:refs/heads/factory-wip/7")
+        result, _ = self.run_order("fix", kind="fix", head=self.base, continuation=checkpoint)
+        self.assertEqual((result["status"], result["error"]),
+                         ("failed", "the reviewed PR head moved after the checkpoint was checked"))
+
+    def test_a_fix_continuation_refuses_when_the_checkpoint_branch_moved(self):
+        checkpoint = self.extra_commit("checkpoint\n")
+        moved = self.extra_commit("a later salvage\n")
+        sh(self.checkout, "push", "-q", "origin", f"{self.base}:refs/heads/factory/7")
+        sh(self.checkout, "push", "-q", "origin", f"{moved}:refs/heads/factory-wip/7")
+        result, _ = self.run_order("fix", kind="fix", head=self.base, continuation=checkpoint)
+        self.assertEqual((result["status"], result["error"]),
+                         ("failed", "the checkpoint branch moved after it was checked"))
+
+    def test_a_fix_continuation_refuses_when_the_default_base_moved(self):
+        checkpoint = self.extra_commit("checkpoint\n")
+        sh(self.checkout, "push", "-q", "origin", f"{checkpoint}:refs/heads/factory-wip/7")
+        # the default branch advances after the checkpoint was taken (order.baseSha is self.base)
+        (self.checkout / "main-advanced.txt").write_text("new base\n")
+        sh(self.checkout, "add", "-A")
+        sh(self.checkout, "-c", "user.name=w", "-c", "user.email=w@w", "commit", "-qm", "base moved")
+        sh(self.checkout, "push", "-q", "origin", "main")
+        sh(self.checkout, "push", "-q", "origin", f"{self.base}:refs/heads/factory/7")
+        result, _ = self.run_order("fix", kind="fix", head=self.base, continuation=checkpoint)
+        self.assertEqual((result["status"], result["error"]),
+                         ("failed", "the default branch base moved after the checkpoint was checked"))
 
     def test_a_timeout_with_no_change_returns_no_patch_and_todays_error(self):
         result, order = self.run_order("salvage-nomod")

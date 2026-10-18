@@ -126,6 +126,35 @@ class GateLoopTest(unittest.TestCase):
                 self.assertIsNone(resumed.get("continuationSha"))
                 self.assertIn((REPO, branch), self.github.deleted)
 
+    def timed_out_fix_checkpoint(self):
+        """One CHANGES round whose fix pass times out, leaving a fix checkpoint. Returns the
+        checkpoint record."""
+        self.gate("CHANGES", 1, "c1", MISSING_TEST)
+        wi = self.tick()
+        order = self.foreman.store.workorders(ID)[-1]
+        partial = {"schemaVersion": "factory.result/v1", "workOrderId": order["id"], "status": "failed",
+                   "patch": {"format": "unified", "diff": "partial", "baseSha": "c1"},
+                   "evidence": [], "error": "the harness timed out",
+                   "startedAt": "2026-09-24T00:00:00Z", "finishedAt": "2026-09-24T00:01:00Z"}
+        self.relay.finish(wi["providerTaskId"], output=json.dumps(partial))
+        wi = self.tick()
+        return wi["wip"]
+
+    def test_a_running_continuation_keeps_its_checkpoint_when_the_default_base_moves(self):
+        checkpoint = self.timed_out_fix_checkpoint()
+        wi = self.tick()  # dispatch the continuation: the worker holds the checkpoint as its base
+        self.assertEqual((wi["state"], self.foreman.store.workorders(ID)[-1]["continuationSha"]),
+                         ("implementing", checkpoint["sha"]))
+        self.github.branches[(REPO, "main")] = "base1"  # the default base moves while the pass runs
+        wi = self.tick()
+        self.assertEqual((wi["state"], wi["wip"]["sha"]), ("implementing", checkpoint["sha"]))
+        self.assertNotIn((REPO, checkpoint["branch"]), self.github.deleted)  # the base still exists
+        self.git.sha = "c3"
+        self.relay.finish(wi["providerTaskId"], output=result_line(wi["activeWorkOrderId"]))
+        wi = self.tick()
+        self.assertEqual((wi["state"], wi.get("wip")), ("reviewing", None))
+        self.assertEqual(self.git.pushes[-1]["base"], checkpoint["sha"])  # applied on its exact base
+
     def merge(self, head):
         """The gate decides MERGE on `head` and PR 100 merges. Returns whether the WorkItem counts as
         merged with no person."""

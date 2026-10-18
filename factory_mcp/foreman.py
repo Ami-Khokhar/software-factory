@@ -924,9 +924,16 @@ class Foreman:
                            workOrder=order["id"], sha=sha)
 
     def _retire_stale_wip(self, wi, facts):
-        """Discard a checkpoint when the PR head or default base it continues from has moved."""
+        """Discard a checkpoint when the PR head or default base it continues from has moved.
+        A checkpoint the in-flight pass was given as its base is kept until that pass concludes:
+        its Result must apply on the checkpoint's exact SHA, and deleting the scratch branch
+        mid-pass would discard the pass's work and strike the attempt."""
         wip = wi.get("wip")
         if not wip:
+            return wi
+        active = next((order for order in self.store.workorders(wi["id"])
+                       if wi.get("activeWorkOrderId") and order["id"] == wi["activeWorkOrderId"]), None)
+        if active and active.get("continuationSha") == wip.get("sha"):
             return wi
         current_base = self.github.branch_head(wi["repo"], self._default_branch(wi["repo"]))
         current_head = facts.get("pr", {}).get("headSha") if facts.get("pr") else None

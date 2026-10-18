@@ -146,6 +146,28 @@ class SalvageTest(ForemanCase):
         self.assertEqual((wi["state"], wi["wip"]["moves"], wi["wip"]["sha"]), ("blocked", 2, "c1"))
         self.assertEqual(len([p for p in self.git.pushes if p["branch"] == "factory-wip/7"]), 2)
 
+    def test_an_implement_checkpoint_survives_a_stable_base_and_is_kept_for_the_running_rescue(self):
+        self.keep_partial()  # the implement pass timed out; its checkpoint continues from base0
+        wi, _ = self.dispatch()  # the rescue pass bases itself on the kept work
+        self.assertEqual((wi["state"], wi["wip"]["sha"]), ("implementing", "c1"))
+        self.assertNotIn((REPO, "factory-wip/7"), self.github.deleted)
+        self.github.branches[(REPO, "main")] = "base1"  # the base moves while the rescue runs
+        wi = self.tick()
+        self.assertEqual((wi["state"], wi["wip"]["sha"]), ("implementing", "c1"))  # kept for the pass
+        self.assertNotIn((REPO, "factory-wip/7"), self.github.deleted)
+        self.relay.finish(wi["providerTaskId"], output=result_line(wi["activeWorkOrderId"]))
+        wi = self.tick()
+        self.assertIsNone(wi["wip"])  # the pass concluded; the checkpoint is retired
+
+    def test_an_implement_checkpoint_is_retired_when_the_default_branch_moves_before_the_next_pass(self):
+        self.keep_partial()
+        self.github.branches[(REPO, "main")] = "base1"  # before the rescue pass starts
+        wi = self.tick()
+        self.assertIsNone(wi.get("wip"))
+        self.assertIn((REPO, "factory-wip/7"), self.github.deleted)
+        order = self.foreman.store.workorders(ID)[-1]
+        self.assertIsNone(order.get("continuationSha"))  # a fresh pass, not a stale base
+
     def test_a_completed_result_retires_the_scratch_branch(self):
         self.keep_partial()
         wi, task = self.dispatch()
