@@ -1,9 +1,12 @@
 """Runtime diagnostics expose operational facts, never the credential or environment values."""
 import json
+from dataclasses import replace
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import urllib.error
+import http.client
 from unittest import mock
 
 from factory_mcp.config import Config
@@ -73,16 +76,20 @@ class RuntimeTest(unittest.TestCase):
     def test_unsandboxed_and_malformed_registry_agents_are_not_reported_as_factory_workers(self):
         agents=json.loads(self.agents.read_text())['agents']
         agents.extend([
-            {'id':'external-factory','command':'pi','args':['--model','external/model'],'timeoutMs':900000},
-            {'id':'broken-factory','command':'python3','args':{'bad':'shape'},'timeoutMs':600000},
+            {'id':'external-worker','command':'pi','args':['--model','external/model'],'timeoutMs':900000},
+            {'id':'broken-worker','command':'python3','args':{'bad':'shape'},'timeoutMs':600000},
         ])
         self.agents.write_text(json.dumps({'agents':agents}))
+        self.config = replace(self.config, workers=(('opencode-mimo-factory', 'local'),
+                                                    ('external-worker', 'local'),
+                                                    ('broken-worker', 'local')))
+        self.foreman.config = self.config
         workers={worker['id']:worker for worker in self.report()['workers']}
-        external=workers['external-factory']
+        external=workers['external-worker']
         self.assertEqual((external['status'],external['sandboxed']),('registered',False))
         self.assertNotIn('image',external)
         self.assertNotIn('imageId',external)
-        self.assertEqual((workers['broken-factory']['status'],workers['broken-factory']['sandboxed']),
+        self.assertEqual((workers['broken-worker']['status'],workers['broken-worker']['sandboxed']),
                          ('invalid_args',None))
 
     def test_runner_credential_home_paths_use_expanduser_semantics(self):
@@ -98,6 +105,16 @@ class RuntimeTest(unittest.TestCase):
         report=self.report()
         self.assertEqual(report['registryStatus'],'unavailable')
         self.assertEqual(report['workers'][0]['status'],'not_registered')
+
+    def test_registered_sandbox_worker_without_factory_suffix_is_reported(self):
+        worker = dict(self.agent, id='pi-qwen')
+        agents = json.loads(self.agents.read_text())['agents']
+        agents.append(worker)
+        self.agents.write_text(json.dumps({'agents': agents}))
+        report = self.report()
+        row = next(row for row in report['workers'] if row['id'] == 'pi-qwen')
+        self.assertEqual((row['status'], row['sandboxed'], row['allowed']), ('registered', True, False))
+        self.assertIn('imageId', row)
 
     def test_old_cached_schema_is_reported_as_cache_observation_with_refresh_advice(self):
         cache=self.home/'.hermes/profiles/day-desk/cache/mcp_schema_cache.json'
@@ -117,6 +134,26 @@ class RuntimeTest(unittest.TestCase):
         report=self.report()
         self.assertEqual(report['github']['checks']['status'],'forbidden')
         self.assertNotIn('CANARY-GITHUB-TOKEN',json.dumps(report))
+
+    def test_github_transport_errors_keep_local_facts_and_reduce_to_unavailable(self):
+        pull = self.github.pull
+        def disconnected(*args, **kwargs):
+            raise urllib.error.URLError('CANARY-TRANSPORT-BODY')
+        self.github.pull = disconnected
+        report = self.report()
+        self.assertEqual(report['revision'], 'a' * 40)
+        self.assertEqual(report['workers'][0]['credentialFilesReadable'], True)
+        self.assertEqual(report['github']['pullStatus'], 'unavailable')
+        self.assertNotIn('CANARY-TRANSPORT-BODY', json.dumps(report))
+        self.github.pull = pull
+
+        def reset(*args, **kwargs):
+            raise http.client.RemoteDisconnected('CANARY-HTTP-BODY')
+        self.github.check_runs = reset
+        report = self.report()
+        self.assertEqual(report['github']['checks']['status'], 'unavailable')
+        self.assertEqual(report['item']['effectiveWallMs'], 3600000)
+        self.assertNotIn('CANARY-HTTP-BODY', json.dumps(report))
 
     def test_discovery_hash_uses_the_tool_set_for_the_current_token(self):
         from factory_mcp import runtime

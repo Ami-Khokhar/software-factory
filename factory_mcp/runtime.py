@@ -1,5 +1,6 @@
 """Sanitized operational facts. No model calls, host writes, or credential contents."""
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -33,10 +34,11 @@ def _arg(args, flag, default=None):
 
 def _factory_runner(command, args):
     """Only label the standard Python runner invocation as sandboxed."""
-    if not args or not isinstance(command, str):
+    if (command != 'python3' or not isinstance(args, list) or not args
+            or not all(isinstance(arg, str) for arg in args)):
         return False
     script = Path(args[0])
-    return (Path(command).name.startswith('python') and
+    return (script.is_absolute() and '..' not in script.parts and
             script.parts[-2:] == ('worker', 'runner.py') and
             '--' in args and args.index('--') < len(args) - 1)
 
@@ -81,8 +83,8 @@ def _github(foreman, wi):
         return result
     try:
         result['liveHead'] = github.pull(repo, number)['head']['sha']
-    except GitHubError as exc:
-        result['pullStatus'] = 'forbidden' if exc.status == 403 else 'unavailable'
+    except (GitHubError, OSError, http.client.HTTPException) as exc:
+        result['pullStatus'] = 'forbidden' if getattr(exc, 'status', None) == 403 else 'unavailable'
         return result
     head = result['liveHead']
     for name, read in [('comments', lambda: github.comments(repo, number)),
@@ -95,8 +97,8 @@ def _github(foreman, wi):
                 current = [v for v in verdicts(rows, repo, number) if v['headSha'] == head]
                 result['headVerdict'] = ({key: current[-1][key] for key in ('round', 'outcome')}
                                          if current else None)
-        except GitHubError as exc:
-            result[name] = {'status': 'forbidden' if exc.status == 403 else 'unavailable'}
+        except (GitHubError, OSError, http.client.HTTPException) as exc:
+            result[name] = {'status': 'forbidden' if getattr(exc, 'status', None) == 403 else 'unavailable'}
     return result
 
 
@@ -118,8 +120,9 @@ def report(foreman, schemas, workitem_id=None):
     except (OSError, ValueError, KeyError, TypeError):
         agents, result['registryStatus'] = {}, 'unavailable'
     images = {}
-    names = list(dict.fromkeys([*result['workerOrder'],
-                               *(name for name in agents if name.endswith('-factory'))]))
+    registered = (name for name, agent in agents.items()
+                  if _factory_runner(agent.get('command'), agent.get('args')))
+    names = list(dict.fromkeys([*result['workerOrder'], *registered]))
     for name in names:
         agent = agents.get(name)
         if agent is None:
