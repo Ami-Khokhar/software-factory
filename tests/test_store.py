@@ -81,9 +81,10 @@ class StoreTest(unittest.TestCase):
         old.close()
 
         store = Store(self.path)
-        self.assertEqual(store.get("o/r#1"), dict(workitem(), stateVersion=3))
+        self.assertEqual(store.get("o/r#1"), dict(workitem(), stateVersion=3, wallMsOverride=None))
         self.assertEqual(store.get("o/r#2"),
-                         dict(workitem(state="human_waiting", blockedOn="gate said HUMAN"), stateVersion=3))
+                         dict(workitem(state="human_waiting", blockedOn="gate said HUMAN"),
+                              stateVersion=3, wallMsOverride=None))
         store.close()
 
     def test_migration_runs_once_a_store_at_version_2_keeps_its_blocked_on(self):
@@ -100,7 +101,8 @@ class StoreTest(unittest.TestCase):
 
         store = Store(self.path)
         self.assertEqual(store.get("o/r#1"),
-                         dict(workitem(state="cancelled", blockedOn="stale wait"), stateVersion=3))
+                         dict(workitem(state="cancelled", blockedOn="stale wait"),
+                              stateVersion=3, wallMsOverride=None))
         store.close()
     def test_journal_survives_interruption_without_sidecar_files(self):
         """A store left un-closed (server SIGTERM) keeps committed data, and nothing lives outside

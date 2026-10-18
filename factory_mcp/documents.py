@@ -35,7 +35,7 @@ def workorder(wi, kind, attempt, config, base_sha=None, findings=(), lessons=())
             "lessons": [{"fingerprint": entry["fingerprint"], "text": entry["text"][:MAX_TEXT]}
                         for entry in list(lessons)[:MAX_PER_WORKORDER]],  # the file is hand-editable
             "requiredEvidence": ["tests-pass"],
-            "budget": {"maxPasses": config.max_passes, "wallMs": config.wall_ms},
+            "budget": {"maxPasses": config.max_passes, "wallMs": wi.get("wallMsOverride") or config.wall_ms},
             "idempotencyKey": key, "createdAt": now()}
 
 

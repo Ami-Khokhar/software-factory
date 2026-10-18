@@ -121,8 +121,13 @@ def _migrate_7(wi):
     return wi
 
 
+# Migration 8: optional per-item timeout. Old items retain the configured default.
+def _migrate_8(wi):
+    return dict(wi, wallMsOverride=wi.get("wallMsOverride"))
+
+
 MIGRATIONS = {1: _migrate_1, 2: _migrate_2, 3: _migrate_3, 4: _migrate_4, 5: _migrate_5,
-              6: _migrate_6, 7: _migrate_7}
+              6: _migrate_6, 7: _migrate_7, 8: _migrate_8}
 
 
 def canonical_inputs(inputs):

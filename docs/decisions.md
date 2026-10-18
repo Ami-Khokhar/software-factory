@@ -2193,3 +2193,23 @@ dispatches the waiting node with no other signal.
 the sequencing falls out of the fences themselves, not out of `after` lines — while disjoint
 nodes still dispatch together up to `FACTORY_PASSES_PER_REPO`. The check reads the store,
 never GitHub, so it costs one pass over the repo's WorkItems per ready node.
+
+
+## ADR-0089 — Bounded per-WorkItem timeout overrides
+
+**Context.** A task and the repair intended to extend its deadline both timed out under the
+same service budget. Changing the service default would extend unrelated work too.
+
+**Decision.** `factory_set_timeout` stores an optional `wallMsOverride` under the WorkItem
+lease and audits the previous, requested and effective values. An integer must be at least
+max(60000, FACTORY_WALL_MS), at most 3600000, and supported by the relay's live cap. Null clears
+it without needing relay access. Live workers and terminal items refuse changes. Both driving and owner tokens expose this
+write tool. The tool neither retries nor buys passes or allowances. New implement and fix orders
+freeze the effective budget, which is also the relay's explicit timeout. An overridden dispatch
+rechecks the cap before spending a pass. Incompatible reported caps conclude open recovery
+records before escalation; transport outages remain retryable ticks. Existing phase allocations stay unchanged.
+
+**Consequence.** The owner can approve a bounded experiment for one blocked task. Store migration
+8 initializes old items to null, preserving their default behavior. Applying the override and
+retrying remain distinct operations. A passing deployment is not evidence that the longer task
+succeeds; its next WorkOrder, relay timeout and real Result must be read back separately.

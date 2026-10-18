@@ -13,7 +13,7 @@ AGENT_TOOLS = frozenset({"factory_status", "factory_repo_check", "factory_lesson
                          "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
                          "factory_use_allowance", "factory_merge_setup_pr",
                          "factory_docker_status", "factory_docker_control",
-                         "factory_set_worker", "factory_register_worker"})
+                         "factory_set_worker", "factory_register_worker", "factory_set_timeout"})
 WAITING = ("human_waiting", "blocked")
 
 
@@ -74,6 +74,11 @@ def build(store, foreman, agent=False):
         return {"workItem": wi, "escalation": metrics.escalation(wi, history),
                 "passes": len(store.workorders(workitem_id)), "history": history,
                 "allowanceUse": last_allowance_use(history)}
+
+    def set_timeout(args):
+        if set(args) != {"id", "wallMs", "by"}:
+            raise ToolError("factory_set_timeout requires exactly id, wallMs and by")
+        return {"workItem": foreman.set_timeout(args["id"], args["wallMs"], args["by"], agent=agent)}
 
     def repo_check(args):
         repo = args["repo"]
@@ -287,6 +292,18 @@ def build(store, foreman, agent=False):
                              "by": {"type": "string", "minLength": 1, "description": "who asked"}}},
              "write", lambda args: {"workItem": foreman.set_dependencies(
                  args["id"], args["dependsOn"], args["by"], agent=agent)}),
+        Tool("factory_set_timeout",
+             "Set a WorkItem's wall timeout between worker passes, on request. wallMs is 60000 to "
+             "3600000 milliseconds and at least FACTORY_WALL_MS, or null to restore that default. "
+             "Checks the live relay cap. "
+             "Refuses live workers and terminal items. Never retries, dispatches, resets passes or "
+             "grants a recovery allowance. Read back factory_status before any separately approved retry.",
+             {"type": "object", "required": ["id", "wallMs", "by"], "additionalProperties": False,
+              "properties": {"id": {"type": "string", "minLength": 1},
+                             "wallMs": {"type": ["integer", "null"], "minimum": 60000,
+                                        "maximum": 3600000},
+                             "by": {"type": "string", "minLength": 1}}},
+             "write", set_timeout),
         Tool("factory_set_worker",
              "Choose which sandboxed worker (and so which pinned model) runs a WorkItem: replaces its "
              "issue's 'Worker: <id>' lines with the agent ids given, and [] falls back to "
