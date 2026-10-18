@@ -962,6 +962,13 @@ class EnsureDockerTest(unittest.TestCase):
         # The daemon failure carries the preflight code the pause consumer reads as the #193 environment.
         self.assertEqual(raised.exception.code, runner.NO_DOCKER)
 
+    def test_a_health_probe_can_refuse_a_stopped_daemon_without_starting_it(self):
+        env, up = self.stubs(orb_starts=True)
+        with env, self.assertRaisesRegex(runner.WorkerError, "docker is not available") as raised:
+            runner.ensure_docker(start=False)
+        self.assertEqual(raised.exception.code, runner.NO_DOCKER)
+        self.assertFalse(up.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

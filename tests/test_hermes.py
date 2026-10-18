@@ -33,6 +33,10 @@ class ProfileTest(unittest.TestCase):
         timeout = driving["factory_set_timeout"].listing()
         self.assertFalse(timeout["annotations"]["readOnlyHint"])
         self.assertFalse(timeout["inputSchema"]["additionalProperties"])
+        for name in ("factory_check_worker", "factory_reload_workers"):
+            listing = driving[name].listing()
+            self.assertFalse(listing["annotations"]["readOnlyHint"])
+            self.assertFalse(listing["inputSchema"]["additionalProperties"])
         real = set(tools.build(None, None))
         self.assertEqual(set(OWNER["tools"]["include"]), real - tools.AGENT_TOOLS - {"factory_tick", "factory_intake"})
 

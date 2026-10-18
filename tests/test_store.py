@@ -135,6 +135,20 @@ class StoreTest(unittest.TestCase):
                           "inputsFingerprint": opened["inputsFingerprint"]})
         reopened.close()
 
+    def test_worker_health_record_survives_restart_without_workitem_changes(self):
+        store = Store(self.path)
+        health = {"schemaVersion": "factory.health/v1", "status": "ok", "events": []}
+        store.put_worker_health("worker-factory", "a" * 64, "healthy", "2026-10-19T00:00:00Z",
+                                "2026-10-19T00:15:00Z", json.dumps(health))
+        store.close()
+        reopened = Store(self.path)
+        row = reopened.worker_health("worker-factory")
+        self.assertEqual(row["binding"], "a" * 64)
+        self.assertEqual(row["status"], "healthy")
+        self.assertEqual(json.loads(row["report"]), health)
+        self.assertEqual(reopened.all(), [])
+        reopened.close()
+
     def test_identical_request_resumes_same_operation(self):
         store = Store(self.path)
         first = store.open_request("req-1", "recover", {"workItemId": "o/r#1"})

@@ -2,6 +2,7 @@
 import json
 import os
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -162,6 +163,32 @@ class PilotTest(unittest.TestCase):
         self.assertEqual(got["events"][0]["status"], "ok")
         self.assertEqual(got["events"][1]["status"], "ok")
         self.assertEqual(probe_call.call_args.args[1], ["pi", "--print"])
+        self.assertFalse(preflight_call.call_args.kwargs["start_docker"])
+
+    def test_probe_id_scopes_the_container_label_without_entering_the_report(self):
+        printed = []
+        with mock.patch.object(provider_health, "probe", return_value=(
+                {"ts": "t", "event": "probe", "tool": "pi", "status": "ok", "exitCode": 0,
+                 "retries": 0}, "ok")), \
+             mock.patch.object(runner, "preflight", return_value=({}, {})), \
+             mock.patch.object(runner, "Sandbox") as create, \
+             mock.patch("builtins.print", printed.append):
+            provider_health.main(["--probe-id", "a" * 32, "--", "pi"])
+        self.assertEqual(create.call_args.args[1], "health-" + "a" * 32)
+        self.assertNotIn("a" * 32, printed[0])
+
+    def test_private_scratch_root_contains_and_releases_probe_workdirs(self):
+        root = tempfile.TemporaryDirectory()
+        self.addCleanup(root.cleanup)
+        captured = []
+        def pilot(args, scratch, work):
+            captured.extend((scratch, work))
+            return 0
+        with mock.patch.dict(os.environ, {"FACTORY_HEALTH_SCRATCH_ROOT": root.name}), \
+             mock.patch.object(provider_health, "pilot", side_effect=pilot):
+            self.assertEqual(provider_health.main(["--", "pi"]), 0)
+        self.assertTrue(all(os.path.dirname(path) == root.name for path in captured))
+        self.assertTrue(all(not os.path.exists(path) for path in captured))
 
 
 if __name__ == "__main__":
