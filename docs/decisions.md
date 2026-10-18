@@ -2213,3 +2213,31 @@ records before escalation; transport outages remain retryable ticks. Existing ph
 8 initializes old items to null, preserving their default behavior. Applying the override and
 retrying remain distinct operations. A passing deployment is not evidence that the longer task
 succeeds; its next WorkOrder, relay timeout and real Result must be read back separately.
+
+## ADR-0090 — The guarded setup merge proves provenance from the journal, not from the branch name
+
+**Context.** The guarded merger of ADR-0074 required the open setup PR to sit on the branch named
+for the grant's digest (`factory-bootstrap/<digest[:16]>`). A plan refreshed after creation keeps
+the PR on the branch named for the digest it was created from: the bootstrap adopts the open PR
+and pushes the refreshed files onto it (ADR-0023), the owner authorizes the refreshed digest, and
+the merger then refused the factory's own PR for carrying the original branch. Separately, that
+check proved nothing: anyone with push access can create a branch carrying the authorized name.
+
+**Decision.** `factory_merge_setup_pr` instead verifies that the one open setup PR is one the
+factory itself created or adopted: the audit journal's `bootstrap_pr` and `bootstrap_pr_updated`
+entries record the (branch, PR number) pairs the factory pushed to, and the open PR must be on
+one of them. The resumed-merge lookup uses the same journal, so an interrupted or repeated request
+reconciles the PR even when the branch no longer matches the grant's digest. A request that
+already journalled its target replays only that PR and head. A fresh request examines only the
+latest created/adopted setup cycle, so an earlier merged setup cannot complete a new cycle's
+request. The grant still pins
+the digest of the current canonical plan, and every other guard stands unchanged: exact paths,
+per-file content, default-branch base, live head, green pr-gatekeeper run and no blocking verdict.
+A branch name — even the exact authorized one — never authorizes anything on its own.
+
+**Consequence.** A factory PR whose plan was refreshed after creation merges under a grant for
+the refreshed digest, and a deputy PR reopened on the factory's own branch, or a forged branch
+carrying the authorized name with canonical content, now refuses where the digest-named branch
+check would have let them through. A journal without the PR's record fails closed to a person.
+This supersedes ADR-0074's sentence that the merged PR's branch must match the grant's digest.
+
