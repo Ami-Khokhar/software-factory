@@ -1815,13 +1815,17 @@ allowlist and credential boundary:
   refused while a worker is live and on a terminal WorkItem; unlike dependencies it may change
   between attempts, which is how a retry is steered to another model. The order lives in the issue
   body, so this edits the issue and the next tick reads it.
-- `factory_register_worker(worker, model, by)` adds a worker to the relay's `agents.json` by copying
-  the approved template (`FACTORY_WORKER_TEMPLATE`, default `pi-glm-factory`) and pinning only
-  `model`. The command, credential mount, env, cwd, allowedRoots, image and timeout are the
-  template's, and the provider stays the template's, so a registered worker cannot reach anything a
-  factory worker could not already reach. It refuses a duplicate id and an id or model outside a
-  safe name, writes the registry atomically, and reloads the relay. It needs `FACTORY_AGENTS_FILE`
-  set; without it the tool is refused rather than guessing a path.
+- `factory_register_worker(worker, model, by, template=None)` adds a worker to the relay's
+  `agents.json` by copying an approved sandboxed template (`template`, or `FACTORY_WORKER_TEMPLATE`,
+  default `pi-glm-factory`) and pinning only `model`. The command, credential mount, env, cwd,
+  allowedRoots, image and timeout are the template's, and the provider stays the template's, so a
+  registered worker cannot reach anything a factory worker could not already reach. The template
+  must itself run `python3` on an absolute `worker/runner.py` with a harness after `--`, so a
+  discovered, unsandboxed relay agent is never copied; `model` may be bare or `provider/model`, but
+  only under the template's own provider. It refuses a duplicate id, an id or model outside a safe
+  name, and an unknown or unsandboxed template, writes the registry atomically, and reloads the
+  relay. It needs `FACTORY_AGENTS_FILE` set; without it the tool is refused rather than guessing a
+  path.
 
 **Consequence.** Registering is not promoting: `factory_register_worker` never writes
 `FACTORY_WORKERS`, so a registered worker receives no WorkOrder until the owner lists it there and

@@ -1615,21 +1615,25 @@ class Foreman:
         finally:
             self.store.release(workitem_id, self.holder)
 
-    def register_worker(self, worker_id, model, by, agent=False):
-        """Register a new sandboxed factory worker in the relay registry (ADR-0077). It copies the
-        approved template — same command, credential mount, env, cwd, allowedRoots, image and
-        timeout — and pins only `model`, so it cannot reach anything a factory worker could not. The
-        registry is the relay's own agents.json, which the relay has no API to write, so this edits
-        that file and reloads the relay. It never touches FACTORY_WORKERS: a registered worker
-        receives no WorkOrder until the owner lists it there and its provider-health pilot is green.
-        Returns the new agent and whether the running relay reloaded it."""
+    def register_worker(self, worker_id, model, by, agent=False, template=None):
+        """Register a new sandboxed factory worker in the relay registry (ADR-0077). It copies an
+        approved sandboxed template — `template`, or FACTORY_WORKER_TEMPLATE when it is not named —
+        with the same command, credential mount, env, cwd, allowedRoots, image and timeout, and pins
+        only `model` under that template's provider, so it cannot reach anything a factory worker
+        could. An unsandboxed, unknown or cross-provider template is refused before the registry is
+        touched. The registry is the relay's own agents.json, which the relay has no API to write,
+        so this edits that file and reloads the relay. It never touches FACTORY_WORKERS: a
+        registered worker receives no WorkOrder until the owner lists it there and its
+        provider-health pilot is green. Returns the new agent and whether the running relay
+        reloaded it."""
         if not isinstance(by, str) or not by.strip():
             raise ToolError("registering a worker needs the name of the person who asked")
         if not self.config.agents_file:
             raise ToolError("FACTORY_AGENTS_FILE is not set, so the factory may not write the relay "
                             "registry; register the worker by hand (RUNBOOK)")
+        template_id = self.config.worker_template if template is None else template
         try:
-            agent_def = registry.register(self.config.agents_file, self.config.worker_template,
+            agent_def = registry.register(self.config.agents_file, template_id,
                                           worker_id, model)
         except ValueError as exc:
             raise ToolError(str(exc)) from None

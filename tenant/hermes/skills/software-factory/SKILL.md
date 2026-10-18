@@ -107,7 +107,10 @@ standard in the repo's AGENTS.md ask:
   owner's name as `by`. It refuses an agent outside FACTORY_WORKERS, a running worker, and a closed,
   cancelled or exhausted WorkItem: give the reason word for word.
 - To add a new model, call factory_register_worker with a new agent id as `worker` and the model as
-  `model`. It copies the sandboxed template and pins only the model; the new worker is NOT in
+  `model` (bare, or `provider/model` under the template's own provider), and `template` when the
+  owner names which approved sandboxed template to copy (default pi-glm-factory, for example the
+  OpenCode opencode-mimo-factory). It copies that template and pins only the model; an unsandboxed,
+  unknown or cross-provider template is refused. The new worker is NOT in
   FACTORY_WORKERS and runs nothing until the owner lists it there and its provider-health pilot
   passes. Tell the owner both steps are theirs.
 

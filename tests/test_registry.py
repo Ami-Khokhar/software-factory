@@ -32,6 +32,30 @@ TEMPLATE = {
 }
 WORKERS = (("pi-deepseek-factory", "local"), ("pi-glm-factory", "local"),
            ("opencode-glm-factory", "local"))
+OPENCODE_TEMPLATE_ID = "opencode-mimo-factory"
+# The approved sandboxed OpenCode worker: worker/runner.py under opencode, with the free-model
+# credential mount. OpenCode pins its model in one --model provider/model argument.
+OPENCODE_TEMPLATE = {
+    "id": OPENCODE_TEMPLATE_ID,
+    "name": "opencode (mimo-v2.6-flash-free), sandboxed factory worker",
+    "description": "worker/runner.py: opencode in the factory-worker container; no GitHub "
+                   "credential; returns a patch",
+    "command": "python3",
+    "args": ["/x/worker/runner.py", "--credential",
+             "/Users/you/.local/share/opencode/auth.json:/tmp/factory-home/.local/share/opencode",
+             "--", "opencode", "run", "--model", "opencode/mimo-v2.6-flash-free"],
+    "cwd": "/x/factory-work",
+    "allowedRoots": ["/x/factory-work"],
+    "timeoutMs": 1500000,
+    "inheritEnv": ["HOME", "PATH"],
+    "image": "factory-worker:latest",
+}
+# What the relay also holds: a discovered, unsandboxed agent that must never be a template.
+UNSANDBOXED = {
+    "id": "pi-deepseek",
+    "command": "pi",
+    "args": ["--print", "--provider", "deepseek", "--model", "deepseek-flash"],
+}
 
 
 class RegistryUnitTest(unittest.TestCase):
@@ -48,9 +72,49 @@ class RegistryUnitTest(unittest.TestCase):
         self.assertEqual(agent["args"][agent["args"].index("--model") + 1], "qwen-3-max")
         self.assertEqual(agent["args"][agent["args"].index("--models") + 1], "opencode-go/qwen-3-max")
 
+    def test_build_agent_copies_the_opencode_template_with_the_exact_provider_model_pin(self):
+        agent = registry.build_agent(OPENCODE_TEMPLATE, "opencode-flash-factory",
+                                     "opencode/mimo-v2.6-flash-free")
+        expected = list(OPENCODE_TEMPLATE["args"])
+        expected[expected.index("--model") + 1] = "opencode/mimo-v2.6-flash-free"
+        self.assertEqual(agent["args"], expected)  # one --model argument, exactly as asked
+        for field in ("command", "cwd", "allowedRoots", "timeoutMs", "inheritEnv", "image"):
+            self.assertEqual(agent[field], OPENCODE_TEMPLATE[field], field)
+        self.assertEqual(agent["args"][:3], OPENCODE_TEMPLATE["args"][:3])  # runner + credential
+
+    def test_build_agent_keeps_the_providers_own_spelling_of_the_model(self):
+        """provider/name under the template's provider is the same worker as the bare name."""
+        self.assertEqual(registry.build_agent(TEMPLATE, "pi-qwen-factory", "opencode-go/qwen-3-max"),
+                         registry.build_agent(TEMPLATE, "pi-qwen-factory", "qwen-3-max"))
+        self.assertEqual(
+            registry.build_agent(OPENCODE_TEMPLATE, "opencode-flash-factory", "mimo-v2.6-flash-free"),
+            registry.build_agent(OPENCODE_TEMPLATE, "opencode-flash-factory",
+                                 "opencode/mimo-v2.6-flash-free"))
+
+    def test_build_agent_refuses_a_model_under_another_provider(self):
+        for template, model in ((TEMPLATE, "opencode/mimo-v2.6-flash-free"),
+                                (OPENCODE_TEMPLATE, "opencode-go/glm-5.3-flash"),
+                                (dict(OPENCODE_TEMPLATE, args=OPENCODE_TEMPLATE["args"][:-1]
+                                      + ["glm-5.3-flash"]), "opencode/mimo-v2.6-flash-free")):
+            with self.subTest(template=template["id"], model=model):
+                with self.assertRaisesRegex(ValueError, "provider"):
+                    registry.build_agent(template, "ok-factory", model)
+
+    def test_build_agent_refuses_a_template_that_does_not_run_the_runner(self):
+        for template in (UNSANDBOXED, dict(TEMPLATE, command="bash"),
+                         dict(TEMPLATE, args=["/tmp/evil.py", "--", "pi"]),
+                         dict(TEMPLATE, args=["/x/worker/../evil/runner.py", "--", "pi"]),
+                         dict(OPENCODE_TEMPLATE, args=["/x/worker/runner.py"]),  # no harness
+                         dict(OPENCODE_TEMPLATE,
+                              args=["/x/worker/runner.py", "--", "opencode", "run"])):  # no model
+            with self.subTest(template=template["id"], command=template.get("command")):
+                with self.assertRaises(ValueError):
+                    registry.build_agent(template, "ok-factory", "ok-1")
+
     def test_build_agent_refuses_an_unsafe_id_or_model(self):
         for worker_id, model in (("../escape", "ok-1"), ("has space", "ok-1"), ("-leading", "ok-1"),
-                                 ("ok-1", "has space"), ("ok-1", "-leading-flag"), ("ok-1", "a/b")):
+                                 ("ok-1", "has space"), ("ok-1", "-leading-flag"), ("ok-1", "a//b"),
+                                 ("ok-1", "a/b/c"), ("ok-1", "a/-b"), ("ok-1", "a/b/")):
             with self.subTest(worker_id=worker_id, model=model):
                 with self.assertRaises(ValueError):
                     registry.build_agent(TEMPLATE, worker_id, model)
@@ -133,6 +197,104 @@ class RegisterWorkerTest(unittest.TestCase):
                           FakeRelay())
         with self.assertRaisesRegex(ToolError, "FACTORY_AGENTS_FILE"):
             foreman.register_worker("pi-qwen-factory", "qwen-3-max", "day-desk")
+
+
+class OpenCodeRegisterTest(unittest.TestCase):
+    """factory_register_worker on the approved sandboxed OpenCode template: the exact free-model
+    pin lands verbatim under the template's provider, every runner/credential/isolation field is
+    the template's, and every guard runs before the registry is touched."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.agents_file = os.path.join(self.tmp.name, "agents.json")
+        self.agents = [TEMPLATE, OPENCODE_TEMPLATE, UNSANDBOXED]
+        self.write_registry(self.agents)
+        self.github, self.relay = FakeGitHub(), FakeRelay()
+        self.github.add_issue(REPO, 7, body=ISSUE_BODY)
+        self.foreman = Foreman(
+            Store(":memory:"), self.github,
+            Config(mcp_token="t", repos=frozenset({REPO}), workers=WORKERS,
+                   agents_file=self.agents_file, worker_template=TEMPLATE_ID),
+            self.relay)
+        self.foreman.intake(REPO, 7)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write_registry(self, agents):
+        with open(self.agents_file, "w") as handle:
+            json.dump({"agents": agents}, handle)
+
+    def read_registry(self):
+        with open(self.agents_file) as handle:
+            return json.load(handle)["agents"]
+
+    def test_register_pins_the_exact_free_model_and_keeps_every_boundary_field(self):
+        result = self.foreman.register_worker(
+            "opencode-flash-factory", "opencode/mimo-v2.6-flash-free", "day-desk",
+            template=OPENCODE_TEMPLATE_ID)
+        agent = result["agent"]
+        self.assertEqual(agent["id"], "opencode-flash-factory")
+        expected_args = list(OPENCODE_TEMPLATE["args"])
+        expected_args[expected_args.index("--model") + 1] = "opencode/mimo-v2.6-flash-free"
+        self.assertEqual(agent["args"], expected_args)
+        for field in ("command", "cwd", "allowedRoots", "timeoutMs", "inheritEnv", "image"):
+            self.assertEqual(agent[field], OPENCODE_TEMPLATE[field], field)
+        self.assertEqual([a["id"] for a in self.read_registry()],
+                         [TEMPLATE_ID, OPENCODE_TEMPLATE_ID, "pi-deepseek",
+                          "opencode-flash-factory"])
+        self.assertEqual(result["reloaded"], True)
+        self.assertEqual(self.relay.reloads, 1)
+        self.assertIn("NOT in FACTORY_WORKERS", result["note"])
+
+    def test_a_bare_model_name_lands_under_the_templates_provider(self):
+        self.foreman.register_worker("opencode-flash-factory", "mimo-v2.6-flash-free", "day-desk",
+                                     template=OPENCODE_TEMPLATE_ID)
+        agent = self.read_registry()[-1]
+        self.assertEqual(agent["args"][agent["args"].index("--model") + 1],
+                         "opencode/mimo-v2.6-flash-free")
+
+    def test_another_providers_model_is_refused_before_any_write(self):
+        for model in ("opencode-go/glm-5.3-flash", "deepseek/deepseek-flash"):
+            with self.subTest(model=model):
+                with self.assertRaisesRegex(ToolError, "provider"):
+                    self.foreman.register_worker("opencode-flash-factory", model, "day-desk",
+                                                 template=OPENCODE_TEMPLATE_ID)
+        self.assertEqual(self.read_registry(), self.agents)  # unchanged
+        self.assertEqual(getattr(self.relay, "reloads", 0), 0)
+
+    def test_an_unsafe_model_name_is_refused_before_any_write(self):
+        for model in ("a//b", "a/b/c", "has space", "-leading", "a/b/"):
+            with self.subTest(model=model):
+                with self.assertRaises(ToolError):
+                    self.foreman.register_worker("opencode-flash-factory", model, "day-desk",
+                                                 template=OPENCODE_TEMPLATE_ID)
+        self.assertEqual(self.read_registry(), self.agents)  # unchanged
+        self.assertEqual(getattr(self.relay, "reloads", 0), 0)
+
+    def test_an_unsandboxed_or_unknown_template_is_refused_before_any_write(self):
+        for template, reason in (("pi-deepseek", "sandboxed"),
+                                 ("no-such-factory", "not in the relay registry")):
+            with self.subTest(template=template):
+                with self.assertRaisesRegex(ToolError, reason):
+                    self.foreman.register_worker(
+                        "opencode-flash-factory", "opencode/mimo-v2.6-flash-free", "day-desk",
+                        template=template)
+        self.assertEqual(self.read_registry(), self.agents)  # unchanged
+        self.assertEqual(getattr(self.relay, "reloads", 0), 0)
+
+    def test_a_registered_opencode_worker_is_not_dispatchable_until_promoted(self):
+        """Registering is not promoting, for an OpenCode worker too (ADR-0077): FACTORY_WORKERS
+        and the pilot stay the owner's, so nothing is dispatched to the new worker."""
+        self.foreman.register_worker("opencode-flash-factory", "opencode/mimo-v2.6-flash-free",
+                                     "day-desk", template=OPENCODE_TEMPLATE_ID)
+        self.assertEqual([w for w, _ in self.foreman.config.workers],
+                         ["pi-deepseek-factory", "pi-glm-factory", "opencode-glm-factory"])
+        self.github.edit_issue(REPO, 7, f"Worker: opencode-flash-factory\n\n{ISSUE_BODY}")
+        wi = self.foreman.tick(ID)["workItem"]
+        self.assertEqual(wi["state"], "human_waiting")
+        self.assertIn("names opencode-flash-factory, which is not in FACTORY_WORKERS", wi["blockedOn"])
+        self.assertEqual(self.relay.tasks, {})  # nothing was dispatched
 
 
 if __name__ == "__main__":
