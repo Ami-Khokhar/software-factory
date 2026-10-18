@@ -557,7 +557,7 @@ class Foreman:
         conflict = (wi["state"] in ("pr_open", "reviewing", "changes_requested") and facts["pr"] is not None
                     and facts["pr"]["mergeable"] is False)
         if wi["state"] == "changes_requested" or conflict:  # findings travel as data (ADR-0007)
-            latest = facts["verdicts"][-1] if facts["verdicts"] else None
+            latest = workitem.verdict_for_head(facts)
             # a redo that failed leaves the PR, and the verdict on its head, as they were
             applies = latest and (wi["state"] == "changes_requested"
                                   or conflict and latest["headSha"] == facts["pr"]["headSha"])

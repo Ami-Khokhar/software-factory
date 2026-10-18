@@ -222,6 +222,21 @@ class UpdateTest(unittest.TestCase):
         self.assertFalse(any("unittest" in call.args[0] for call in run.call_args_list))
         self.assertEqual(len(self.restarts), 1)
 
+    def test_a_retry_restarts_when_checkout_advanced_but_deployed_marker_did_not(self):
+        deployed = (cli.STATE / "deployed")
+        prior = self.head()[0]
+        new = self.commit("notes.txt", "x\n")
+        git(self.dev, "push", "-q", "origin", "HEAD:main")
+        git(self.deploy, "fetch", "-q", "origin")
+        git(self.deploy, "merge", "-q", "--ff-only", "@{upstream}")  # prior update died before restart
+        deployed.parent.mkdir(parents=True, exist_ok=True)
+        deployed.write_text(prior + "\n")
+
+        cli.cmd_update([])
+
+        self.assertEqual(self.head()[0], new)
+        self.assertEqual((deployed.read_text().strip(), len(self.restarts)), (new, 1))
+
     def test_a_dockerfile_update_rebuilds_the_worker_image(self):
         self.commit("worker/Dockerfile", "FROM scratch\n")
         git(self.dev, "push", "-q", "origin", "HEAD:main")

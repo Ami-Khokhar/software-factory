@@ -796,7 +796,9 @@ def cmd_update(args):
         # that fails can still abort, and the retry of such a step would then skip it again.
         restart_factory_mcp()
     else:
-        deploy_steps(since, new, restart=new != old or changed("worker/Dockerfile"))
+        # The checkout may already be at `new` after a step failed before restart; the deployment
+        # marker is the durable proof that the running service reached this revision.
+        deploy_steps(since, new, restart=new != since)
     deployed_file.write_text(new + "\n")
     print(f"update: deployed source {new[:7]} (was {since[:7]}); runtime acceptance remains unverified")
     if changed("tenant/hermes/config.yaml"):

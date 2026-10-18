@@ -213,6 +213,39 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
 - **Unknown properties are rejected** (`additionalProperties: false`) so a cell
   cannot smuggle vendor-specific fields across a boundary.
 
+## Runtime status and tool discovery
+
+`factory_runtime_status` is a read-only MCP operation, not a fifth worker
+document. It accepts an optional `id` naming a stored WorkItem. Without one it
+reports the running factory revision, configured worker order and registered
+sandboxed factory-runner status and timeout facts. It reports model, image and
+credential-file readability only for a `python3` entry whose first argument is
+an absolute `worker/runner.py` path with a harness after `--`. Such registered
+workers are enumerated even before they are in `FACTORY_WORKERS`. A configured
+worker that does not match this rule is marked `sandboxed: false` with no image
+claim; malformed argument lists are marked `invalid_args` with `sandboxed: null`.
+Credential paths use the
+runner's `expanduser` behavior. The report also includes the relay health and
+timeout cap and a comparison of the currently exposed tool
+schemas with Hermes' disk cache. With an item id, it also reports the stored
+and live PR head and whether comments, check runs and gate workflow runs can be
+read for that exact live head. A missing PR has no head-level diagnostics.
+
+Credential availability means only that the configured file is readable; the
+report never attempts provider authentication. Credential and environment
+values, raw API error bodies, and cache contents are not returned. GitHub
+permission failures are reduced to `forbidden`, and other probe failures to
+`unavailable`. Cache findings describe the readable disk cache only and do not
+claim to describe the active chat's schema. The response advises `/reload-mcp`
+when the active chat may have stale tools.
+
+MCP `tools/list` includes `ttlMs: 0` and `cacheScope: "private"` to signal that
+tool schemas should not be retained as shared cache entries. These hints do not
+refresh an already running client. The caller must reconnect or use
+`/reload-mcp` to rebuild its schemas. Runtime status only reads local files,
+Docker image metadata and GitHub/relay read endpoints; it does not start a
+worker, provider request, retry, allowance spend or host setting change.
+
 ## State machine
 
 ```
