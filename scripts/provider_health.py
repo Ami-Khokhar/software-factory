@@ -30,6 +30,7 @@ import shutil
 import sys
 import tempfile
 import time
+import re
 from datetime import datetime, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -135,11 +136,19 @@ def main(argv=None):
                         help="the exact response that proves the intended model answered")
     parser.add_argument("--credential", action="append", default=[], metavar="HOST_FILE:CONTAINER_DIR")
     parser.add_argument("--env", action="append", default=[], metavar="KEY=VALUE")
+    parser.add_argument("--probe-id", default="health",
+                        help=argparse.SUPPRESS)
     parser.add_argument("harness", nargs="*", help="the sandboxed harness argv, after --")
     args = parser.parse_args(argv)
     if not args.harness:
         parser.error("give the sandboxed harness argv after --")
-    scratch, work = tempfile.mkdtemp(prefix="factory-health-"), tempfile.mkdtemp(prefix="factory-health-work-")
+    if not re.fullmatch(r"[a-f0-9]{32}|health", args.probe_id):
+        parser.error("probe id must be a fixed health name or 32 lowercase hex digits")
+    scratch_root = os.environ.get("FACTORY_HEALTH_SCRATCH_ROOT")
+    if scratch_root and not os.path.isdir(scratch_root):
+        parser.error("the private probe scratch root is unavailable")
+    scratch = tempfile.mkdtemp(prefix="factory-health-", dir=scratch_root)
+    work = tempfile.mkdtemp(prefix="factory-health-work-", dir=scratch_root)
     try:
         return pilot(args, scratch, work)
     finally:
@@ -156,7 +165,8 @@ def pilot(args, scratch, work):
         # real preflight runs against a checked-in base.
         order = {"id": "provider-health-pilot", "remoteVerify": True}
         credentials, harness_env = runner.preflight(order, args.image, args.harness,
-                                                   args.credential, args.env, scratch, work, None)
+                                                   args.credential, args.env, scratch, work, None,
+                                                   start_docker=False)
         preflight = {"ts": now(), "event": "preflight", "tool": tool, "status": "ok",
                      "exitCode": 0, "retries": RETRIES}
     except runner.WorkerError as exc:
@@ -167,7 +177,7 @@ def pilot(args, scratch, work):
     if status == "unavailable":
         print(report(events, status))
         return preflight["exitCode"] or 1
-    sandbox = runner.Sandbox(args.image, "health", credentials, harness_env)
+    sandbox = runner.Sandbox(args.image, f"health-{args.probe_id}", credentials, harness_env)
     event, status = probe(sandbox, args.harness, args.deadline, scratch, args.expect)
     events.append(event)
     print(report(events, status))

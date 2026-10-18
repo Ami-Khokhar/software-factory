@@ -97,6 +97,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/routing.py` | Which worker takes the next attempt: locality first, then one that has not failed |
 | `factory_mcp/metrics.py` | The escalation text, the autonomy rate, whether each lesson works, and the weekly report's numbers |
 | `factory_mcp/runtime.py` | Sanitized, read-only runtime facts and observational MCP schema-cache diagnostics (ADR-0091) |
+| `factory_mcp/worker_ops.py` | Validates and runs one bounded sanitized provider-health check, stores its binding/quarantine record, and calls the relay's fixed registry-reload endpoint (ADR-0094) |
 | `factory_mcp/config.py` | Settings from the environment and `repos.json` |
 | `worker/runner.py` | Runs one WorkOrder in the sandbox and prints its Result |
 | `worker/Dockerfile` | The sandbox image: git, Python, Node, pinned pi, Codex and OpenCode, and no GitHub credential |

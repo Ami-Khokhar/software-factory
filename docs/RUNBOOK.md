@@ -336,8 +336,21 @@ Day Desk steers worker and timeout decisions within the same allowlist and crede
   worker to `FACTORY_WORKERS` — the steps stay separate: this tool only registers, the deploy
   above puts the file on the host, the pilot (below) is the health check, listing the id in
   `FACTORY_WORKERS` is the promotion, and only a real pilot line proves execution — the tests run
-  this against fixture registries and claim no live pass. All three tools are write tools on
-  Day Desk's driving token, so Hermes asks you before each call.
+  this against fixture registries and claim no live pass. Worker-management tools are write tools
+  on Day Desk's driving token, so Hermes asks you before each call.
+
+- `factory_check_worker` (`worker`, `by`) runs one fresh synthetic probe for a registered agent.
+  It accepts only Python 3 on this deployment's exact `worker/runner.py`, a pinned model, a
+  supported harness, existing credential mounts and non-secret environment keys. The check has
+  fixed deadlines, starts no WorkOrder, and stores only the sanitized `factory.health/v1` report
+  plus a binding to the worker config, credential-file metadata and image id. Success is valid for
+  15 minutes; any later configuration or file metadata change needs another check. A failed check
+  is recorded as quarantined. File readability alone is not authentication; only an `ok` probe
+  confirms the synthetic response. The probe does not start OrbStack when Docker is stopped.
+- `factory_reload_workers` (`by`) calls agent-relay's fixed registry reload endpoint. It edits no
+  file and does not change `FACTORY_WORKERS`, start a task or retry an issue. These two driving
+  writes let Day Desk check and reload a registered worker; activation remains a separate owner
+  operation.
 
 The timeout check reads `GET /healthz` -> `limits.maxTimeoutMs` from agent-relay (verified
 against relay revision `3ecf6b72973a5d9dbebb92bb8bfeb9a90f41802c` in the real rehearsal).

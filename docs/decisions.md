@@ -2306,3 +2306,27 @@ commit marker still advances only after all deploy steps succeed.
 remain visible, and an unchanged current HEAD that matches the completed deployment marker skips
 verification. An incomplete deployment leaves that marker behind, so the next update still runs its
 pending work. Merge, closure and source deployment never stand in for live runtime acceptance.
+
+## ADR-0094 — Worker health checks use the deployed runner and cannot activate workers
+
+**Context.** A relay registry can hold agents that are not sandboxed factory workers, and a
+registered worker can be unavailable because its credential, image or provider is broken. Testing
+from the host would cross the worker's credential boundary, while changing `FACTORY_WORKERS` as
+part of a probe could send production WorkOrders before the result is reviewed.
+
+**Decision.** `factory_check_worker` accepts only the id of an existing registry entry that runs
+Python 3 on this deployment's exact `worker/runner.py`, an approved harness and a pinned model.
+It rejects secret-bearing environment keys, then runs one bounded synthetic probe through the
+existing `scripts/provider_health.py` and the same Docker sandbox path. Child stdin is closed and
+the probe uses a unique label so timeout cleanup targets only its own process group and containers.
+Only the sanitized `factory.health/v1` status and allowlisted event fields are stored and returned.
+SQLite binds the latest success or quarantine record to a digest of the worker configuration,
+model, credential-file metadata and image identity; records expire after 15 minutes. A health
+check never dispatches or activates a worker. `factory_reload_workers` calls only the relay's
+fixed registry-reload endpoint and never writes its registry or the factory worker order.
+
+**Consequence.** The owner can distinguish a healthy registered candidate from an unavailable one
+before a separate activation decision, while every probe remains inside the deployed sandbox.
+The short-lived binding makes later activation and dispatch-preflight checks fail closed after a
+model, credential file or image changes. This slice does not activate workers or consume health
+records during dispatch.
