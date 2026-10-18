@@ -1,10 +1,17 @@
 """GitHub REST over urllib. Only the calls the Foreman needs; every return value is plain JSON."""
 import base64
+import datetime
+import email.utils
 import json
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+
+GET_ATTEMPTS = 3
+GET_RETRY_WAIT_SECONDS = 2
 
 
 class GitHubError(Exception):
@@ -30,12 +37,42 @@ class GitHub:
             headers["Authorization"] = f"Bearer {self.token}"
         data = None if body is None else json.dumps(body).encode()
         request = urllib.request.Request(url, data, headers, method=method)
-        try:
-            with urllib.request.urlopen(request, timeout=20) as response:
-                raw = response.read()
-                return (json.loads(raw) if raw else None), response.headers.get("Link", "")
-        except urllib.error.HTTPError as err:
-            raise GitHubError(err.code, err.read().decode("utf-8", "replace")[:300]) from None
+        waited = 0
+        for attempt in range(GET_ATTEMPTS if method == "GET" else 1):
+            try:
+                with urllib.request.urlopen(request, timeout=20) as response:
+                    raw = response.read()
+                    return (json.loads(raw) if raw else None), response.headers.get("Link", "")
+            except urllib.error.HTTPError as err:
+                message = err.read().decode("utf-8", "replace")[:300]
+                if method != "GET" or (err.code != 429 and not 500 <= err.code <= 599):
+                    raise GitHubError(err.code, message) from None
+                delay = self._retry_delay(err.headers, attempt)
+                if attempt + 1 == GET_ATTEMPTS or waited + delay > GET_RETRY_WAIT_SECONDS:
+                    raise GitHubError(err.code, message) from None
+            except (urllib.error.URLError, ConnectionResetError, TimeoutError):
+                if method != "GET" or attempt + 1 == GET_ATTEMPTS:
+                    raise
+                delay = self._retry_delay({}, attempt)
+                if waited + delay > GET_RETRY_WAIT_SECONDS:
+                    raise
+            time.sleep(delay)
+            waited += delay
+
+    @staticmethod
+    def _retry_delay(headers, attempt):
+        """Honor Retry-After when it fits the GET retry's bounded wait; otherwise back off briefly."""
+        value = headers.get("Retry-After")
+        if value:
+            try:
+                return max(0, float(value))
+            except ValueError:
+                try:
+                    when = email.utils.parsedate_to_datetime(value)
+                    return max(0, (when - datetime.datetime.now(datetime.timezone.utc)).total_seconds())
+                except (TypeError, ValueError, OverflowError):
+                    pass
+        return 0.1 * (attempt + 1)
 
     def _get_all(self, path, key=None, **query):
         url = f"{self.api}{path}?" + urllib.parse.urlencode(dict(query, per_page=100))

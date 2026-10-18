@@ -63,15 +63,16 @@ def blocking(verdict):
     return [f for f in found if f["severity"] == "blocking"] or found
 
 
-def blockers(history):
+def blockers(history, latest=None):
     """WorkItem.blockers from every verdict on the PR, oldest first (ADR-0005). A problem keeps the
     round it was first reported in; it is resolved while the latest verdict does not report it."""
     first_seen = {}
     for verdict in history:
         for finding in blocking(verdict):
             first_seen.setdefault(finding["fingerprint"], verdict["round"])
-    latest = {f["fingerprint"] for f in blocking(history[-1])} if history else set()
-    return [{"fingerprint": fp, "firstSeenRound": r, "resolved": fp not in latest}
+    latest_findings = latest if latest is not None else (history[-1] if history else None)
+    unresolved = {f["fingerprint"] for f in blocking(latest_findings)} if latest_findings else set()
+    return [{"fingerprint": fp, "firstSeenRound": r, "resolved": fp not in unresolved}
             for fp, r in first_seen.items()]
 
 

@@ -5,12 +5,14 @@ import json
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest import mock
 
 from factory_mcp.github import GitHub, GitHubError
 
 
 class Api(BaseHTTPRequestHandler):
     seen = []
+    retries = {}
 
     def log_message(self, *args):
         pass
@@ -18,7 +20,15 @@ class Api(BaseHTTPRequestHandler):
     def do_GET(self):
         Api.seen.append((self.path, self.headers.get("Authorization")))
         base, status = f"http://127.0.0.1:{self.server.server_port}", 200
-        if self.path.startswith("/repos/o/r/issues/5/comments"):
+        if self.path in ("/repos/o/r/issues/503", "/repos/o/r/issues/429"):
+            Api.retries[self.path] = Api.retries.get(self.path, 0) + 1
+            threshold = 2 if self.path.endswith("503") else 1
+            if Api.retries[self.path] <= threshold:
+                self.reply(503 if self.path.endswith("503") else 429, {"message": "try again"},
+                           retry_after="0")
+                return
+            body, link = {"number": int(self.path.rsplit("/", 1)[-1])}, ""
+        elif self.path.startswith("/repos/o/r/issues/5/comments"):
             page = 2 if "page=2" in self.path else 1
             body, link = ([{"id": page}], f'<{base}/repos/o/r/issues/5/comments?page=2>; rel="next"'
                           if page == 1 else "")
@@ -48,7 +58,10 @@ class Api(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["content-length"])))
         Api.seen.append((self.path, body))
-        if self.path == "/repos/o/r/labels" and body["name"] == "factory:ready":
+        if self.path == "/repos/o/r/issues/500":
+            Api.retries[self.path] = Api.retries.get(self.path, 0) + 1
+            self.reply(503, {"message": "try again"})
+        elif self.path == "/repos/o/r/labels" and body["name"] == "factory:ready":
             self.reply(422, {"message": "Validation Failed", "errors": [{"code": "already_exists"}]})
         elif self.path == "/repos/o/r/labels" and body["color"] == "not-a-color":
             self.reply(422, {"message": "Validation Failed", "errors": [{"code": "invalid"}]})
@@ -62,13 +75,15 @@ class Api(BaseHTTPRequestHandler):
         Api.seen.append((self.path, body))
         self.reply(200, dict(body, number=int(self.path.rsplit("/", 1)[-1])))
 
-    def reply(self, status, body, link=""):
+    def reply(self, status, body, link="", retry_after=None):
         self.send_response(status)
         data = json.dumps(body).encode()
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(data)))
         if link:
             self.send_header("Link", link)
+        if retry_after is not None:
+            self.send_header("Retry-After", retry_after)
         self.end_headers()
         self.wfile.write(data)
 
@@ -76,6 +91,7 @@ class Api(BaseHTTPRequestHandler):
 class GitHubClientTest(unittest.TestCase):
     def setUp(self):
         Api.seen = []
+        Api.retries = {}
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Api)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.github = GitHub("tok", api=f"http://127.0.0.1:{self.server.server_port}")
@@ -143,6 +159,27 @@ class GitHubClientTest(unittest.TestCase):
         with self.assertRaises(GitHubError) as caught:
             self.github.issue("o/r", 404)
         self.assertEqual(caught.exception.status, 404)
+
+    def test_get_retries_bounded_rate_limits_and_server_errors(self):
+        self.assertEqual(self.github.issue("o/r", 503)["number"], 503)
+        self.assertEqual(Api.retries["/repos/o/r/issues/503"], 3)
+        self.assertEqual(self.github.issue("o/r", 429)["number"], 429)
+        self.assertEqual(Api.retries["/repos/o/r/issues/429"], 2)
+
+    def test_a_write_is_never_retried_after_a_server_error(self):
+        with self.assertRaisesRegex(GitHubError, "GitHub 503"):
+            self.github._request("POST", f"{self.github.api}/repos/o/r/issues/500", {"body": "x"})
+        self.assertEqual(Api.retries["/repos/o/r/issues/500"], 1)
+
+    def test_get_retries_a_connection_reset(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"number": 5}'
+        response.__enter__.return_value.headers.get.return_value = ""
+        with mock.patch("factory_mcp.github.urllib.request.urlopen",
+                        side_effect=[ConnectionResetError("reset"), response]) as open_request, \
+                mock.patch("factory_mcp.github.time.sleep"):
+            self.assertEqual(self.github.issue("o/r", 5)["number"], 5)
+        self.assertEqual(open_request.call_count, 2)
 
 
 if __name__ == "__main__":
