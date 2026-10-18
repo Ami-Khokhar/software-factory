@@ -256,6 +256,30 @@ registry if it is already running. Deploying this configuration is a step on the
 from the implementation that lands in this repository; the existing GLM workers stay, so a
 DeepSeek outage falls back to them.
 
+The same restricted path registers a sandboxed OpenCode worker, whose template pins its free model
+in one `--model provider/name` argument (opencode has no separate `--models` flag). Add the
+template to `~/.config/agent-relay/agents.json` once, by hand as above (replace the host paths):
+
+```json
+{
+  "id": "opencode-mimo-factory",
+  "name": "opencode (mimo-v2.6-flash-free), sandboxed factory worker",
+  "command": "python3",
+  "args": ["/absolute/path/to/software-factory/worker/runner.py",
+           "--credential", "/Users/you/.local/share/opencode/auth.json:/tmp/factory-home/.local/share/opencode",
+           "--", "opencode", "run", "--model", "opencode/mimo-v2.6-flash-free"],
+  "cwd": "/absolute/path/to/factory-work",
+  "allowedRoots": ["/absolute/path/to/factory-work"],
+  "timeoutMs": 1500000,
+  "inheritEnv": ["HOME", "PATH"],
+  "image": "factory-worker:latest"
+}
+```
+
+Further OpenCode free-model pins then register through `factory_register_worker` with
+`template: "opencode-mimo-factory"` (below): only the model changes, and only within the `opencode`
+provider, until a separately approved template says otherwise.
+
 Routing hard wall (ADR-0085): no pass ever runs in the gate reviewer's model family. `_dispatch`
 and the deferred attempt read `reviewer_model` and `strong_reviewer_model` from the repo's
 `.github/pr-gatekeeper.json` on the default branch (the gate's config — the factory reads that
@@ -266,23 +290,54 @@ before, because the gate does not review it. So with the default config, `pi-dee
 never takes a pass on a gated repo — it is the reviewer — and an issue whose `Worker:` line names
 only excluded workers waits for a person with `every allowed worker is in the reviewer family <f>`.
 
-### Choosing and registering a worker from Day Desk (ADR-0077)
+### Choosing workers and timeouts from Day Desk (ADR-0077, ADR-0089)
 
-Day Desk steers two worker decisions itself, within the same allowlist and credential boundary:
+Day Desk steers worker and timeout decisions within the same allowlist and credential boundary:
 
+- `factory_set_timeout` (`id`, `wallMs`, `by`) sets a durable wall-budget override for one
+  WorkItem. Supply an integer at least the current `FACTORY_WALL_MS` (and 60000), at most
+  3600000, or `null` to clear it. The live relay's `maxTimeoutMs` must also support the effective
+  budget when setting an override; an unreadable or exceeded cap refuses that change. Clearing
+  always restores the default, even during a relay outage. Live workers and terminal items
+  are refused. Setting it only stores the value and an audit event: it never retries, dispatches,
+  resets passes, or grants an allowance. The agent token exposes this write tool too.
+  For an approved longer run, call it while the item is blocked, read back
+  `factory_status.workItem.wallMsOverride`, then separately authorize the retry. Verify the next
+  stored WorkOrder's `budget.wallMs`, relay task's `timeoutMs`, and actual Result phases before
+  calling the experiment successful. A global env change is unnecessary. Old WorkOrders retain
+  their frozen budget. The runner still reserves 60 seconds, assigns 70% of the remaining time
+  to coding and 25% to verification, and subtracts checkout-lock wait time.
 - `factory_set_worker` (`id`, `workers`, `by`) replaces a WorkItem's issue `Worker:` lines with the
   agent ids given, in order; `[]` falls back to `FACTORY_WORKERS` order. Only agents in
   `FACTORY_WORKERS` may be named — an unknown id is refused before the edit. It is refused while a
   worker is running and on a closed, cancelled or exhausted WorkItem. The next tick reads the new
   lines, so this is how a retry is steered to another model.
-- `factory_register_worker` (`worker`, `model`, `by`) adds a worker to the relay's `agents.json` by
-  copying the approved template (`FACTORY_WORKER_TEMPLATE`, default `pi-glm-factory`) and pinning
-  only `model`: the command, credential mount, env, cwd, allowedRoots, image and timeout are the
-  template's, and the provider stays the template's too. It refuses a duplicate id and an id or
-  model outside a safe name, then reloads the relay. It needs `FACTORY_AGENTS_FILE` set to the
-  relay's registry path, and it never adds the worker to `FACTORY_WORKERS` — a registered worker
-  runs nothing until you list it there and its pilot (below) is green. Both tools are write tools on
+- `factory_register_worker` (`worker`, `model`, `by`, optional `template`) adds a worker to the
+  relay's `agents.json` by copying an approved sandboxed template (`template`, default
+  `FACTORY_WORKER_TEMPLATE`, currently `pi-glm-factory`; the sandboxed OpenCode worker
+  `opencode-mimo-factory` is another) and pinning only `model`: the command, credential mount, env,
+  cwd, allowedRoots, image and timeout are the template's, and the provider stays the template's
+  too, so `model` may be bare or `provider/model` under that provider and a change of provider is
+  refused. The template must itself run `python3` `worker/runner.py` with a harness after `--` —
+  a discovered, unsandboxed relay agent, an unknown template id, a command or path injected into a
+  template, an unsafe model name, and every attempt to change the credential, image or env
+  boundary are refused before the registry is written; the write stays duplicate-checked and
+  atomic. It needs `FACTORY_AGENTS_FILE` set to the relay's registry path, and it never adds the
+  worker to `FACTORY_WORKERS` — the steps stay separate: this tool only registers, the deploy
+  above puts the file on the host, the pilot (below) is the health check, listing the id in
+  `FACTORY_WORKERS` is the promotion, and only a real pilot line proves execution — the tests run
+  this against fixture registries and claim no live pass. All three tools are write tools on
   Day Desk's driving token, so Hermes asks you before each call.
+
+The timeout check reads `GET /healthz` -> `limits.maxTimeoutMs` from agent-relay (verified
+against relay revision `3ecf6b72973a5d9dbebb92bb8bfeb9a90f41802c` in the real rehearsal).
+A positive integer is the global cap, `null` means no global cap. Missing or malformed values
+require a relay upgrade/repair. A transport outage leaves an overridden dispatch pending for the
+next tick, without spending a pass. A readable incompatible cap concludes any open recovery
+and escalates before a WorkOrder is saved. The registered agent's `timeoutMs` is its default,
+not a cap: the factory explicitly submits the effective WorkOrder budget. Run
+`python3 scripts/rehearsal.py /absolute/path/to/agent-relay` before deployment to check this
+contract against the actual relay server, including its configured cap.
 
 ### Provider health pilot (ADR-0076)
 

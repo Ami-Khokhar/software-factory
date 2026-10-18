@@ -1,4 +1,4 @@
-"""Reviewed, owner-authorized, bootstrap-only merge of a repo's setup PR (ADR-0074, ADR-0089).
+"""Reviewed, owner-authorized, bootstrap-only merge of a repo's setup PR (ADR-0074, ADR-0090).
 
 The owner grants one authorization per repo (factory_authorize_setup_merge), pinned to a digest of
 the canonical setup plan the moment they approve it. factory_merge_setup_pr then merges only the

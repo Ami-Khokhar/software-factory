@@ -38,6 +38,10 @@
       "items": { "type": "string", "minLength": 1 },
       "description": "The `Paths: <glob>, <glob>` lines' globs, frozen at intake (ADR-0087): the source files this node's pass may change; the WorkOrder carries them as constraints.allowedPaths and check_pushed fails a pushed source file outside them. Null or absent means no fence. WorkItems stored before this field have none."
     },
+    "wallMsOverride": {
+      "type": ["integer", "null"], "minimum": 60000, "maximum": 3600000,
+      "description": "Per-item wall budget in milliseconds. Null or absent uses FACTORY_WALL_MS. Setting it never retries or resets passes."
+    },
     "branch": { "type": ["string", "null"] },
     "prNumber": { "type": ["integer", "null"], "minimum": 1 },
     "headSha": {

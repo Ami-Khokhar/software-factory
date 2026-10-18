@@ -237,6 +237,12 @@ class FakeRelay:
     def get(self, task_id):
         return self.tasks.get(task_id)
 
+    def limits(self):
+        from factory_mcp.relay import RelayError
+        if self.down:
+            raise RelayError("relay unreachable: connection refused")
+        return {"maxTimeoutMs": getattr(self, "max_timeout_ms", None)}
+
     def reload(self):
         from factory_mcp.relay import RelayError
         if self.down:

@@ -253,6 +253,7 @@ def main(relay_checkout, lose_store=False):
     relay = subprocess.Popen([sys.executable, os.path.join(relay_checkout, "src", "server.py")],
                              env=dict(os.environ, AGENT_RELAY_AGENTS_FILE=agents,
                                       AGENT_RELAY_PORT=str(relay_port), AGENT_RELAY_TOKEN=relay_token,
+                                      AGENT_RELAY_MAX_TIMEOUT_MS="3600000",
                                       **ident),
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     db = os.path.join(tmp, "factory.sqlite3")
@@ -268,6 +269,12 @@ def main(relay_checkout, lose_store=False):
     factory = start_factory()
     try:
         wait_http(f"http://127.0.0.1:{relay_port}/healthz")
+        request = urllib.request.Request(f"http://127.0.0.1:{relay_port}/healthz",
+                                         headers={"Authorization": f"Bearer {relay_token}"})
+        with urllib.request.urlopen(request, timeout=5) as response:
+            limits = json.load(response)["limits"]
+        assert limits["maxTimeoutMs"] == 3600000, limits
+        print("real relay maxTimeoutMs:", limits["maxTimeoutMs"])
         wait_http(f"http://127.0.0.1:{mcp_port}/mcp")
         mcp = Mcp(f"http://127.0.0.1:{mcp_port}/mcp", token)
         mcp.call("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},

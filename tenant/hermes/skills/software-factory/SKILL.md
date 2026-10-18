@@ -102,12 +102,21 @@ standard in the repo's AGENTS.md ask:
 - When the owner names a worker, put a `Worker: <relay agent id>` line in each issue body it
   is for, before `## Acceptance`; several lines give an order. Use only an agent the owner named.
   If the agent is not in FACTORY_WORKERS, the issue waits for the owner with that reason.
+- When the owner approves a longer run for a specific WorkItem, call factory_set_timeout with
+  its `id`, the approved integer milliseconds as `wallMs`, and the owner's name as `by`.
+  `null` clears the override. Bounds are at least the service default and 60000, at most 3600000,
+  and within the live relay cap. Read back factory_status's `wallMsOverride` before any separately
+  approved retry. This tool changes no passes, grants or state and starts no worker. Report
+  a refusal verbatim. Never substitute a global timeout change or invent a larger approval.
 - To steer an existing WorkItem to a model, call factory_set_worker with the WorkItem id, the agent
   ids from FACTORY_WORKERS as `workers` in order (`[]` falls back to FACTORY_WORKERS order) and the
   owner's name as `by`. It refuses an agent outside FACTORY_WORKERS, a running worker, and a closed,
   cancelled or exhausted WorkItem: give the reason word for word.
 - To add a new model, call factory_register_worker with a new agent id as `worker` and the model as
-  `model`. It copies the sandboxed template and pins only the model; the new worker is NOT in
+  `model` (bare, or `provider/model` under the template's own provider), and `template` when the
+  owner names which approved sandboxed template to copy (default pi-glm-factory, for example the
+  OpenCode opencode-mimo-factory). It copies that template and pins only the model; an unsandboxed,
+  unknown or cross-provider template is refused. The new worker is NOT in
   FACTORY_WORKERS and runs nothing until the owner lists it there and its provider-health pilot
   passes. Tell the owner both steps are theirs.
 

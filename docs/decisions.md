@@ -1815,13 +1815,17 @@ allowlist and credential boundary:
   refused while a worker is live and on a terminal WorkItem; unlike dependencies it may change
   between attempts, which is how a retry is steered to another model. The order lives in the issue
   body, so this edits the issue and the next tick reads it.
-- `factory_register_worker(worker, model, by)` adds a worker to the relay's `agents.json` by copying
-  the approved template (`FACTORY_WORKER_TEMPLATE`, default `pi-glm-factory`) and pinning only
-  `model`. The command, credential mount, env, cwd, allowedRoots, image and timeout are the
-  template's, and the provider stays the template's, so a registered worker cannot reach anything a
-  factory worker could not already reach. It refuses a duplicate id and an id or model outside a
-  safe name, writes the registry atomically, and reloads the relay. It needs `FACTORY_AGENTS_FILE`
-  set; without it the tool is refused rather than guessing a path.
+- `factory_register_worker(worker, model, by, template=None)` adds a worker to the relay's
+  `agents.json` by copying an approved sandboxed template (`template`, or `FACTORY_WORKER_TEMPLATE`,
+  default `pi-glm-factory`) and pinning only `model`. The command, credential mount, env, cwd,
+  allowedRoots, image and timeout are the template's, and the provider stays the template's, so a
+  registered worker cannot reach anything a factory worker could not already reach. The template
+  must itself run `python3` on an absolute `worker/runner.py` with a harness after `--`, so a
+  discovered, unsandboxed relay agent is never copied; `model` may be bare or `provider/model`, but
+  only under the template's own provider. It refuses a duplicate id, an id or model outside a safe
+  name, and an unknown or unsandboxed template, writes the registry atomically, and reloads the
+  relay. It needs `FACTORY_AGENTS_FILE` set; without it the tool is refused rather than guessing a
+  path.
 
 **Consequence.** Registering is not promoting: `factory_register_worker` never writes
 `FACTORY_WORKERS`, so a registered worker receives no WorkOrder until the owner lists it there and
@@ -2190,7 +2194,27 @@ the sequencing falls out of the fences themselves, not out of `after` lines — 
 nodes still dispatch together up to `FACTORY_PASSES_PER_REPO`. The check reads the store,
 never GitHub, so it costs one pass over the repo's WorkItems per ready node.
 
-## ADR-0089 — The guarded setup merge proves provenance from the journal, not from the branch name
+
+## ADR-0089 — Bounded per-WorkItem timeout overrides
+
+**Context.** A task and the repair intended to extend its deadline both timed out under the
+same service budget. Changing the service default would extend unrelated work too.
+
+**Decision.** `factory_set_timeout` stores an optional `wallMsOverride` under the WorkItem
+lease and audits the previous, requested and effective values. An integer must be at least
+max(60000, FACTORY_WALL_MS), at most 3600000, and supported by the relay's live cap. Null clears
+it without needing relay access. Live workers and terminal items refuse changes. Both driving and owner tokens expose this
+write tool. The tool neither retries nor buys passes or allowances. New implement and fix orders
+freeze the effective budget, which is also the relay's explicit timeout. An overridden dispatch
+rechecks the cap before spending a pass. Incompatible reported caps conclude open recovery
+records before escalation; transport outages remain retryable ticks. Existing phase allocations stay unchanged.
+
+**Consequence.** The owner can approve a bounded experiment for one blocked task. Store migration
+8 initializes old items to null, preserving their default behavior. Applying the override and
+retrying remain distinct operations. A passing deployment is not evidence that the longer task
+succeeds; its next WorkOrder, relay timeout and real Result must be read back separately.
+
+## ADR-0090 — The guarded setup merge proves provenance from the journal, not from the branch name
 
 **Context.** The guarded merger of ADR-0074 required the open setup PR to sit on the branch named
 for the grant's digest (`factory-bootstrap/<digest[:16]>`). A plan refreshed after creation keeps
@@ -2213,3 +2237,4 @@ the refreshed digest, and a deputy PR reopened on the factory's own branch, or a
 carrying the authorized name with canonical content, now refuses where the digest-named branch
 check would have let them through. A journal without the PR's record fails closed to a person.
 This supersedes ADR-0074's sentence that the merged PR's branch must match the grant's digest.
+

@@ -13,7 +13,7 @@ from . import (diagnostics, documents, gate_secrets, jev_rank, lessons, patches,
                routing, setup_merge, sizing, workitem)
 from .github import GitHubError
 from .mcp import ToolError
-from .relay import RelayError
+from .relay import RelayError, RelayLimitError
 from .store import REQUEST_PHASES, Conflict, now
 from .verdict import blocking, fingerprint
 
@@ -800,6 +800,13 @@ class Foreman:
                     + ", ".join(sorted(excluded)))), "no_worker")
             return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=(
                 f"{wi['repo']} is local-only and FACTORY_WORKERS has no local worker")), "no_worker")
+        if wi.get("wallMsOverride") is not None:
+            try:
+                self._check_timeout(wi["wallMsOverride"])
+            except RelayLimitError as exc:
+                self._finish_recovery(wi, False)
+                return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=str(exc)),
+                                   "timeout_unavailable")
         recovery = self._recovery_decision(wi, avoid, from_worker, category, worker)
         attempt = sum(1 for o in orders if o["round"] == wi.get("gateRound", 0) and o["kind"] == kind)
         base = self.github.branch_head(wi["repo"], self._default_branch(wi["repo"]))
@@ -1569,6 +1576,49 @@ class Foreman:
         finally:
             self.store.release(workitem_id, self.holder)
 
+    def _check_timeout(self, wall_ms):
+        cap = self.relay.limits()["maxTimeoutMs"]
+        if cap is not None and wall_ms > cap:
+            raise RelayLimitError(f"requested wallMs {wall_ms} exceeds relay maxTimeoutMs {cap}; "
+                                  "raise the relay cap or clear the override before retrying")
+
+    def set_timeout(self, workitem_id, wall_ms, by, agent=False):
+        """Set or clear a bounded timeout between passes, without retrying or buying passes."""
+        if not isinstance(by, str) or not by.strip():
+            raise ToolError("changing a timeout needs the name of the person who asked")
+        if not isinstance(workitem_id, str) or not workitem_id:
+            raise ToolError("id must name a known WorkItem")
+        minimum = max(60000, self.config.wall_ms)
+        if wall_ms is not None and minimum > 3600000:
+            raise ToolError("FACTORY_WALL_MS already exceeds the largest supported override (3600000); "
+                            "clear the override or lower the service default before setting one")
+        if wall_ms is not None and (type(wall_ms) is not int or not minimum <= wall_ms <= 3600000):
+            raise ToolError(f"wallMs must be an integer from {minimum} to 3600000, or null for the default")
+        if not self.store.acquire(workitem_id, self.holder):
+            raise ToolError(f"{workitem_id} is being ticked; try again")
+        try:
+            wi = self.store.get(workitem_id)
+            if wi is None:
+                raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
+            if wi["state"] in workitem.TERMINAL or wi["state"] in ("merged", "merge_pending"):
+                raise ToolError(f"{workitem_id} is {wi['state']}; its timeout cannot change")
+            if self._worker_live(wi):
+                raise ToolError(f"{workitem_id} has a worker running now; wait for it to finish")
+            effective = wall_ms if wall_ms is not None else self.config.wall_ms
+            if wall_ms is not None:
+                try:
+                    self._check_timeout(effective)
+                except RelayError as exc:
+                    raise ToolError(str(exc)) from None
+            before = wi.get("wallMsOverride")
+            wi = self.store.put(dict(wi, wallMsOverride=wall_ms))
+            self.store.log("timeout_changed", {"by": by, "was": before, "now": wall_ms,
+                                              "effectiveWallMs": effective,
+                                              **({"agent": True} if agent else {})}, workitem_id)
+            return wi
+        finally:
+            self.store.release(workitem_id, self.holder)
+
     def set_worker(self, workitem_id, workers, by, agent=False):
         """Choose which of the allowlisted workers run a WorkItem (ADR-0029): replaces its issue's
         `Worker:` lines. The choice lives in the issue body, so this edits the issue; the next tick
@@ -1615,21 +1665,25 @@ class Foreman:
         finally:
             self.store.release(workitem_id, self.holder)
 
-    def register_worker(self, worker_id, model, by, agent=False):
-        """Register a new sandboxed factory worker in the relay registry (ADR-0077). It copies the
-        approved template — same command, credential mount, env, cwd, allowedRoots, image and
-        timeout — and pins only `model`, so it cannot reach anything a factory worker could not. The
-        registry is the relay's own agents.json, which the relay has no API to write, so this edits
-        that file and reloads the relay. It never touches FACTORY_WORKERS: a registered worker
-        receives no WorkOrder until the owner lists it there and its provider-health pilot is green.
-        Returns the new agent and whether the running relay reloaded it."""
+    def register_worker(self, worker_id, model, by, agent=False, template=None):
+        """Register a new sandboxed factory worker in the relay registry (ADR-0077). It copies an
+        approved sandboxed template — `template`, or FACTORY_WORKER_TEMPLATE when it is not named —
+        with the same command, credential mount, env, cwd, allowedRoots, image and timeout, and pins
+        only `model` under that template's provider, so it cannot reach anything a factory worker
+        could. An unsandboxed, unknown or cross-provider template is refused before the registry is
+        touched. The registry is the relay's own agents.json, which the relay has no API to write,
+        so this edits that file and reloads the relay. It never touches FACTORY_WORKERS: a
+        registered worker receives no WorkOrder until the owner lists it there and its
+        provider-health pilot is green. Returns the new agent and whether the running relay
+        reloaded it."""
         if not isinstance(by, str) or not by.strip():
             raise ToolError("registering a worker needs the name of the person who asked")
         if not self.config.agents_file:
             raise ToolError("FACTORY_AGENTS_FILE is not set, so the factory may not write the relay "
                             "registry; register the worker by hand (RUNBOOK)")
+        template_id = self.config.worker_template if template is None else template
         try:
-            agent_def = registry.register(self.config.agents_file, self.config.worker_template,
+            agent_def = registry.register(self.config.agents_file, template_id,
                                           worker_id, model)
         except ValueError as exc:
             raise ToolError(str(exc)) from None
