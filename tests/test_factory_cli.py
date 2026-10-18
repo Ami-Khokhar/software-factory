@@ -1,5 +1,6 @@
 """scripts/factory: `update` deploys a branch only when its tests pass, and follows it to main once
-merged; `add-repo` asks factory-mcp, as Day Desk does; `watch` reports each escalation once;
+merged; `add-repo` asks factory-mcp, as Day Desk does; `watch` reports each new owner blocker and
+material progress step once;
 `report` fits the week in one message; `stop` sends the relay its token; `bench` files the
 benchmark's tasks and grades the merged code with their hidden tests."""
 import contextlib
@@ -214,7 +215,12 @@ class UpdateTest(unittest.TestCase):
         git(self.dev, "push", "-q", "origin", "HEAD:main")
         cli.cmd_update([])
         self.assertEqual((self.head(), len(self.restarts)), ((new, "main"), 1))
-        cli.cmd_update([])  # nothing new: no restart
+        printed = io.StringIO()
+        with mock.patch.object(cli.subprocess, "run", wraps=subprocess.run) as run, \
+                contextlib.redirect_stdout(printed):
+            cli.cmd_update([])  # current HEAD matches the fully deployed marker
+        self.assertEqual(printed.getvalue(), "")
+        self.assertFalse(any("unittest" in call.args[0] for call in run.call_args_list))
         self.assertEqual(len(self.restarts), 1)
 
     def test_a_dockerfile_update_rebuilds_the_worker_image(self):
@@ -691,6 +697,54 @@ class WatchTest(unittest.TestCase):
         self.watch()  # the owner answered both
         self.assertIn("o/r#7 is blocked", self.watch(blocked))  # blocked again is a new escalation
 
+    def test_a_legacy_waiting_only_watch_file_keeps_its_seen_escalations(self):
+        legacy = {"o/r#7": ["blocked", "verify exited 1"]}  # the v1 file held waiting fingerprints
+        (cli.STATE / "watch.json").write_text(json.dumps(legacy))
+        printed = self.watch(("o/r#7", "blocked", "verify exited 1"),
+                             ("o/r#8", "blocked", "HUMAN"))
+        self.assertNotIn("o/r#7", printed)  # the legacy escalation is not replayed
+        self.assertIn("o/r#8 is blocked: HUMAN", printed)
+        saved = json.loads((cli.STATE / "watch.json").read_text())
+        self.assertEqual(saved["version"], 2)  # the file was migrated forward
+
+    def test_material_progress_is_reported_once_and_ignores_timestamp_churn(self):
+        active = {"id": "o/r#7", "state": "implementing", "headSha": "c1", "prNumber": None,
+                  "gateRound": 0, "worker": "codex", "terminalReason": None,
+                  "updatedAt": "2026-10-01T00:00:00Z", "stateVersion": 1}
+        self.assertEqual(self.watch(active), "")  # first run establishes a baseline
+        self.assertEqual(self.watch(dict(active, updatedAt="2026-10-01T00:01:00Z", stateVersion=2)), "")
+
+        reviewing = dict(active, state="reviewing", headSha="c2", prNumber=15, gateRound=2,
+                         updatedAt="2026-10-01T00:02:00Z", stateVersion=3)
+        message = self.watch(reviewing)
+        self.assertIn("o/r#7", message)
+        self.assertIn("reviewing", message)
+        self.assertIn("PR #15", message)
+        self.assertIn("c2", message)
+        self.assertIn("gate round 2", message)
+        self.assertEqual(self.watch(reviewing), "")
+
+    def test_a_new_owner_blocker_is_reported_but_agent_grace_is_preserved(self):
+        fresh = {"id": "o/r#7", "state": "blocked", "blockedOn": "verify exited 1",
+                 "agentMayResolve": True,
+                 "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        self.assertEqual(self.watch(fresh, driving=True), "")
+        stale = dict(fresh, updatedAt=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 1801)))
+        self.assertIn("o/r#7 is blocked", self.watch(stale, driving=True))
+
+    def test_a_terminal_workitem_on_the_first_baseline_is_not_replayed(self):
+        closed = {"id": "o/r#7", "state": "closed", "prNumber": 15, "headSha": "c2",
+                  "gateRound": 2, "worker": "codex", "terminalReason": None}
+        self.assertEqual(self.watch(closed), "")
+
+    def test_source_merge_notification_does_not_claim_runtime_acceptance(self):
+        active = {"id": "o/r#7", "state": "reviewing", "prNumber": 15, "headSha": "c2",
+                  "gateRound": 2, "worker": "codex"}
+        self.assertEqual(self.watch(active), "")
+        message = self.watch(dict(active, state="closed"))
+        self.assertIn("source PR #15 merged", message)
+        self.assertIn("runtime acceptance is not established", message)
+
     def test_it_fails_loudly_when_factory_mcp_is_down(self):
         with socket.socket() as probe:  # a port with nothing listening on it
             probe.bind(("127.0.0.1", 0))
@@ -699,6 +753,46 @@ class WatchTest(unittest.TestCase):
                 mock.patch.object(cli, "read_env", lambda path: {"FACTORY_MCP_TOKEN": "t"}), \
                 self.assertRaisesRegex(SystemExit, "factory-mcp is not running"):
             cli.cmd_watch([])
+
+
+class UpdateWrapperTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.home = Path(tmp.name)
+        self.state = self.home / ".local" / "state" / "factory-mcp"
+        factory = self.home / ".local" / "bin" / "factory"
+        factory.parent.mkdir(parents=True)
+        factory.write_text("import os, sys\nprint(os.environ['FACTORY_UPDATE_RESULT'], end='')\n"
+                           "sys.exit(int(os.environ.get('FACTORY_UPDATE_STATUS', '0')))\n")
+        self.wrapper = Path(__file__).resolve().parent.parent / "tenant" / "hermes" / "scripts" / "factory-update.sh"
+
+    def update(self, output, status=0):
+        return subprocess.run(["bash", str(self.wrapper)], capture_output=True, text=True,
+                              env={**os.environ, "HOME": str(self.home),
+                                   "FACTORY_UPDATE_RESULT": output,
+                                   "FACTORY_UPDATE_STATUS": str(status)})
+
+    def test_unchanged_runs_are_quiet_and_failures_keep_status_and_local_diagnostics(self):
+        self.assertEqual((self.update("").returncode, self.update("").stdout), (0, ""))
+
+        failed = "factory: update failed: tests are red\nlast failing assertion"
+        first = self.update(failed, 1)
+        self.assertEqual((first.returncode, first.stdout), (1, failed + "\n"))
+        failure_file = self.state / "last-update-failure.txt"
+        self.assertEqual(failure_file.read_text(), f"exit=1\n{failed}")
+        self.assertEqual((self.update(failed, 1).returncode, self.update(failed, 1).stdout), (0, ""))
+        self.assertEqual(failure_file.read_text(), f"exit=1\n{failed}")
+        changed_failure = self.update(failed + "\nnew failure", 2)
+        self.assertEqual((changed_failure.returncode, changed_failure.stdout), (2, failed + "\nnew failure\n"))
+        self.assertEqual(failure_file.read_text(), f"exit=2\n{failed}\nnew failure")
+
+        recovered = "update: deployed source abc1234 (was def5678); runtime acceptance remains unverified"
+        first_success = self.update(recovered)
+        self.assertEqual((first_success.returncode, first_success.stdout), (0, recovered + "\n"))
+        repeated_success = self.update(recovered)
+        self.assertEqual((repeated_success.returncode, repeated_success.stdout), (0, ""))
+        self.assertFalse(failure_file.exists())
 
 
 class ReportTest(unittest.TestCase):

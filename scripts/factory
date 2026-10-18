@@ -6,7 +6,7 @@
   factory bench <owner/repo> [-w <worker>] ...  file the benchmark's tasks in a sandbox repo
   factory bench report [<run>]            grade a run: person needed, passes, lines, time, hidden tests
   factory status [<owner/repo#n>]
-  factory watch                           print each WorkItem that newly waits on you (Hermes cron)
+  factory watch                           print each new owner blocker or material progress step (Hermes cron)
   factory drive-queue                     the escalations Day Desk may still answer (its job's monitor)
   factory report                          the last 7 days in one message: autonomy, escalations, lessons
   factory lessons-path                    the lessons file the service runs with, verified load
@@ -112,23 +112,57 @@ def waits_on_owner(wi, driving, now):
 
 
 def cmd_watch(_):
-    """For a Hermes no-agent cron job (ADR-0013): print each WorkItem that newly waits on the owner,
-    once. Printing nothing sends nothing. When factory-mcp does not answer, the exit is non-zero,
-    which Hermes delivers as an error alert."""
+    """For a Hermes no-agent cron job (ADR-0013): print new owner blockers and material progress
+    once. The first run sets a baseline for progress; timestamps and state versions are ignored.
+    Printing nothing sends nothing. When factory-mcp does not answer, the exit is non-zero."""
     seen_file = STATE / "watch.json"
     try:
         seen = json.loads(seen_file.read_text())
     except (OSError, ValueError):
         seen = {}
+    if isinstance(seen, dict) and seen.get("version") == 2:
+        seen_waiting = seen.get("waiting") if isinstance(seen.get("waiting"), dict) else {}
+        seen_progress = seen.get("progress") if isinstance(seen.get("progress"), dict) else {}
+    else:  # the previous file held only the waiting fingerprints
+        seen_waiting, seen_progress = (seen if isinstance(seen, dict) else {}), {}
     driving = bool(read_env(CONFIG / "secrets").get("FACTORY_AGENT_TOKEN"))
-    waiting = {wi["id"]: [wi["state"], wi.get("blockedOn")] for wi in call("factory_status")["workItems"]
+    workitems = call("factory_status")["workItems"]
+    waiting = {wi["id"]: [wi["state"], wi.get("blockedOn")] for wi in workitems
                if waits_on_owner(wi, driving, time.time())}
     for workitem_id, (state, reason) in sorted(waiting.items()):
-        if seen.get(workitem_id) != [state, reason]:
+        if seen_waiting.get(workitem_id) != [state, reason]:
             print(f"{workitem_id} is {state}: {reason}\n"
                   "Reply to this message with retry, regate or close, and a note.")
+    progress = {wi["id"]: {key: wi.get(key) for key in
+                           ("state", "blockedOn", "waitingOn", "headSha", "prNumber", "gateRound", "worker")}
+                for wi in workitems}
+    owner_waiting = set(waiting)
+    for workitem_id, current in sorted(progress.items()):
+        previous = seen_progress.get(workitem_id)
+        if previous is None or previous == current or workitem_id in owner_waiting:
+            continue
+        if current["state"] in ("human_waiting", "blocked"):
+            continue  # a driving agent keeps the existing grace and ownership rule
+        if current["state"] in ("closed", "merged"):
+            where = (f"source PR #{current['prNumber']} merged" if current.get("prNumber")
+                     else "ended without a merged PR")
+            print(f"{workitem_id}: {where}; runtime acceptance is not "
+                  "established by merge or closure.")
+            continue
+        details = [current["state"]]
+        if current.get("prNumber"):
+            details.append(f"PR #{current['prNumber']}")
+        if current.get("headSha"):
+            details.append(f"head {current['headSha'][:7]}")
+        if current.get("gateRound"):
+            details.append(f"gate round {current['gateRound']}")
+        if current.get("worker"):
+            details.append(f"worker {current['worker']}")
+        if current.get("waitingOn"):
+            details.append(f"waiting on #{current['waitingOn']}")
+        print(f"{workitem_id}: " + ", ".join(details))
     STATE.mkdir(parents=True, exist_ok=True)
-    seen_file.write_text(json.dumps(waiting))
+    seen_file.write_text(json.dumps({"version": 2, "waiting": waiting, "progress": progress}))
 
 
 def cmd_drive_queue(_):
@@ -766,7 +800,7 @@ def cmd_update(args):
     else:
         deploy_steps(since, new, restart=new != old or changed("worker/Dockerfile"))
     deployed_file.write_text(new + "\n")
-    print(f"update: deployed {new[:7]} (was {since[:7]})")
+    print(f"update: deployed source {new[:7]} (was {since[:7]}); runtime acceptance remains unverified")
     if changed("tenant/hermes/config.yaml"):
         print("update: tenant/hermes/config.yaml changed. The live ~/.hermes/profiles/day-desk/config.yaml "
               "keeps your model and Telegram settings, so merge any other change into it by hand (RUNBOOK)")

@@ -142,7 +142,10 @@ A tick comes from the background loop or from `factory_tick`.
      merges. Then `closed`.
 3. **Entering `human_waiting`, `blocked` or `exhausted`** comments on the issue and mentions the
    owner. `factory watch` also tells the owner in Telegram of `human_waiting`, `blocked` and
-   `exhausted`: Day Desk can resolve the first two on its own and the owner can answer all three; Day Desk answers `exhausted`, or an incident it already answered, only when the owner asked for that choice in chat (ADR-0035, ADR-0043, ADR-0046, ADR-0081).
+   `exhausted`, and deduplicates material state, PR, head, gate-round and worker transitions. It
+   keeps Day Desk's grace rules, suppresses historical terminal items on its first progress baseline,
+   and says that merge or closure does not establish runtime acceptance (ADR-0035, ADR-0043,
+   ADR-0046, ADR-0081, ADR-0093).
 
 ## State machine
 

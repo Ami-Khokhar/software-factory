@@ -134,6 +134,14 @@ class McpServerTest(unittest.TestCase):
         row = json.loads(result["content"][0]["text"])["workItems"][0]
         self.assertEqual(row["blockedOn"], "4 worker passes used")
 
+    def test_a_summary_exposes_progress_fields_without_a_second_status_read(self):
+        self.store.put(dict(workitem(), state="reviewing", prNumber=15, headSha="c2", gateRound=2,
+                            worker="codex"))
+        result = self.rpc("tools/call", {"name": "factory_status", "arguments": {}})["result"]
+        row = json.loads(result["content"][0]["text"])["workItems"][0]
+        self.assertEqual((row["headSha"], row["prNumber"], row["gateRound"], row["worker"]),
+                         ("c2", 15, 2, "codex"))
+
     def test_protocol_errors(self):
         self.assertEqual(self.rpc("nope")["error"]["code"], -32601)
         self.assertEqual(self.rpc("tools/call", {"name": "factory_merge"})["error"]["code"], -32602)

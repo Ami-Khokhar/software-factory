@@ -650,7 +650,9 @@ image build or profile update stops the deploy with its message, which the job s
 and runs again on the next update: a state file names the last commit for which every step
 succeeded. The profile is updated only when Hermes names the deployed checkout as its source.
 A change to `tenant/hermes/config.yaml` is reported, not applied, because the live file also holds
-the owner's model and Telegram settings. The deploy does not restart Day Desk's gateway, which runs
+the owner's model and Telegram settings. ADR-0093 constrains repeat delivery: an identical
+repeated failure is delivered once and suppressed until its result changes. The deploy does not
+restart Day Desk's gateway, which runs
 the job.
 
 **Consequence.** A merge goes live within 10 minutes with no person, and a broken commit never
@@ -2286,3 +2288,21 @@ are marked provenance version 0 by migration 9, then their recorded scratch bran
 the next tick. Independent verification and the normal protected-path, size, and push guards
 still decide whether a completed Result can reach the PR.
 
+## ADR-0093 — Scheduled factory notices follow material progress and keep delivery separate from acceptance
+
+**Context.** The no-agent watcher reported escalations but had no durable signal for progress, while
+the update wrapper suppressed duplicate text by exiting successfully even when `factory update`
+failed. A source merge or deploy could also read as task completion before a live issue accepted it.
+
+**Decision.** The watcher fingerprints state, blocker, dependency, PR, head, gate round and worker,
+not timestamps or state versions. Its first progress run establishes a baseline, terminal items in
+that baseline are silent, and owner blockers keep their existing delivery and agent-grace rules. The
+update wrapper delivers the first distinct failure with its nonzero status, stores the full latest
+diagnostic locally, and suppresses identical repeats until the result changes. A successful source
+deploy reports the deployed revision and says runtime acceptance remains unverified. The deployed
+commit marker still advances only after all deploy steps succeed.
+
+**Consequence.** Unchanged scheduled runs stay quiet, meaningful transitions and new owner blockers
+remain visible, and an unchanged current HEAD that matches the completed deployment marker skips
+verification. An incomplete deployment leaves that marker behind, so the next update still runs its
+pending work. Merge, closure and source deployment never stand in for live runtime acceptance.
