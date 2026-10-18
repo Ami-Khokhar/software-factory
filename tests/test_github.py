@@ -1,8 +1,10 @@
 """factory_mcp.github against a local HTTP server: auth header, Link pagination, files, labels,
 refs, PR bodies, errors."""
 import base64
+import http.client
 import json
 import threading
+import urllib.error
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
@@ -20,8 +22,13 @@ class Api(BaseHTTPRequestHandler):
     def do_GET(self):
         Api.seen.append((self.path, self.headers.get("Authorization")))
         base, status = f"http://127.0.0.1:{self.server.server_port}", 200
-        if self.path in ("/repos/o/r/issues/503", "/repos/o/r/issues/429"):
+        if self.path in ("/repos/o/r/issues/503", "/repos/o/r/issues/429",
+                         "/repos/o/r/issues/429nan", "/repos/o/r/issues/429inf"):
             Api.retries[self.path] = Api.retries.get(self.path, 0) + 1
+            if self.path.endswith(("429nan", "429inf")):
+                self.reply(429, {"message": "try again"},
+                           retry_after="nan" if self.path.endswith("429nan") else "inf")
+                return
             threshold = 2 if self.path.endswith("503") else 1
             if Api.retries[self.path] <= threshold:
                 self.reply(503 if self.path.endswith("503") else 429, {"message": "try again"},
@@ -166,6 +173,12 @@ class GitHubClientTest(unittest.TestCase):
         self.assertEqual(self.github.issue("o/r", 429)["number"], 429)
         self.assertEqual(Api.retries["/repos/o/r/issues/429"], 2)
 
+    def test_non_finite_retry_after_does_not_sleep_or_retry(self):
+        for value in ("nan", "inf"):
+            with self.subTest(value=value), self.assertRaisesRegex(GitHubError, "GitHub 429"):
+                self.github._request("GET", f"{self.github.api}/repos/o/r/issues/429{value}")
+            self.assertEqual(Api.retries[f"/repos/o/r/issues/429{value}"], 1)
+
     def test_a_write_is_never_retried_after_a_server_error(self):
         with self.assertRaisesRegex(GitHubError, "GitHub 503"):
             self.github._request("POST", f"{self.github.api}/repos/o/r/issues/500", {"body": "x"})
@@ -180,6 +193,17 @@ class GitHubClientTest(unittest.TestCase):
                 mock.patch("factory_mcp.github.time.sleep"):
             self.assertEqual(self.github.issue("o/r", 5)["number"], 5)
         self.assertEqual(open_request.call_count, 2)
+
+    def test_exhausted_get_transport_failures_are_github_errors(self):
+        failures = [urllib.error.URLError("secret detail"), http.client.IncompleteRead(b"partial"),
+                    http.client.RemoteDisconnected("secret detail")]
+        with mock.patch("factory_mcp.github.urllib.request.urlopen", side_effect=failures) as open_request, \
+                mock.patch("factory_mcp.github.time.sleep"):
+            with self.assertRaises(GitHubError) as caught:
+                self.github.issue("o/r", 5)
+        self.assertEqual((caught.exception.status, open_request.call_count), (503, 3))
+        self.assertIn("transient GitHub GET transport failure after 3 attempts", str(caught.exception))
+        self.assertNotIn("secret detail", str(caught.exception))
 
 
 if __name__ == "__main__":

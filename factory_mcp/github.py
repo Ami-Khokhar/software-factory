@@ -2,7 +2,9 @@
 import base64
 import datetime
 import email.utils
+import http.client
 import json
+import math
 import re
 import time
 import urllib.error
@@ -50,12 +52,15 @@ class GitHub:
                 delay = self._retry_delay(err.headers, attempt)
                 if attempt + 1 == GET_ATTEMPTS or waited + delay > GET_RETRY_WAIT_SECONDS:
                     raise GitHubError(err.code, message) from None
-            except (urllib.error.URLError, ConnectionResetError, TimeoutError):
-                if method != "GET" or attempt + 1 == GET_ATTEMPTS:
+            except (urllib.error.URLError, ConnectionResetError, TimeoutError,
+                    http.client.HTTPException) as exc:
+                if method != "GET":
                     raise
+                if attempt + 1 == GET_ATTEMPTS:
+                    raise GitHubError(503, self._transport_error(attempt + 1, exc)) from None
                 delay = self._retry_delay({}, attempt)
                 if waited + delay > GET_RETRY_WAIT_SECONDS:
-                    raise
+                    raise GitHubError(503, self._transport_error(attempt + 1, exc)) from None
             time.sleep(delay)
             waited += delay
 
@@ -65,7 +70,8 @@ class GitHub:
         value = headers.get("Retry-After")
         if value:
             try:
-                return max(0, float(value))
+                delay = float(value)
+                return max(0, delay) if math.isfinite(delay) else GET_RETRY_WAIT_SECONDS + 1
             except ValueError:
                 try:
                     when = email.utils.parsedate_to_datetime(value)
@@ -73,6 +79,10 @@ class GitHub:
                 except (TypeError, ValueError, OverflowError):
                     pass
         return 0.1 * (attempt + 1)
+
+    @staticmethod
+    def _transport_error(attempts, error):
+        return f"transient GitHub GET transport failure after {attempts} attempts ({type(error).__name__})"
 
     def _get_all(self, path, key=None, **query):
         url = f"{self.api}{path}?" + urllib.parse.urlencode(dict(query, per_page=100))
