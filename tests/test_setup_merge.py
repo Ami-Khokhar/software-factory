@@ -190,6 +190,61 @@ class SetupMergeTest(unittest.TestCase):
                              (pr["prNumber"], MERGE, True))
             self.assertEqual(self.foreman.store.request(request_id)["phase"], "done")
 
+    def test_a_refreshed_setup_pr_merges_on_the_branch_the_factory_created(self):
+        """A plan refreshed after creation renames no branch: the factory's own PR, journalled when
+        bootstrap created it, still merges under a grant for the refreshed digest, and an
+        interrupted or repeated request reads the same merge back instead of merging again."""
+        pr = self.setup_pr()  # the branch names the plan digest the moment bootstrap created it
+        self.github.push(REPO, "main", "base1")  # a commit lands; the canonical plan refreshes
+        again = self.foreman.bootstrap_repo(REPO, VERIFY, "owner")  # the retry adopts the same PR
+        self.assertEqual((again["prNumber"], len(self.github.pulls)), (pr["prNumber"], 1))
+        self.foreman.authorize_setup_merge(REPO, VERIFY, "amir")  # the owner approves the refresh
+        self.assertNotEqual("factory-bootstrap/" + self.foreman.store.setup_merge(REPO)["fingerprint"][:16],
+                            self.github.pulls[0]["head"]["ref"])
+        self.green()
+
+        merged = self.foreman.merge_setup_pr(REPO, "day-desk", "req-1")
+        self.assertEqual((merged["prNumber"], merged["mergeSha"], merged["alreadyMerged"]),
+                         (pr["prNumber"], MERGE, False))
+        resumed = self.foreman.merge_setup_pr(REPO, "day-desk", "req-1")
+        fresh = self.foreman.merge_setup_pr(REPO, "day-desk", "req-2")
+        for readback in (resumed, fresh):
+            self.assertEqual((readback["prNumber"], readback["mergeSha"], readback["alreadyMerged"]),
+                             (pr["prNumber"], MERGE, True))
+        self.assertEqual(len(self.github.pulls), 1)  # no duplicate merge, no duplicate PR
+
+    def test_a_forged_setup_branch_the_factory_never_created_never_merges(self):
+        """A branch name is a marker anyone with push access can forge: even the authorized
+        digest's exact branch name, carrying canonical content with a green check, refuses when
+        the factory's journal records no setup PR it created or adopted there."""
+        self.setup_pr()
+        self.github.close_issue(REPO, 100)  # the factory's own setup PR was closed by hand
+        plan = repos.bootstrap_plan(self.github, REPO, VERIFY)
+        branch = "factory-bootstrap/" + plan["fingerprint"][:16]  # the exact authorized name
+        self.github.push(REPO, branch, "forged-sha", files=[(name, 1, 0) for name in plan["files"]])
+        for name, text in plan["files"].items():
+            self.github.contents[(REPO, name, "forged-sha")] = text
+        self.github.add_pr(REPO, 9, branch, "forged-sha")
+        self.github.add_run(REPO, "forged-sha")
+
+        with self.assertRaisesRegex(ToolError, "the factory's journal never records"):
+            self.foreman.merge_setup_pr(REPO, "day-desk", "req-1")
+        readback = self.github.pull(REPO, 9)
+        self.assertEqual((readback["state"], readback.get("merged_at")), ("open", None))
+
+    def test_a_deputy_pr_on_the_factorys_own_branch_never_merges(self):
+        """The journal names the branch and the PR number together: a second PR reopened on the
+        factory's own setup branch is a deputy, and never merges instead of the factory's PR."""
+        self.setup_pr()
+        self.green()
+        self.github.close_issue(REPO, 100)
+        self.github.add_pr(REPO, 9, self.github.pulls[0]["head"]["ref"], HEAD)
+
+        with self.assertRaisesRegex(ToolError, "the factory's journal never records"):
+            self.foreman.merge_setup_pr(REPO, "day-desk", "req-1")
+        readback = self.github.pull(REPO, 9)
+        self.assertEqual((readback["state"], readback.get("merged_at")), ("open", None))
+
     def test_revocation_takes_the_authorization_back_and_is_audited(self):
         self.setup_pr()
         self.green()

@@ -1,15 +1,18 @@
-"""Reviewed, owner-authorized, bootstrap-only merge of a repo's setup PR (ADR-0074).
+"""Reviewed, owner-authorized, bootstrap-only merge of a repo's setup PR (ADR-0074, ADR-0089).
 
 The owner grants one authorization per repo (factory_authorize_setup_merge), pinned to a digest of
 the canonical setup plan the moment they approve it. factory_merge_setup_pr then merges only the
 one open setup PR that still exactly matches that digest: the same paths, per-file content, base
-and head, and a green pr-gatekeeper run on that head. Everything else fails closed, before any
+and head, and a green pr-gatekeeper run on that head — and that the factory itself created or
+adopted, as the audit journal records, because a branch name is a marker anyone with push access
+can forge, and a plan refreshed after creation leaves the PR on the branch named for the digest it
+was created from, not the digest the owner approved last. Everything else fails closed, before any
 merge call: no grant, a plan that no longer matches (a moved base, a changed verify command, a
-differing control file), an unexpected path or noncanonical content, a stale head, several open
-setup PRs, and unknown, pending or failed checks. The tool calls GitHub's merge API with the
-verified head (so branch protection still applies at GitHub), reads the merged PR back with its
-merge commit, and reports whether the repo's checks would now pass so readiness is a fact, not
-a hope.
+differing control file), an unexpected path or noncanonical content, a stale head, a setup branch
+the journal never records, several open setup PRs, and unknown, pending or failed checks. The tool
+calls GitHub's merge API with the verified head (so branch protection still applies at GitHub),
+reads the merged PR back with its merge commit, and reports whether the repo's checks would now
+pass so readiness is a fact, not a hope.
 
 Absent a grant, nothing changes: factory_bootstrap_repo still opens a setup PR for the owner's
 manual merge, and the tool cannot merge a normal factory PR or touch any other ref.
@@ -44,33 +47,47 @@ def _setup_repo_head(pr):
     return ((pr["head"].get("repo") or {}).get("full_name") or "").lower()
 
 
-def _setups_of(github, repo, base, branch=None):
-    """A repo's open setup PRs into `base`, or, with `branch`, every PR of `repo` on that exact
-    branch in any state."""
-    if branch is None:
-        prs = [pr for pr in github.open_pulls(repo, base)
-               if pr["head"]["ref"].startswith(BOOTSTRAP_PREFIX)]
-    else:
-        prs = [pr for pr in github.pulls_for_branch(repo, branch) if pr["base"]["ref"] == base]
-    return [pr for pr in prs if _setup_repo_head(pr).lower() == repo.lower()]
+def _setups_of(github, repo, base):
+    """A repo's open setup PRs into `base` from the repo itself."""
+    return [pr for pr in github.open_pulls(repo, base)
+            if pr["head"]["ref"].startswith(BOOTSTRAP_PREFIX)
+            and _setup_repo_head(pr).lower() == repo.lower() and pr["state"] == "open"]
 
 
-def _exact_setup_pr(github, repo, base, branch):
-    """The one setup PR that may merge, or a refusal that keeps a duplicate or deputy from ever
-    being merged instead (never duplicate PRs or dispatch prematurely)."""
-    merged = [pr for pr in _setups_of(github, repo, base, branch) if pr.get("merged_at") or pr.get("merged")]
-    open_ = [pr for pr in _setups_of(github, repo, base) if pr["state"] == "open"]
+def _journalled_setups(store, repo):
+    """The (branch, PR number) pairs of `repo`'s setup PRs the factory itself created or adopted,
+    from the audit journal. This, not a branch name, is the provenance a merge verifies: the
+    branch is named for the plan digest at creation, so a refreshed PR keeps the old name while
+    the grant pins the new digest, and a name alone is forgeable by anyone with push access."""
+    pairs = []
+    for entry in store.global_history():
+        detail = entry["detail"]
+        if entry["action"] in ("bootstrap_pr", "bootstrap_pr_updated") \
+                and detail.get("repo", "").lower() == repo.lower():
+            branch, number = detail.get("branch"), detail.get("prNumber")
+            if isinstance(branch, str) and branch.startswith(BOOTSTRAP_PREFIX) \
+                    and isinstance(number, int):
+                pairs.append((branch, number))
+    return pairs
+
+
+def _exact_setup_pr(store, github, repo, base):
+    """The one setup PR the factory created that may merge, or a refusal that keeps a duplicate or
+    deputy from ever being merged instead (never duplicate PRs or dispatch prematurely)."""
+    merged = _merged_setup(store, github, repo)
     if merged:
         raise ToolError(f"{repo}'s setup PR #{merged[0]['number']} is already merged")
+    open_ = _setups_of(github, repo, base)
     if len(open_) > 1:
         numbers = ", ".join(f"#{pr['number']}" for pr in open_)
         raise ToolError(f"{repo} has several open setup PRs ({numbers}); close all but one")
     if not open_:
         raise ToolError(f"{repo} has no open setup PR into {base}: call factory_bootstrap_repo, "
                         "then ask again once it is open")
-    if open_[0]["head"]["ref"] != branch:
+    if (open_[0]["head"]["ref"], open_[0]["number"]) not in set(_journalled_setups(store, repo)):
         raise ToolError(f"{repo}'s open setup PR #{open_[0]['number']} is on branch "
-                        f"{open_[0]['head']['ref']}, not the authorized setup branch {branch}")
+                        f"{open_[0]['head']['ref']}, which the factory's journal never records as a "
+                        "setup branch it created or adopted; a branch name alone never authorizes")
     return open_[0]
 
 
@@ -105,14 +122,19 @@ def _at_head(github, repo, plan, pr):
 
 
 def _merged_setup(store, github, repo):
-    """The merged setup PRs on the branch the grant names, for resuming an ambiguous merge:
-    the branch pins to the grant row, so this needs no fresh digest of a setup that just landed."""
-    row = store.setup_merge(repo)
-    if not row:
+    """The merged setup PRs the factory journalled for `repo`, for resuming an ambiguous merge:
+    the journal pins to the PRs the factory created, so this needs no fresh digest of a setup
+    that just landed. It reads only while the grant row still stands, as it must for any merge
+    this tool journalled."""
+    if not store.setup_merge(repo):
         return []
-    branch = BOOTSTRAP_PREFIX + row["fingerprint"][:16]
-    return [pr for pr in github.pulls_for_branch(repo, branch)
-            if _setup_repo_head(pr) == repo.lower() and (pr.get("merged_at") or pr.get("merged"))]
+    merged = {}
+    for branch, number in dict.fromkeys(_journalled_setups(store, repo)):
+        for pr in github.pulls_for_branch(repo, branch):
+            if pr["number"] == number and _setup_repo_head(pr) == repo.lower() \
+                    and (pr.get("merged_at") or pr.get("merged")):
+                merged[pr["number"]] = pr
+    return list(merged.values())
 
 
 def merge(store, github, repo, by, request_id):
@@ -132,7 +154,7 @@ def merge(store, github, repo, by, request_id):
         raise ToolError(f"{repo} shows several merged setup PRs for its approved branch; a person "
                         "inspects GitHub and the store stays as it is")
     _, plan = authorized_plan(store, github, repo)
-    pr = _exact_setup_pr(github, repo, plan["default_branch"], BOOTSTRAP_PREFIX + plan["fingerprint"][:16])
+    pr = _exact_setup_pr(store, github, repo, plan["default_branch"])
     if (reason := _at_head(github, repo, plan, pr)) is not None:
         raise ToolError(f"the setup PR #{pr['number']} of {repo} is refused: {reason}")
     if request["phase"] == "started":  # journalled once the plan, PR and head are verified
@@ -148,16 +170,12 @@ def merge(store, github, repo, by, request_id):
 
 
 def _adopt(store, github, repo, by, request_id):
-    """The done phase replayed: read back the merged setup PR the grant names, and never merge again."""
-    row = store.setup_merge(repo)
-    branch = BOOTSTRAP_PREFIX + row["fingerprint"][:16] if row else None
-    merged = [pr for pr in (github.pulls_for_branch(repo, branch) if branch else [])
-              if _setup_repo_head(pr).lower() == repo.lower()
-              and (pr.get("merged_at") or pr.get("merged"))]
+    """The done phase replayed: read back the merged setup PR the journal names, and never merge again."""
+    merged = _merged_setup(store, github, repo)
     if len(merged) != 1:
         raise ToolError(f"the merge {request_id} of {repo} is journalled done, but the repo shows "
-                        f"{len(merged)} merged setup PRs for its approved branch; a person inspects "
-                        "GitHub and the store stays as it is")
+                        f"{len(merged)} merged setup PRs for the branches the factory journalled; "
+                        "a person inspects GitHub and the store stays as it is")
     return _readback(store, github, repo, merged[0]["number"], by, request_id, already=True)
 
 
