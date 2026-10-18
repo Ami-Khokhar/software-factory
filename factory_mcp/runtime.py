@@ -31,6 +31,28 @@ def _arg(args, flag, default=None):
     return default
 
 
+def _factory_runner(command, args):
+    """Only label the standard Python runner invocation as sandboxed."""
+    if not args or not isinstance(command, str):
+        return False
+    script = Path(args[0])
+    return (Path(command).name.startswith('python') and
+            script.parts[-2:] == ('worker', 'runner.py') and
+            '--' in args and args.index('--') < len(args) - 1)
+
+
+def _credential_paths(args):
+    paths = []
+    for index, arg in enumerate(args):
+        if arg == '--credential':
+            if index + 1 >= len(args):
+                paths.append(None)
+                continue
+            host, separator, target = args[index + 1].rpartition(':')
+            paths.append(os.path.expanduser(host) if separator and host and target.startswith('/') else None)
+    return paths
+
+
 def _discovery(schemas):
     expected = {tool['name']: tool.get('inputSchema', {}).get('properties', {}) for tool in schemas}
     result = {'serverSchemaHash': hashlib.sha256(json.dumps(schemas, sort_keys=True).encode()).hexdigest(),
@@ -103,21 +125,27 @@ def report(foreman, schemas, workitem_id=None):
         if agent is None:
             result['workers'].append({'id': name, 'status': 'not_registered'})
             continue
-        args = agent.get('args') or []
-        image = _arg(args, '--image', 'factory-worker:latest')
-        if image not in images:
-            images[image] = _read(['docker', 'image', 'inspect', '--format', '{{.Id}}', image])
-        credentials = [args[n + 1].rpartition(':')[0] for n, arg in enumerate(args[:-1])
-                       if arg == '--credential']
-        result['workers'].append({'id': name, 'status': 'registered',
-                                  'allowed': name in result['workerOrder'],
-                                  'model': _arg(args, '--models', _arg(args, '--model')),
-                                  'image': image, 'imageId': images[image],
-                                  'agentDefaultTimeoutMs': agent.get('timeoutMs'),
-                                  'credentialFilesReadable': bool(credentials) and all(
-                                      Path(path).is_file() and os.access(path, os.R_OK)
-                                      for path in credentials),
-                                  'providerAuthentication': 'not_probed'})
+        args = agent.get('args')
+        if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+            result['workers'].append({'id': name, 'status': 'invalid_args',
+                                      'allowed': name in result['workerOrder'], 'sandboxed': None,
+                                      'agentDefaultTimeoutMs': agent.get('timeoutMs')})
+            continue
+        sandboxed = _factory_runner(agent.get('command'), args)
+        worker = {'id': name, 'status': 'registered', 'allowed': name in result['workerOrder'],
+                  'sandboxed': sandboxed, 'agentDefaultTimeoutMs': agent.get('timeoutMs')}
+        if sandboxed:
+            image = _arg(args, '--image', 'factory-worker:latest')
+            if image not in images:
+                images[image] = _read(['docker', 'image', 'inspect', '--format', '{{.Id}}', image])
+            credentials = _credential_paths(args)
+            worker.update({'model': _arg(args, '--models', _arg(args, '--model')),
+                           'image': image, 'imageId': images[image],
+                           'credentialFilesReadable': bool(credentials) and all(
+                               path is not None and Path(path).is_file() and os.access(path, os.R_OK)
+                               for path in credentials),
+                           'providerAuthentication': 'not_probed'})
+        result['workers'].append(worker)
     try:
         result['relay'] = {'status': 'ok', 'maxTimeoutMs': foreman.relay.limits()['maxTimeoutMs']}
     except RelayError:

@@ -218,8 +218,13 @@ See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md)
 `factory_runtime_status` is a read-only MCP operation, not a fifth worker
 document. It accepts an optional `id` naming a stored WorkItem. Without one it
 reports the running factory revision, configured worker order and registered
-worker model/image/timeout facts, whether credential files are readable, the
-relay health and timeout cap, and a comparison of the currently exposed tool
+worker status and timeout facts. It reports model, image and credential-file
+readability only for an entry whose command invokes `worker/runner.py` through
+Python with a harness argument. Other registered agents are marked
+`sandboxed: false` and have no factory image claim; malformed argument lists
+are marked `invalid_args` with `sandboxed: null`. Credential paths use the
+runner's `expanduser` behavior. The report also includes the relay health and
+timeout cap and a comparison of the currently exposed tool
 schemas with Hermes' disk cache. With an item id, it also reports the stored
 and live PR head and whether comments, check runs and gate workflow runs can be
 read for that exact live head. A missing PR has no head-level diagnostics.

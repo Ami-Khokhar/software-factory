@@ -18,11 +18,12 @@ class RuntimeTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.home = Path(self.tmp.name)
-        self.auth = self.home/'auth.json'
+        self.auth = self.home/'.pi'/'auth.json'
+        self.auth.parent.mkdir()
         self.auth.write_text('{"key":"CANARY-CREDENTIAL-VALUE"}')
         self.agents = self.home/'agents.json'
         self.agent = {'id':'opencode-mimo-factory','command':'python3', 'args':[
-            '/deployed/worker/runner.py','--credential',str(self.auth)+':/tmp/factory-home/auth',
+            '/deployed/worker/runner.py','--credential','~/.pi/auth.json:/tmp/factory-home/auth',
             '--env','PRIVATE_VALUE=CANARY-ENV-VALUE','--','opencode','run','--model',
             'opencode/mimo-v2.6-flash-free'], 'timeoutMs':1500000}
         self.agents.write_text(json.dumps({'agents':[self.agent]}))
@@ -43,6 +44,7 @@ class RuntimeTest(unittest.TestCase):
             if argv[0]=='git':return subprocess.CompletedProcess(argv,0,'a'*40+'\n','')
             return subprocess.CompletedProcess(argv,0,'sha256:'+'b'*64+'\n','')
         with mock.patch.object(runtime.Path,'home',return_value=self.home), \
+             mock.patch.dict('os.environ', {'HOME': str(self.home)}), \
              mock.patch.object(runtime.subprocess,'run',side_effect=run):
             return tools.build(self.store,self.foreman,agent=True)['factory_runtime_status'].fn({'id':'o/r#1'})
 
@@ -55,6 +57,7 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual((worker['model'],worker['imageId']),
                          ('opencode/mimo-v2.6-flash-free','sha256:'+'b'*64))
         self.assertTrue(worker['credentialFilesReadable'])
+        self.assertTrue(worker['sandboxed'])
         self.assertEqual(report['item']['effectiveWallMs'],3600000)
         self.assertEqual(report['globalWallMs'],1800000)
         self.assertEqual((report['github']['storedHead'],report['github']['liveHead']),('stored','live'))
@@ -66,6 +69,27 @@ class RuntimeTest(unittest.TestCase):
         self.assertEqual(self.store.get('o/r#1'),before)
         self.assertEqual(self.relay.tasks,{})
         self.assertEqual(self.store.workorders('o/r#1'),[])
+
+    def test_unsandboxed_and_malformed_registry_agents_are_not_reported_as_factory_workers(self):
+        agents=json.loads(self.agents.read_text())['agents']
+        agents.extend([
+            {'id':'external-factory','command':'pi','args':['--model','external/model'],'timeoutMs':900000},
+            {'id':'broken-factory','command':'python3','args':{'bad':'shape'},'timeoutMs':600000},
+        ])
+        self.agents.write_text(json.dumps({'agents':agents}))
+        workers={worker['id']:worker for worker in self.report()['workers']}
+        external=workers['external-factory']
+        self.assertEqual((external['status'],external['sandboxed']),('registered',False))
+        self.assertNotIn('image',external)
+        self.assertNotIn('imageId',external)
+        self.assertEqual((workers['broken-factory']['status'],workers['broken-factory']['sandboxed']),
+                         ('invalid_args',None))
+
+    def test_runner_credential_home_paths_use_expanduser_semantics(self):
+        from factory_mcp import runtime
+        with mock.patch.dict('os.environ', {'HOME': str(self.home)}):
+            self.assertEqual(runtime._credential_paths(['--credential','~/.pi/auth.json:/container']),
+                             [str(self.auth)])
 
     def test_missing_credentials_and_registry_do_not_look_healthy(self):
         self.auth.unlink()
