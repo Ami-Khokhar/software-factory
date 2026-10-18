@@ -2319,7 +2319,7 @@ WorkItem, an existing scoped plan allowance with `retry` among its actions and r
 least 1, a stable `requestId`, `by` (Day Desk must say `day-desk`), and bounded sanitized evidence.
 It refuses terminal, live, unsafe, environment-failed, out-of-scope and pass-budget-spent items,
 reusing the immediate tool's checks. It stores a `pendingRetry` on the WorkItem and a `retry` row
-in the request journal in one transaction, spending nothing and creating no WorkOrder; migration 9
+in the request journal in one transaction, spending nothing and creating no WorkOrder; migration 10
 initializes old WorkItems' `pendingRetry` to null. Replaying the same `requestId` with the same
 inputs returns the stored request; changed inputs conflict. A lease held by another tick answers
 `retryable`/`workitem_busy`, so the same `requestId` may be tried again. A human resolution clears
