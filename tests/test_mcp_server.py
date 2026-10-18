@@ -70,7 +70,7 @@ class McpServerTest(unittest.TestCase):
                                   "factory_retire_lesson", "factory_start_plan",
                                   "factory_set_dependencies", "factory_replace_issue",
                                   "factory_docker_control", "factory_approve_plan_allowance",
-                                  "factory_use_allowance", "factory_authorize_setup_merge",
+                                  "factory_use_allowance", "factory_queue_retry", "factory_authorize_setup_merge",
                                   "factory_revoke_setup_merge", "factory_merge_setup_pr",
                                   "factory_set_worker", "factory_register_worker", "factory_set_timeout",
                                   "factory_check_worker", "factory_reload_workers"})
@@ -105,7 +105,7 @@ class McpServerTest(unittest.TestCase):
         self.assertEqual(listed, {"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons", "factory_report",
                                   "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
                                   "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
-                                  "factory_use_allowance", "factory_merge_setup_pr",
+                                  "factory_use_allowance", "factory_queue_retry", "factory_merge_setup_pr",
                                   "factory_docker_status", "factory_docker_control",
                                   "factory_set_worker", "factory_register_worker", "factory_set_timeout",
                                   "factory_check_worker", "factory_reload_workers"})
@@ -134,6 +134,12 @@ class McpServerTest(unittest.TestCase):
         self.store.put(workitem())
         self.rpc("tools/call", {"name": "factory_status", "arguments": {"id": "o/r#1"}}, token=AGENT)
         self.assertEqual(self.store.history("o/r#1")[0]["detail"]["caller"], "agent")
+
+    def test_a_queued_retry_tool_audit_sanitizes_its_evidence(self):
+        self.server.audit["agent"]("factory_queue_retry",
+                                    {"id": "o/r#1", "evidence": "TOKEN=ghp_SECRETabcdef"}, True)
+        detail = self.store.history("o/r#1")[0]["detail"]
+        self.assertEqual(detail["args"]["evidence"], "TOKEN=<redacted>")
 
     def test_status_call_is_audited(self):
         self.store.put(workitem())

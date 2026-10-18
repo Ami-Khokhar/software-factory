@@ -149,36 +149,37 @@ waiting issues on its own judgment, approve one bounded allowance on your token:
 factory_approve_plan_allowance planId="plan/<plan>" actions=["retry","replace"] remaining=<n> by=you
 ```
 
-That buys Day Desk at most `remaining` recovery uses: evidence-based retries of waiting issues,
-and replacements that name open issues already in the repo. Every use is counted and audited with
-its evidence; `factory_status` shows each plan's remaining allowance and the latest use. These
+That buys Day Desk at most `remaining` recovery uses: queued evidence-based retries of waiting issues,
+and replacements that name open issues already in the repo. Every completed use is counted and
+audited with its evidence; `factory_status` shows each plan's remaining allowance and the latest use. These
 still need you, whatever the allowance says: a HUMAN gate verdict, a protected path, access
 trouble, a confirmed environment fault not yet repaired, a replacement that opens new
 title-and-body issues, and an exhausted plan or per-item allowance. Make the first representative
 use explicit: pick one waiting WorkItem, ask Day Desk to recover it through the allowance, and
 read the audit entry and the remaining count before asking for more.
 
-`factory-drive`, the runtime consumer of this rollout, reads that same approval through
-factory_status's `planAllowances` and retries through factory_use_allowance on evidence — and the
-only thing that changed for it is the shipped skill, which `factory update` deploys. After a
-deploy that touches it, verify the runtime job, not only the source checkout:
+`factory-drive` reads the owner's approved allowance through factory_status's `planAllowances` and
+records a request with factory_queue_retry. This phase only queues the request; it does not spend
+the allowance or start a worker. The automatic tick consumer is a follow-up issue. After deploying
+this profile change, verify the runtime job, not only the source, and the discovered tools:
 
 ```bash
 hermes -p day-desk cron list                 # factory-drive still exists, its prompt unchanged
-hermes -p day-desk mcp test factory_drive    # factory_use_allowance is among the discovered tools
+hermes -p day-desk mcp test factory_drive    # factory_queue_retry is among the discovered tools
 hermes -p day-desk config get mcp_servers.factory_drive --json  # no include list hides the tool
 ```
 
 Read back the deployed skill itself, from the profile, not the checkout you merged:
 `~/.hermes/profiles/day-desk/skills/software-factory/SKILL.md` must carry the same 'Drive the
-factory' section — `planAllowances`, the factory_use_allowance route and the factory_status
-readback of the one usage.
+factory' section — `planAllowances`, the factory_queue_retry route and the factory_status readback
+of the queued request.
 
-A green scheduler is not success. The evidence is the representative run on the live host: one
-owner-approved, in-scope WorkItem recovered by the driving job, then `factory_status` for it read
-back from the host's own factory-mcp — the history carries the `allowance_retry` line,
-`allowanceUse` names the planId with a remaining one lower, and no `ownerAsked` was set. Read that
-history from the host, never from a mock, a replay or another checkout. When the job is not
+A green scheduler is not success. In this phase, readback must show a `pendingRetry` request in
+`queued` status and the allowance count unchanged; that is a saved request, not a recovered WorkItem.
+The follow-up consumer must be deployed before the representative live retry check, which must
+show one `allowance_retry` line, an `allowanceUse` naming the planId with a remaining one lower,
+one started WorkOrder
+and no `ownerAsked`. Read that history from the host, never from a mock, a replay or another checkout. When the job is not
 reachable — the gateway is down, `FACTORY_AGENT_TOKEN` is missing, the tool is undiscovered, no
 in-scope WorkItem is waiting — name that exact blocker; the rollback is the same as before this
 feature: with no allowance approved, driving answers once via factory_resolve_human only.
@@ -738,10 +739,10 @@ Day Desk is one Hermes agent you talk to in Telegram (ADR-0013), and it drives t
 you (ADR-0030). Through factory-mcp's tools it shows what needs you, plans and starts issues, and
 answers the escalations a worker can fix: it sends a PR back to the gate, or retries with a note,
 once per WorkItem, and never closes one. With an owner-approved plan allowance (ADR-0070) it may
-also retry on evidence and replace with open issues of the same repo, counted against the
+also queue retries on evidence and replace with open issues of the same repo, counted against the
 allowance and audited, without one approval per recovery — see Rollout below — and the driving
-job routes a WorkItem a current scoped allowance covers through factory_use_allowance itself,
-reading the spend back from factory_status before it reports it. It calls those tools with its own token,
+job reads back the queued request through factory_status. It reports it as queued, not recovered,
+until the automatic consumer is deployed. It calls those tools with its own token,
 `FACTORY_AGENT_TOKEN`, for which factory-mcp lists only them. Setting up a repo and approving or
 retiring a lesson still go through your token, and Hermes asks you to approve each of those calls
 with buttons in Telegram; no answer in 15 minutes is a no. Its settings, skill and manner are the Hermes profile
@@ -786,7 +787,7 @@ hermes -p day-desk cron create "every 10m" --no-agent --script factory-update.sh
 
 `factory-drive` runs the model only when the escalations Day Desk may answer change, and tells you
 what it chose for each: through the plan allowance when one covers the WorkItem, reading the
-`allowanceUse` spend back before it answers, else through its own factory_resolve_human answer. `factory-watch` tells you of an escalation Day Desk may not answer, or one
+queued `pendingRetry` request back before it answers, else through its own factory_resolve_human answer. `factory-watch` tells you of an escalation Day Desk may not answer, or one
 it left for 30 minutes, and of an exhausted WorkItem either way; unchanged scheduled runs are quiet.
 It also reports material state, head, PR, gate-round and worker transitions after its first progress baseline.
 A merge or issue closure message says that runtime acceptance still needs confirmation. Without

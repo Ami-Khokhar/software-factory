@@ -2330,3 +2330,27 @@ before a separate activation decision, while every probe remains inside the depl
 The short-lived binding makes later activation and dispatch-preflight checks fail closed after a
 model, credential file or image changes. This slice does not activate workers or consume health
 records during dispatch.
+## ADR-0095 — Day Desk queues an approved retry durably before anything spends it
+
+**Context.** A Day Desk retry inside a plan allowance (ADR-0069, ADR-0070) ran in the tool call.
+An interrupted chat left no durable trace of the owner-approved decision, and the allowance spend
+and the WorkItem transition were separate writes, so a stop between them could count a use with no
+retry behind it.
+
+**Decision.** Day Desk queues the decision with a new write tool, `factory_queue_retry`: a waiting
+WorkItem, an existing scoped plan allowance with `retry` among its actions and remaining count at
+least 1, a stable `requestId`, `by` (Day Desk must say `day-desk`), and bounded sanitized evidence.
+It refuses terminal, live, unsafe, environment-failed, out-of-scope and pass-budget-spent items,
+reusing the immediate tool's checks. It stores a `pendingRetry` on the WorkItem and a `retry` row
+in the request journal in one transaction, spending nothing and creating no WorkOrder; migration 10
+initializes old WorkItems' `pendingRetry` to null. Replaying the same `requestId` with the same
+inputs returns the stored request; changed inputs conflict. A lease held by another tick answers
+`retryable`/`workitem_busy`, so the same `requestId` may be tried again. A human resolution clears
+the intent and cancels the journal row in the same write. The immediate `factory_use_allowance`
+stays available, to the owner and to Day Desk. Automatic dispatch of a queued intent is a
+follow-up release, not this phase.
+
+**Consequence.** An interrupted chat leaves a request that factory_status's `pendingRetry` reads
+back, with the allowance untouched; nothing is reported as recovered until the follow-up consumer
+spends the use and starts one WorkOrder in a single transaction. The safety stops, membership,
+remaining count and no-fresh-budget rules bind at queue time and will bind again at consumption.

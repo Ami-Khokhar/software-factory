@@ -110,6 +110,25 @@
         "gateRound": { "type": ["integer", "null"], "minimum": 0 }
       }
     },
+    "pendingRetry": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["requestId", "planId", "by", "evidence", "status", "queuedAt", "waitingState",
+                   "incidentId", "gateRound", "headSha"],
+      "description": "One durable Day Desk retry decision waiting for an automatic consumer (ADR-0095). Queuing does not spend or dispatch.",
+      "properties": {
+        "requestId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "planId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "by": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "evidence": { "type": "string", "minLength": 1, "maxLength": 5000 },
+        "status": { "enum": ["queued"] },
+        "queuedAt": { "type": "string", "format": "date-time" },
+        "waitingState": { "enum": ["human_waiting", "blocked"] },
+        "incidentId": { "type": ["integer", "null"], "minimum": 1 },
+        "gateRound": { "type": "integer", "minimum": 0 },
+        "headSha": { "type": ["string", "null"] }
+      }
+    },
     "recovery": {
       "type": ["object", "null"],
       "additionalProperties": false,
