@@ -37,6 +37,16 @@ registry path in `/healthz`. It was opened with `factory new`, and nothing else 
 4. **Done** is a PR merged by pr-gatekeeper and the issue closed. factory-mcp closes the issue,
    because GitHub does not act on `Closes #n` when the gate's workflow token merges.
 
+`factory call factory_runtime_status '{"id":"Ami-Khokhar/software-factory#302"}'` reads a
+sanitized runtime snapshot: deployed revision, worker order and registered model/image pins,
+credential-file readability (not authentication), relay health/cap, and effective per-item versus
+global timeout. With an item id it probes the live PR head and GitHub comments/checks/workflows
+through the factory's own credential, recording permission results without raw error bodies.
+It starts no provider request, worker, retry, allowance or host change. Day Desk's driving token
+exposes this read tool. A cache mismatch is an observation of the profile's disk cache, not proof
+of what an active chat sees. `tools/list` advertises `ttlMs: 0` and `cacheScope: private`; use the
+supported `/reload-mcp` command in an older chat to reconnect and rebuild its tool schemas.
+
 `factory status` lists every WorkItem. `factory status <owner/repo#n>` shows one WorkItem, its
 last steps, and what it needs from you.
 

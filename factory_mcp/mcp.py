@@ -60,7 +60,8 @@ def handle(message, tools, audit=lambda name, args, ok: None):
     if method == "ping":
         return _result(message_id, {})
     if method == "tools/list":
-        return _result(message_id, {"tools": [tool.listing() for tool in tools.values()]})
+        return _result(message_id, {"tools": [tool.listing() for tool in tools.values()],
+                                    "ttlMs": 0, "cacheScope": "private"})
     if method == "tools/call":
         tool = tools.get(params.get("name"))
         args = params.get("arguments") or {}
