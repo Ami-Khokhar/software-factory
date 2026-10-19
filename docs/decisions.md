@@ -2354,3 +2354,23 @@ follow-up release, not this phase.
 back, with the allowance untouched; nothing is reported as recovered until the follow-up consumer
 spends the use and starts one WorkOrder in a single transaction. The safety stops, membership,
 remaining count and no-fresh-budget rules bind at queue time and will bind again at consumption.
+
+## ADR-0096 — The verify reserve is flat, so the harness keeps the rest of the pass
+
+**Context.** The runner gave the coding harness 70% of a pass and reserved 25% for the repo's verify
+command. The reserve is a share of the wall, but a verify is one command: the eight completed
+Results in the live relay's memory took 6 to 69 seconds, while the harness used every minute it
+had. At `FACTORY_WALL_MS=1800000` the reserve was 435 seconds for a command that needed at most 69,
+and twelve of twenty-one MiMo harness phases were killed at exactly 1,218 seconds with exit 124 —
+ten of them holding a partial patch, so the model was still working. Successful MiMo passes ran 8 to
+19.5 minutes, which put the cap on top of the normal distribution instead of above it.
+
+**Decision.** A pass reserves a flat 3 minutes for the repo's verify command, never more than a
+quarter of the remaining pass, and nothing when the verify runs on a GitHub runner (`remoteVerify`,
+ADR-0045). The coding harness gets all the rest, and the runner still reserves its 60 seconds under
+the WorkOrder's `budget.wallMs` and subtracts any checkout-lock wait.
+
+**Consequence.** A 30-minute pass gives the harness 26 minutes instead of 20 and a 20-minute pass 16
+instead of 13. A verify that needs more than 3 minutes now runs out of its own clock and fails the
+pass at the verification phase, so raising that floor is a change here, not a config knob. On a
+harness timeout the reserve is what remains for salvage and the Result, as before.
