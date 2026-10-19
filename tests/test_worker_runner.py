@@ -168,6 +168,7 @@ class RunnerTest(unittest.TestCase):
         self.flags = ["--credential", f"{self.auth}:/home/node/.pi/agent"]
         self.mounts = []
         self.harness_runs = []
+        self.verify_runs = []
         self.sandbox_runs = []
 
         def local_run(sandbox, argv, seconds, mount, harness=False, env=None):
@@ -175,7 +176,6 @@ class RunnerTest(unittest.TestCase):
             self.mounts.append(mount)
             if harness:
                 self.sandbox_runs.append(argv)
-            if harness:
                 self.harness_runs.append({
                     "argv": argv,
                     "seconds": seconds,
@@ -185,6 +185,8 @@ class RunnerTest(unittest.TestCase):
                         for name in os.listdir(scratch)}, "mode": Path(scratch).stat().st_mode & 0o777}
                         for scratch, target in sandbox.credentials],
                 })
+            else:
+                self.verify_runs.append({"argv": argv, "seconds": seconds})
             self.sandbox_runs.append(argv)
             done = subprocess.run(argv, cwd=mount, capture_output=True, text=True, timeout=60,
                                   env=dict(os.environ, **SANDBOX_ENV, **(env or {})))
@@ -207,8 +209,9 @@ class RunnerTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
 
     def run_order(self, mode, kind="implement", repo="o/r", head=None, remote_verify=False,
-                  max_lines=600, ceiling=None, omit_ceiling=False, continuation=None):
-        wi = workitem(id="o/r#7", repo=repo, issueNumber=7, goal="Fix the app", headSha=head)
+                  max_lines=600, ceiling=None, omit_ceiling=False, continuation=None, wall_ms=None):
+        wi = workitem(id="o/r#7", repo=repo, issueNumber=7, goal="Fix the app", headSha=head,
+                      wallMsOverride=wall_ms)
         config = Config(mcp_token="t", repos=frozenset(),
                         remote_verify_repos=frozenset({repo}) if remote_verify else frozenset())
         order = documents.workorder(wi, kind, 0, config, self.base, continuation_sha=continuation)
@@ -247,8 +250,32 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(holder.stdout.readline().strip(), "held")
         result, _ = self.run_order("fix")
         self.assertEqual(result["status"], "completed", result.get("error"))
-        # The wait came out of the harness's share of the pass, which is 798 seconds when nothing waits.
-        self.assertLess(self.harness_runs[0]["seconds"], 798)
+        # The wait came out of the harness's share of the pass, which is 903 seconds when nothing waits.
+        self.assertLess(self.harness_runs[0]["seconds"], 903)
+
+    def test_the_verify_reserve_does_not_grow_with_the_wall(self):
+        """A 30-minute pass gives the harness 1,500 s: the verify is one command, not a share."""
+        result, order = self.run_order("fix", wall_ms=1_800_000)
+        self.assertEqual(result["status"], "completed", result.get("error"))
+        self.assertEqual(order["budget"]["wallMs"], 1_800_000)
+        self.assertEqual(self.harness_runs[0]["seconds"], 1_500)
+        self.assertEqual(self.verify_runs[-1]["seconds"], 180)
+
+    def test_the_verify_gets_the_reserve_and_a_short_pass_bounds_it(self):
+        """The verify's own clock is the flat reserve, and a quarter of a short pass."""
+        result, _ = self.run_order("fix")
+        self.assertEqual(result["status"], "completed", result.get("error"))
+        self.assertEqual(self.verify_runs[-1]["seconds"], 180)
+        short, _ = self.run_order("fix", wall_ms=180_000)
+        self.assertEqual(short["status"], "completed", short.get("error"))
+        self.assertEqual(self.harness_runs[-1]["seconds"], 84)
+        self.assertEqual(self.verify_runs[-1]["seconds"], 30)
+
+    def test_a_remote_verify_pass_leaves_the_harness_the_whole_remaining_clock(self):
+        """No container verify runs (ADR-0045), so nothing is reserved for one."""
+        result, _ = self.run_order("fix", remote_verify=True)
+        self.assertEqual(result["status"], "completed", result.get("error"))
+        self.assertEqual(self.harness_runs[0]["seconds"], 1_083)
 
     def test_completed_patch_applies_on_the_base(self):
         result, order = self.run_order("fix")
@@ -278,7 +305,7 @@ class RunnerTest(unittest.TestCase):
         run = self.harness_runs[0]
         self.assertEqual(run["argv"][:-1], [sys.executable, str(self.harness), "fix"])
         self.assertEqual(run["argv"][-1].splitlines()[0], "You are a factory worker. Carry out the WorkOrder below in this checkout of o/r.")
-        self.assertEqual((run["seconds"], run["env"]), (798, {"CODEX_HOME": "/tmp/factory-home/.codex"}))
+        self.assertEqual((run["seconds"], run["env"]), (903, {"CODEX_HOME": "/tmp/factory-home/.codex"}))
         self.assertEqual(run["credentials"], [
             {"target": "/home/node/.pi/agent", "mode": 0o700,
              "files": {"auth.json": ('{"opencode-go": {"type": "api", "key": "k"}}', 0o600)}},
@@ -833,20 +860,24 @@ class RunnerTest(unittest.TestCase):
         sandbox_timeout = []
 
         def timed_out_run(sandbox, argv, seconds, mount, harness=False, env=None):
-            """Sandbox.run without Docker: the kill is `timeout`, like the image's command, so the
-            exit is 124 with everything the harness printed before it."""
+            """Sandbox.run without Docker: the kill, like the image's own `timeout`, ends the
+            command at 124 with everything it printed before. The clock is the test's, so a host
+            without a `timeout` binary (macOS, a bare sandbox) still runs this and the module does
+            not depend on a name in PATH."""
+            extra = dict(env or {})
             if harness:
                 sandbox_timeout.append(seconds)
-                env = dict(sandbox.harness_env, **(env or {}))
-                env.pop("CREDENTIAL_DIRS", None)
-                env["CREDENTIAL_DIRS"] = ":".join(scratch for scratch, _ in sandbox.credentials)
-                argv = ["timeout", "--kill-after=1", "1", *argv]
+                extra = dict(sandbox.harness_env, **extra)
+                extra.pop("CREDENTIAL_DIRS", None)
+                extra["CREDENTIAL_DIRS"] = ":".join(scratch for scratch, _ in sandbox.credentials)
+            env = dict(os.environ, **SANDBOX_ENV, **extra)
             try:
                 done = subprocess.run(argv, cwd=mount, capture_output=True, text=True,
-                                      timeout=60,
-                                      env=dict(os.environ, **SANDBOX_ENV, **(env or {})))
+                                      timeout=1 if harness else 60, env=env)
             except subprocess.TimeoutExpired as exc:
-                return 124, exc.stdout or "", exc.stderr or ""
+                out, err = exc.stdout or b"", exc.stderr or b""
+                return 124, (out.decode() if isinstance(out, bytes) else out), \
+                    (err.decode() if isinstance(err, bytes) else err)
             return done.returncode, done.stdout, done.stderr
 
         with mock.patch.object(runner.Sandbox, "run", timed_out_run):
