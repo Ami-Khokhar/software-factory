@@ -2367,10 +2367,14 @@ ten of them holding a partial patch, so the model was still working. Successful 
 
 **Decision.** A pass reserves a flat 3 minutes for the repo's verify command, never more than a
 quarter of the remaining pass, and nothing when the verify runs on a GitHub runner (`remoteVerify`,
-ADR-0045). The coding harness gets all the rest, and the runner still reserves its 60 seconds under
-the WorkOrder's `budget.wallMs` and subtracts any checkout-lock wait.
+ADR-0045). The coding harness gets all the rest, after the same 60 seconds the runner keeps under
+the WorkOrder's `budget.wallMs`, the checkout-lock wait, and a post-harness float of 5% of the pass
+capped at 60 seconds: the 0.7/0.25 split left that 5% unused, and collecting the patch, printing the
+Result and the relay's teardown have to fit in it, or the relay kills the runner and the salvage
+(ADR-0086) is lost.
 
-**Consequence.** A 30-minute pass gives the harness 26 minutes instead of 20 and a 20-minute pass 16
+**Consequence.** A 30-minute pass gives the harness 25 minutes instead of 20 and a 20-minute pass 15
 instead of 13. A verify that needs more than 3 minutes now runs out of its own clock and fails the
 pass at the verification phase, so raising that floor is a change here, not a config knob. On a
-harness timeout the reserve is what remains for salvage and the Result, as before.
+harness timeout the verify reserve and the post-harness float are both still unspent, which is what
+salvage and the Result run on; on a `remoteVerify` order only the 60-second buffer and the float do.

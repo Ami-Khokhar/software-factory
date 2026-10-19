@@ -172,8 +172,8 @@ def case_timeout_salvage(image, tmp, case):
         os.chdir(work)
         with redirect_stdout(capture):
             # The harness writes its partial fix uncommitted, then never returns: the runner
-            # kills it at 90s (its floor of 120 wall seconds minus the 30-second verify reserve)
-            # with exit 124.
+            # kills it at 84s (its 120-second floor, less the 30-second verify reserve and
+            # 6 seconds for collection) with exit 124.
             runner.main(["--image", image, "--", "sh", "-c",
                          "printf 'partial fix\\n' > app.txt && sleep 600", text])
     finally:

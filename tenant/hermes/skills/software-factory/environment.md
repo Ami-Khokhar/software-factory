@@ -32,8 +32,8 @@ file in the repo `software-factory`.
 
 - `FACTORY_MAX_PASSES` is 4 worker passes between two decisions (`factory_mcp/config.py`). A
   pass has 20 minutes by default (`wall_ms`, `FACTORY_WALL_MS`): the harness gets all of it except
-  a 3-minute reserve for the repo's verify command. A timed-out pass keeps its partial work as a
-  checkpoint the next attempt continues from (ADR-0086).
+  a 60-second reserve for the pass and a 3-minute reserve for the repo's verify command. A
+  timed-out pass keeps its partial work as a checkpoint the next attempt continues from (ADR-0086).
 - The runner runs the repo's `verify` command itself, in the sandbox, after the harness, from
   the base commit's `.github/pr-gatekeeper.json`. A non-zero exit fails the pass with
   `verify exited N: <last 400 characters of output>`. The worker's own claim does not count.

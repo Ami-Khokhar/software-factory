@@ -72,6 +72,11 @@ SUMMARY_ENTRY = 200
 # flat, and a quarter only bounds it on a short pass. A remote verify runs on a GitHub runner
 # (ADR-0045) and reserves nothing.
 VERIFY_RESERVE_SECONDS = 180
+# Collecting the patch, printing the Result and the relay's teardown run after the verify, and the
+# old 0.7/0.25 split left 5% of the pass unused for them. A flat verify reserve has to keep that
+# float: a collect slow enough to outlast it lets the relay kill the runner, losing the patch the
+# salvage path exists to keep.
+POST_HARNESS_SECONDS = 60
 
 
 class WorkerError(Exception):
@@ -614,6 +619,9 @@ def main(argv=None):
         record("environment setup", setup_start, 0)
         seconds = max(120, order["budget"]["wallMs"] // 1000 - 60 - waited)
         reserve = 0 if order.get("remoteVerify") else min(seconds // 4, VERIFY_RESERVE_SECONDS)
+        # Collecting the patch, printing the Result and the relay's teardown run after the verify.
+        # The 0.7/0.25 split left 5% of the pass for them; a flat verify reserve must keep that.
+        post = min(seconds // 20, POST_HARNESS_SECONDS)
         sandbox = Sandbox(args.image, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]),
                           credentials, harness_env)
         secrets = {value for value in harness_env.values() if value}
@@ -625,7 +633,7 @@ def main(argv=None):
                 with open(os.path.join(directory, name)) as handle:
                     secrets.update(credential_secrets(handle.read()))
         harness_start = time.monotonic()
-        code, out, err = sandbox.run([*harness, text], seconds - reserve, work, harness=True)
+        code, out, err = sandbox.run([*harness, text], seconds - reserve - post, work, harness=True)
         echoed = out + err
         record("harness execution", harness_start, code, echoed)
         # for the relay log; the Result line comes last. Redacted by the same rules as the tail.

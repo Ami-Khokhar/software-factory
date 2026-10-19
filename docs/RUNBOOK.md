@@ -318,7 +318,8 @@ Day Desk steers worker and timeout decisions within the same allowlist and crede
   calling the experiment successful. A global env change is unnecessary. Old WorkOrders retain
   their frozen budget. The runner still reserves 60 seconds and subtracts checkout-lock wait time,
   then keeps a flat 3-minute reserve (never more than a quarter of the pass, and none when the verify
-  runs on a GitHub runner) for the repo's verify command and gives the rest to the coding harness.
+  runs on a GitHub runner) for the repo's verify command, keeps 5% of the pass (capped at 60 seconds)
+  for collecting the patch and printing the Result, and gives the rest to the coding harness.
 - `factory_set_worker` (`id`, `workers`, `by`) replaces a WorkItem's issue `Worker:` lines with the
   agent ids given, in order; `[]` falls back to `FACTORY_WORKERS` order. Only agents in
   `FACTORY_WORKERS` may be named — an unknown id is refused before the edit. It is refused while a
