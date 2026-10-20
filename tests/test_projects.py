@@ -305,6 +305,14 @@ class StartProjectTest(unittest.TestCase):
                 self.foreman.intake(REPO, 300)
         self.assertEqual(sleeps, [1] * 5)
         self.assertEqual(self.foreman.store.get(f"{REPO}#300")["projectId"], None)
+        # the retry the refusal advises joins: with the lease free, a re-run of intake carries
+        # the already-stored WorkItem into its Project
+        self.foreman.store.release(f"{REPO}#300", "a-tick")
+        wi = self.foreman.intake(REPO, 300)
+        self.assertEqual(wi["projectId"], "self-maintaining-apis")
+        self.assertEqual([h["detail"] for h in self.foreman.store.history(f"{REPO}#300")
+                          if h["action"] == "project_joined"],
+                         [{"project": "self-maintaining-apis", "from": "ready", "to": "ready"}])
 
     def test_the_intake_join_joins_during_a_retry_once_the_lease_frees(self):
         """A tick releases while the join waits: the retry takes the lease and completes the join
@@ -322,9 +330,44 @@ class StartProjectTest(unittest.TestCase):
                           if h["action"] == "project_joined"],
                          [{"project": "self-maintaining-apis", "from": "ready", "to": "ready"}])
 
+    def test_start_project_refuses_a_different_request_for_a_taken_id(self):
+        """Same id and same owner words are not enough: the resume reads the whole request, so a
+        later call with another goal, budget or plan for a taken id conflicts like any second
+        creation would, before any issue opens (ADR-0100)."""
+        self.foreman.start_project(self.lead_fields(), self.plan("One"), "amteshwar", "go.")
+        for fields, issues in ((self.lead_fields(goal="A different goal."), self.plan("One")),
+                               (self.lead_fields(budget={"passes": 45,
+                                                         "deadline": "2026-11-01T00:00:00Z"}),
+                                self.plan("One")),
+                               (self.lead_fields(title="A different name."), self.plan("One")),
+                               (self.lead_fields(), self.plan("One", "Two"))):  # another plan
+            with self.assertRaisesRegex(ToolError, "project self-maintaining-apis exists; "
+                                                   "choose another id"):
+                self.foreman.start_project(fields, issues, "amteshwar", "go.")
+        self.assertEqual(list(self.github.issues), [(REPO, 200)])  # no issue opened on any refusal
+
+    def test_repainting_the_saved_start_adds_no_new_issue_and_no_second_start_row(self):
+        """A replay of the exact same request after the start completed answers the stored
+        Project: nothing opens again, the joins are already done, and the audit keeps the one
+        `project_started` row the first call wrote (WO-08's notices fire once, ADR-0100)."""
+        made = self.foreman.start_project(self.lead_fields(), self.plan("One", "Two"),
+                                          "amteshwar", "go.")
+        again = self.foreman.start_project(self.lead_fields(), self.plan("One", "Two"),
+                                           "amteshwar", "go.")
+        self.assertEqual((again["issues"], again["project"]["members"]),
+                         ([], made["project"]["members"]))
+        self.assertEqual(list(self.github.issues), [(REPO, 200), (REPO, 201)])
+        self.assertEqual([row["detail"] for row in self.foreman.store.global_history()
+                          if row["action"] == "project_started"],
+                         [{"project": "self-maintaining-apis", "by": "amteshwar",
+                           "members": [f"{REPO}#200", f"{REPO}#201"], "passes": 30}])
+        self.assertEqual([(self.foreman.store.get(f"{REPO}#200")["projectId"],
+                           self.foreman.store.get(f"{REPO}#201")["projectId"])],
+                         [("self-maintaining-apis", "self-maintaining-apis")])
+
     def test_start_project_resumes_a_join_that_died_without_opening_the_plan_again(self):
         """A join that exhausted its retries raised the ToolError whose advice ('call the tool
-        again') is now true: the same call, same id, same `by` and same quoted ownerWords, finds
+        again') is now true: the same request, same id, same `by` and quoted ownerWords, finds
         its own Project, opens no second plan, finishes the joins, and names the start once."""
         self.foreman.store.acquire(f"{REPO}#200", "a-tick")
         with mock.patch("factory_mcp.foreman.time.sleep"):

@@ -2483,5 +2483,7 @@ the audit. A WorkItem the factory takes in later joins the Project that already 
 
 **Consequence.** One approval covers the whole plan and the replacements that join later: the
 owner's yes buys the Lead the authority WO-03 to WO-05 give it, and no further yes is owed for
-starting. The members keep their own per-item guards (safety stops, leases, budgets); the Project
-approval changes none of them.
+starting. A re-run of the same start resumes the joins instead of conflicting (the owner's yes
+is often one short word, so the resume reads the whole request, not just the words); a different
+request for the same id conflicts as before. The members keep their own per-item guards (safety
+stops, leases, budgets); the Project approval changes none of them.

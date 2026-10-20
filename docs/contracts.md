@@ -417,7 +417,11 @@ WorkItems in the `projects` table as its whole JSON document, with the same opti
 limits and the read tool `factory_project_status` is in `tools.AGENT_TOOLS`. The owner's one
 quoted yes (`ownerWords`) starts one, with `factory_start_project`, also in `tools.AGENT_TOOLS`:
 it stores the record, opens the plan's issues in order through `factory_start_plan`'s checks and
-makes each opened WorkItem a member with its `projectId` set (ADR-0100). The states other than
+makes each opened WorkItem a member with its `projectId` set (ADR-0100). Re-running the same
+request — the same resolved repo, title, goal, blueprint, doneWhen checks, budget and plan —
+resumes the joins that died, answers the stored record and adds no second `project_started`
+audit row; any other call for a taken id is refused: creating a second with the same id
+conflicts. The states other than
 `active`, and the fields `passesUsed` and `acceptanceItem`, have no writer yet: WO-03 to WO-07
 write them. The store's Project records ship ahead of their first caller (WO-02): the
 work order adds the record before anything starts a Project. The keys:

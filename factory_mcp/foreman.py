@@ -111,17 +111,24 @@ class Foreman:
         repo = self._allowlisted(repo)
         existing = self.store.get(workitem.workitem_id(repo, number))
         if existing:
-            return existing
+            return self._joined(existing)
         wi = self._admit(repo, self._issue(repo, number))
         try:
             wi = self.store.put(wi)
         except Conflict:  # a concurrent tick took it in first
             return self.store.get(wi["id"])
         self.store.log("intake", {"state": wi["state"]}, wi["id"])
-        if wi.get("projectId") is None:  # an issue the Project already lists joins it (WO-02)
+        return self._joined(wi)
+
+    def _joined(self, wi):
+        """An issue the Project already lists joins it (WO-02): a WorkItem carried in with no
+        `projectId` yet takes it under its own lease, and the intake that a "call the tool again"
+        refusal advised is the one that finishes the join. The join runs only for a WorkItem that
+        belongs to no Project: the field stays where some owner set it."""
+        if wi.get("projectId") is None:
             project_id = self.store.project_of(wi["id"])
             if project_id:
-                wi = self._join_project(wi["id"], project_id)  # under the WorkItem's own lease
+                return self._join_project(wi["id"], project_id)  # under the WorkItem's own lease
         return wi
 
     def _enabled(self, repo, by):
@@ -1746,11 +1753,21 @@ class Foreman:
         stored = self.store.project(project_id)
         if stored is None:
             return self._project_from_plan(fields, issues, by)
-        if (stored["approval"].get("by") == by and stored["approval"].get("words") == owner_words):
-            # the same call re-run after a join died: its plan is already open, so resume
-            return self._resume_project(stored, by)
-        raise ToolError(f"project {project_id} exists; choose another id, or read it with "
-                        "factory_project_status")
+        # the owner's yes is often one short word, so the resume reads the whole request: only
+        # the same repo, name and goal, the same checks, budget and plan for the same id re-run
+        # the start (finishing the joins that died); any other call for the id conflicts
+        matched = (stored["approval"].get("by") == by
+                   and stored["approval"].get("words") == owner_words
+                   and stored["repo"] == (self.config.listed(fields["repo"]) or fields["repo"])
+                   and (stored["title"], stored["goal"], stored["blueprint"], stored["doneWhen"],
+                        stored["budget"]) == (fields["title"], fields["goal"],
+                                              fields["blueprint"], fields["doneWhen"],
+                                              fields["budget"])
+                   and len(stored["members"]) == len(issues))
+        if not matched:
+            raise ToolError(f"project {project_id} exists; choose another id, or read it with "
+                            "factory_project_status")
+        return self._resume_project(stored, by)
 
     def _project_from_plan(self, fields, issues, by):
         """The steps after a start_project call's checks: open the plan, store the Project under
@@ -1769,17 +1786,21 @@ class Foreman:
         return {"project": stored, "issues": opened["issues"]}
 
     def _resume_project(self, project, by):
-        """The same start_project call, re-run after a join died (ADR-0100): the Project and its
-        plan's issues are already stored, so no issue opens again. Each listed WorkItem that is
-        in the store but has no `projectId` yet is joined, then the start is named once, so one
-        successful run leaves exactly one `project_started` line."""
+        """The same start_project request, re-run after a join died (ADR-0100): the Project and
+        its plan's issues are already stored, so no issue opens again. Each listed WorkItem that
+        is in the store but has no `projectId` yet is joined, and the start is named only when no
+        line says it already started, so a replay after a completed start writes nothing."""
         for member in project["members"]:
             wi = self.store.get(member)
             if wi is not None and wi.get("projectId") != project["id"]:
                 self._join_project(member, project["id"])
-        self.store.log("project_started", {"project": project["id"], "by": by,
-                                           "members": project["members"],
-                                           "passes": project["budget"]["passes"]})
+        started = [row for row in self.store.global_history()
+                   if row["action"] == "project_started"
+                   and row["detail"].get("project") == project["id"]]
+        if not started:
+            self.store.log("project_started", {"project": project["id"], "by": by,
+                                               "members": project["members"],
+                                               "passes": project["budget"]["passes"]})
         return {"project": self.store.project(project["id"]), "issues": []}
 
     def _join_project(self, workitem_id, project_id):
