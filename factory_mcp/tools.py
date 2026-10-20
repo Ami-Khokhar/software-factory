@@ -102,6 +102,9 @@ def build(store, foreman, agent=False):
         if set(args) != required:
             raise ToolError("factory_start_project requires exactly the keys "
                             + ", ".join(sorted(required)))
+        if isinstance(args["issues"], list) and len(args["issues"]) > MAX_PLAN_ISSUES - 1:
+            raise ToolError(f"factory_start_project accepts at most {MAX_PLAN_ISSUES - 1} issues: "
+                            "the acceptance issue is added last. No issue was opened")
         return foreman.start_project(
             {key: args[key] for key in required - {"issues", "by", "ownerWords"}},
             args["issues"], args["by"], args["ownerWords"])
@@ -342,7 +345,8 @@ def build(store, foreman, agent=False):
         Tool("factory_start_project",
              "Start a Project after the owner said yes in the chat: store its goal, blueprint, "
              "done-when checks and pass budget (at most 60), open its plan's issues in order, and "
-             "make each a member. ownerWords quotes the owner's yes. Refused without it.",
+             "make each a member. Plans have at most 9 issues: the acceptance issue is added last. "
+             "ownerWords quotes the owner's yes. Refused without it.",
              {"type": "object",
               "required": ["id", "repo", "title", "goal", "blueprint", "doneWhen", "budget",
                            "issues", "ownerWords", "by"],
@@ -367,7 +371,7 @@ def build(store, foreman, agent=False):
                                         "properties": {"passes": {"type": "integer", "minimum": 1,
                                                                   "maximum": 60},
                                                        "deadline": {"type": "string", "minLength": 1}}},
-                             "issues": {"type": "array", "minItems": 1, "maxItems": MAX_PLAN_ISSUES,
+                             "issues": {"type": "array", "minItems": 1, "maxItems": MAX_PLAN_ISSUES - 1,
                                         "description": "the plan's issues, in the order they run",
                                         "items": {"type": "object", "required": ["title", "body"],
                                                   "additionalProperties": False,

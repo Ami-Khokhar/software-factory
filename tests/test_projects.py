@@ -3,12 +3,13 @@ write loses, and `projects.problem` names the first limit the Lead's fields brea
 owner's one yes starts a Project (ADR-0100) from the Lead's plan, through the Foreman and its
 `factory_start_project` tool."""
 import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from factory_mcp import projects, tools
+from factory_mcp import projects, tools, workitem
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
@@ -242,7 +243,7 @@ class StartProjectTest(unittest.TestCase):
                                           "amteshwar", "go.")
         numbers = [item["issue"] for item in made["issues"]]
         self.assertEqual([self.github.issues[(REPO, number)]["title"] for number in numbers],
-                         ["One", "Two", "Three"])
+                         ["One", "Two", "Three", "Acceptance: Self-maintaining APIs"])
         self.assertEqual([(item["issue"], item["url"]) for item in made["issues"]],
                          [(number, f"https://github.com/{REPO}/issues/{number}")
                           for number in numbers])
@@ -278,11 +279,11 @@ class StartProjectTest(unittest.TestCase):
 
     def test_a_project_id_that_exists_is_refused_before_any_issue_opens(self):
         self.foreman.start_project(self.lead_fields(), self.plan("One"), "amteshwar", "go.")
-        self.assertEqual(list(self.github.issues), [(REPO, 200)])
+        self.assertEqual(list(self.github.issues), [(REPO, 200), (REPO, 201)])
         with self.assertRaisesRegex(ToolError, "project self-maintaining-apis exists; choose "
                                                "another id, or read it with factory_project_status"):
             self.foreman.start_project(self.lead_fields(), self.plan("Two"), "amteshwar", "go again.")
-        self.assertEqual(list(self.github.issues), [(REPO, 200)])
+        self.assertEqual(list(self.github.issues), [(REPO, 200), (REPO, 201)])
 
     def test_a_plan_that_fails_stores_no_project(self):
         issues = self.plan("One") + [{"title": "Two", "body": "## Acceptance\n- it works"}]
@@ -306,12 +307,12 @@ class StartProjectTest(unittest.TestCase):
         self.foreman.intake(REPO, 300)
         project = self.foreman.add_project_members(
             "self-maintaining-apis", [f"{REPO}#300", f"{REPO}#301", f"{REPO}#200"])
-        self.assertEqual(project["members"], [f"{REPO}#200", f"{REPO}#300", f"{REPO}#301"])
+        self.assertEqual(project["members"], [f"{REPO}#200", f"{REPO}#201", f"{REPO}#300", f"{REPO}#301"])
         self.assertEqual(self.foreman.store.get(f"{REPO}#300")["projectId"],
                          "self-maintaining-apis")
         self.assertEqual(self.foreman.store.get(f"{REPO}#301"), None)  # no WorkItem yet: listed only
         again = self.foreman.add_project_members("self-maintaining-apis", [f"{REPO}#300"])
-        self.assertEqual(again["members"], [f"{REPO}#200", f"{REPO}#300", f"{REPO}#301"])
+        self.assertEqual(again["members"], [f"{REPO}#200", f"{REPO}#201", f"{REPO}#300", f"{REPO}#301"])
         with self.assertRaisesRegex(ToolError, "No project other-project"):
             self.foreman.add_project_members("other-project", [f"{REPO}#300"])
 
@@ -325,11 +326,11 @@ class StartProjectTest(unittest.TestCase):
         made = foreman.start_project(fields, self.plan("One"), "amteshwar", "go.")
         self.assertEqual(fields["repo"], "acme/widgets")  # the caller's dict keeps its own spelling
         self.assertEqual((made["project"]["repo"], made["project"]["members"]),
-                         ("Acme/Widgets", ["Acme/Widgets#200"]))
+                         ("Acme/Widgets", ["Acme/Widgets#200", "Acme/Widgets#201"]))
         self.assertEqual(foreman.store.get("Acme/Widgets#200")["projectId"], "resolved-spelling")
         self.assertEqual(foreman.store.get("acme/widgets#200"), None)
         self.assertEqual([row["detail"]["members"] for row in foreman.store.global_history()
-                          if row["action"] == "project_started"], [["Acme/Widgets#200"]])
+                          if row["action"] == "project_started"], [["Acme/Widgets#200", "Acme/Widgets#201"]])
 
     def test_the_intake_join_waits_under_the_workitems_lease_and_refuses_when_it_stays_busy(self):
         """The intake-side join is the lease path, not a bare write: a tick holding the WorkItem's
@@ -386,7 +387,7 @@ class StartProjectTest(unittest.TestCase):
             with self.assertRaisesRegex(ToolError, "project self-maintaining-apis exists; "
                                                    "choose another id"):
                 self.foreman.start_project(fields, issues, "amteshwar", "go.")
-        self.assertEqual(list(self.github.issues), [(REPO, 200)])  # no issue opened on any refusal
+        self.assertEqual(list(self.github.issues), [(REPO, 200), (REPO, 201)])  # no issue opened on any refusal
 
     def test_repainting_the_saved_start_adds_no_new_issue_and_no_second_start_row(self):
         """A replay of the exact same request after the start completed answers the stored
@@ -396,13 +397,14 @@ class StartProjectTest(unittest.TestCase):
                                           "amteshwar", "go.")
         again = self.foreman.start_project(self.lead_fields(), self.plan("One", "Two"),
                                            "amteshwar", "go.")
+        self.assertEqual(again["project"]["acceptanceItem"], made["project"]["acceptanceItem"])
         self.assertEqual((again["issues"], again["project"]["members"]),
                          ([], made["project"]["members"]))
-        self.assertEqual(list(self.github.issues), [(REPO, 200), (REPO, 201)])
+        self.assertEqual(list(self.github.issues), [(REPO, 200), (REPO, 201), (REPO, 202)])
         self.assertEqual([row["detail"] for row in self.foreman.store.global_history()
                           if row["action"] == "project_started"],
                          [{"project": "self-maintaining-apis", "by": "amteshwar",
-                           "members": [f"{REPO}#200", f"{REPO}#201"], "passes": 30}])
+                           "members": [f"{REPO}#200", f"{REPO}#201", f"{REPO}#202"], "passes": 30}])
         self.assertEqual([(self.foreman.store.get(f"{REPO}#200")["projectId"],
                            self.foreman.store.get(f"{REPO}#201")["projectId"])],
                          [("self-maintaining-apis", "self-maintaining-apis")])
@@ -416,9 +418,9 @@ class StartProjectTest(unittest.TestCase):
             with self.assertRaisesRegex(ToolError, "o/r#200 is being ticked"):
                 self.foreman.start_project(self.lead_fields(), self.plan("One", "Two"),
                                            "amteshwar", "go.")
-        self.assertEqual(list(self.github.issues), [(REPO, 200), (REPO, 201)])  # the plan stands
+        self.assertEqual(list(self.github.issues), [(REPO, 200), (REPO, 201), (REPO, 202)])  # the plan stands
         project = self.foreman.store.project("self-maintaining-apis")
-        self.assertEqual(project["members"], [f"{REPO}#200", f"{REPO}#201"])
+        self.assertEqual(project["members"], [f"{REPO}#200", f"{REPO}#201", f"{REPO}#202"])
         self.assertEqual((self.foreman.store.get(f"{REPO}#200")["projectId"],
                           self.foreman.store.get(f"{REPO}#201")["projectId"]), (None, None))
         started = [row for row in self.foreman.store.global_history()
@@ -434,7 +436,7 @@ class StartProjectTest(unittest.TestCase):
         self.assertEqual([row["detail"] for row in self.foreman.store.global_history()
                           if row["action"] == "project_started"],
                          [{"project": "self-maintaining-apis", "by": "amteshwar",
-                           "members": [f"{REPO}#200", f"{REPO}#201"], "passes": 30}])
+                           "members": [f"{REPO}#200", f"{REPO}#201", f"{REPO}#202"], "passes": 30}])
 
     def test_status_names_each_workitems_project(self):
         self.foreman.start_project(self.lead_fields(), self.plan("One", "Two"), "amteshwar", "go.")
@@ -445,6 +447,223 @@ class StartProjectTest(unittest.TestCase):
         self.assertEqual((rows[f"{REPO}#200"]["projectId"], rows[f"{REPO}#201"]["projectId"]),
                          ("self-maintaining-apis", "self-maintaining-apis"))
         self.assertEqual(rows[f"{REPO}#300"]["projectId"], None)
+
+
+class AcceptanceTest(unittest.TestCase):
+    setUp = StartProjectTest.setUp
+    lead_fields = StartProjectTest.lead_fields
+    plan = StartProjectTest.plan
+
+    def start(self):
+        return self.foreman.start_project(self.lead_fields(), self.plan("One", "Two"),
+                                          "amteshwar", "go.")["project"]
+
+    def test_start_project_adds_the_acceptance_issue_last_after_every_other_issue(self):
+        issues = self.plan("One", "Two", "Three")
+        made = self.foreman.start_project(self.lead_fields(), issues, "amteshwar", "go.")
+        self.assertEqual(len(issues), 3)  # a replay can reuse the caller's original plan
+        opened = made["issues"]
+        self.assertEqual(len(opened), 4)
+        last = opened[-1]["issue"]
+        issue = self.github.issues[(REPO, last)]
+        self.assertEqual(issue["title"], "Acceptance: Self-maintaining APIs")
+        self.assertEqual(workitem.depends_on(issue["body"]), [item["issue"] for item in opened[:-1]])
+        project = made["project"]
+        self.assertEqual(project["acceptanceItem"], f"{REPO}#{last}")
+        self.assertEqual(self.foreman.store.project(project["id"]), project)
+        self.assertEqual(self.foreman.store.get(project["acceptanceItem"])["projectId"], project["id"])
+        # The real tick leaves acceptance waiting while the earlier product issues are open.
+        self.foreman.tick()
+        acceptance = self.foreman.store.get(project["acceptanceItem"])
+        self.assertEqual((acceptance["state"], acceptance["waitingOn"]), ("ready", opened[0]["issue"]))
+        self.assertEqual(self.foreman.store.workorders(acceptance["id"]), [])
+
+    def test_the_acceptance_issue_has_one_bullet_per_done_when_check(self):
+        checks = [{"claim": "the demo works", "command": "python3 -m demo"},
+                  {"claim": "the client migrates", "command": "go test ./..."}]
+        made = self.foreman.start_project(self.lead_fields(doneWhen=checks), self.plan("One"),
+                                          "amteshwar", "go.")
+        body = self.github.issues[(REPO, made["issues"][-1]["issue"])]["body"]
+        criteria, missing = workitem.parse_acceptance(body)
+        path = "docs/acceptance/self-maintaining-apis.md"
+        self.assertEqual(missing, [])
+        self.assertEqual(criteria, [
+            {"claim": "the demo works", "doneWhen": f"`python3 -m demo` exits 0 and {path} shows its output"},
+            {"claim": "the client migrates", "doneWhen": f"`go test ./...` exits 0 and {path} shows its output"},
+            {"claim": "The other checks of the repository still pass",
+             "doneWhen": "the repository's verify command passes"}])
+        for words in ("on the default branch", "from the repository root", "its exit code",
+                      "last 40 lines", "fix it with a test that fails without the fix",
+                      "run the command again", "Do not change a check", "Do not mock"):
+            self.assertIn(words, body)
+        self.assertEqual(workitem.paths_listed(body), ["*"])
+
+    def test_a_ten_issue_plan_is_refused_because_acceptance_needs_a_place(self):
+        with self.assertRaisesRegex(ToolError, "at most 9 issues, because the acceptance issue is added; "
+                                               "split the goal into two projects"):
+            self.foreman.start_project(self.lead_fields(), self.plan(*map(str, range(10))),
+                                       "amteshwar", "go.")
+        self.assertEqual((self.github.issues, self.foreman.store.projects()), ({}, []))
+        made = self.foreman.start_project(self.lead_fields(), self.plan(*map(str, range(9))),
+                                          "amteshwar", "go.")
+        self.assertEqual(len(made["issues"]), 10)
+
+    def end_acceptance(self, state):
+        project = self.start()
+        wi = self.foreman.store.get(project["acceptanceItem"])
+        self.foreman.store.put(dict(wi, state=state))
+        return project
+
+    def test_a_closed_acceptance_item_makes_the_project_done(self):
+        project = self.end_acceptance("closed")
+        # Acceptance closure wins even when the deadline has passed.
+        project = self.foreman.store.put_project(dict(project, pausedReason="old reason"))
+        with mock.patch("factory_mcp.foreman.now", return_value="2026-11-02T00:00:00Z"):
+            self.foreman.tick()
+        stored = self.foreman.store.project(project["id"])
+        self.assertEqual((stored["state"], stored["pausedReason"]), ("done", None))
+        self.assertEqual([row["detail"] for row in self.foreman.store.global_history()
+                          if row["action"] == "project_done"],
+                         [{"project": project["id"], "members": project["members"], "passesUsed": 0}])
+
+    def test_a_cancelled_acceptance_item_pauses_the_project(self):
+        for state in ("cancelled", "exhausted", "missing"):
+            with self.subTest(state):
+                self.setUp()
+                project = self.end_acceptance(state if state != "missing" else "ready")
+                if state == "missing":
+                    project = self.foreman.store.put_project(dict(project, acceptanceItem=f"{REPO}#999"))
+                self.foreman.tick()
+                stored = self.foreman.store.project(project["id"])
+                self.assertEqual((stored["state"], stored["pausedReason"]),
+                                 ("paused", "the acceptance issue ended without a merge"))
+                self.assertEqual([row["detail"]["project"] for row in self.foreman.store.global_history()
+                                  if row["action"] == "project_paused"], [project["id"]])
+
+    def test_a_passed_deadline_pauses_the_project(self):
+        project = self.start()
+        deadline = "2026-11-01T05:30:00+05:30"
+        self.foreman.store.put_project(dict(project, budget={"passes": 30, "deadline": deadline}))
+        with mock.patch("factory_mcp.foreman.now", return_value="2026-11-01T00:00:00Z"):
+            self.foreman.tick()
+        self.assertEqual(self.foreman.store.project(project["id"])["state"], "active")
+        with mock.patch("factory_mcp.foreman.now", return_value="2026-11-01T00:00:01Z"):
+            self.foreman.tick()
+        stored = self.foreman.store.project(project["id"])
+        self.assertEqual((stored["state"], stored["pausedReason"]),
+                         ("paused", f"the deadline {deadline} passed"))
+        self.assertEqual([row["detail"]["reason"] for row in self.foreman.store.global_history()
+                          if row["action"] == "project_paused"], [f"the deadline {deadline} passed"])
+
+    def test_a_done_project_is_not_advanced_again(self):
+        for state in ("done", "paused", "stopped"):
+            with self.subTest(state):
+                self.setUp()
+                project = self.end_acceptance("closed")
+                stored = self.foreman.store.put_project(dict(project, state=state))
+                self.foreman.tick()
+                self.assertEqual(self.foreman.store.project(project["id"]), stored)
+                self.assertFalse(any(row["action"] in ("project_done", "project_paused")
+                                     for row in self.foreman.store.global_history()))
+
+    def test_a_single_workitem_tick_does_not_advance_projects(self):
+        project = self.end_acceptance("closed")
+        self.foreman.tick(project["acceptanceItem"])
+        self.assertEqual(self.foreman.store.project(project["id"]), project)
+        self.foreman.tick()
+        self.assertEqual(self.foreman.store.project(project["id"])["state"], "done")
+
+    def test_a_bad_project_logs_its_error_and_does_not_starve_the_next_project(self):
+        project = self.start()
+        self.foreman.store.put_project(dict(project, budget={"passes": 30, "deadline": "invalid"}))
+        other = self.foreman.store.create_project(dict(projects.new(fields(id="second-project"), "2027-01-01T00:00:00Z"),
+                                                       acceptanceItem=f"{REPO}#999"))
+        self.foreman.tick()
+        self.assertEqual(self.foreman.store.project(other["id"])["state"], "paused")
+        errors = [row["detail"] for row in self.foreman.store.global_history() if row["action"] == "tick_error"]
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0]["project"], project["id"])
+        self.assertIn("ValueError", errors[0]["error"])
+
+    def test_a_project_write_conflict_waits_for_the_next_tick(self):
+        project = self.end_acceptance("closed")
+        store = self.foreman.store
+        competing = []
+
+        def write_before_update(sql):
+            if sql.startswith("UPDATE projects SET"):
+                store._db.set_trace_callback(None)
+                changed = dict(project, goal="a concurrent edit", stateVersion=project["stateVersion"] + 1)
+                store._db.execute("UPDATE projects SET state_version = ?, doc = ? WHERE id = ?",
+                                  (changed["stateVersion"], json.dumps(changed), changed["id"]))
+                competing.append(changed)
+
+        store._db.set_trace_callback(write_before_update)
+        try:
+            self.foreman.tick()
+        finally:
+            store._db.set_trace_callback(None)
+        self.assertEqual(store.project(project["id"]), competing[0])
+        self.assertFalse(any(row["action"] in ("project_done", "tick_error")
+                             for row in store.global_history()))
+        self.foreman.tick()
+        self.assertEqual(store.project(project["id"])["state"], "done")
+
+    def test_a_resume_restores_an_acceptance_pointer_without_opening_issues(self):
+        project = self.start()
+        self.foreman.store.put_project(dict(project, acceptanceItem=None))
+        made = self.foreman.start_project(self.lead_fields(), self.plan("One", "Two"),
+                                          "amteshwar", "go.")
+        self.assertEqual(made["issues"], [])
+        self.assertEqual(made["project"]["acceptanceItem"], project["members"][-1])
+        self.assertEqual(list(self.github.issues), [(REPO, 200), (REPO, 201), (REPO, 202)])
+
+    def legacy_project(self):
+        approved = dict(self.lead_fields(), approval={"by": "amteshwar", "words": "go.", "at": AT})
+        for number in (200, 201):
+            self.github.add_issue(REPO, number)
+            self.foreman.intake(REPO, number)
+        return self.foreman.store.create_project(dict(
+            projects.new(approved, AT), members=[f"{REPO}#200", f"{REPO}#201"]))
+
+    def test_a_legacy_project_resumes_without_opening_issues(self):
+        project = self.legacy_project()
+        self.assertIsNone(project["acceptanceItem"])
+        before = dict(self.github.issues)
+        made = self.foreman.start_project(self.lead_fields(), self.plan("One", "Two"),
+                                          "amteshwar", "go.")
+        self.assertEqual(made["issues"], [])
+        self.assertEqual(made["project"]["members"], project["members"])
+        self.assertEqual(made["project"]["acceptanceItem"], project["members"][-1])
+        self.assertEqual(self.github.issues, before)
+
+    def test_a_full_tick_repairs_a_legacy_project_and_its_last_member_closes_it(self):
+        project = self.legacy_project()
+        self.foreman.tick()
+        stored = self.foreman.store.project(project["id"])
+        self.assertEqual((stored["state"], stored["pausedReason"]), ("active", None))
+        self.assertEqual(stored["acceptanceItem"], project["members"][-1])
+        self.assertFalse(any(row["action"] == "project_paused"
+                             for row in self.foreman.store.global_history()))
+        last = self.foreman.store.get(project["members"][-1])
+        self.foreman.store.put(dict(last, state="closed"))
+        self.foreman.tick()
+        self.assertEqual(self.foreman.store.project(project["id"])["state"], "done")
+
+    def test_a_protected_path_in_acceptance_explains_how_to_reword_it_and_opens_nothing(self):
+        for over in ({"title": "Fix AGENTS.md onboarding"},
+                     {"doneWhen": [{"claim": "AGENTS.md stays current", "command": "python3 check.py"}]}):
+            with self.subTest(over), self.assertRaisesRegex(
+                    ToolError, "acceptance issue.*rename the Project or reword the check.*No issue was opened"):
+                self.foreman.start_project(self.lead_fields(**over), self.plan("One"),
+                                           "amteshwar", "go.")
+            self.assertEqual((self.github.issues, self.foreman.store.projects()), ({}, []))
+
+    def test_a_project_without_product_issues_opens_nothing(self):
+        for issues in ([], None, "bad plan"):
+            with self.subTest(issues), self.assertRaisesRegex(ToolError, "add the product work before acceptance"):
+                self.foreman.start_project(self.lead_fields(), issues, "amteshwar", "go.")
+        self.assertEqual((self.github.issues, self.foreman.store.projects()), ({}, []))
 
 
 class StartProjectToolTest(unittest.TestCase):
@@ -479,6 +698,15 @@ class StartProjectToolTest(unittest.TestCase):
         self.assertEqual([e.message for e in
                           Draft202012Validator(self.tool.input_schema).iter_errors(self.lead_args())], [])
 
+    def test_the_tool_refuses_ten_issues_before_the_foreman(self):
+        from jsonschema import Draft202012Validator
+        args = self.lead_args(issues=[{"title": str(n), "body": FENCED} for n in range(10)])
+        errors = list(Draft202012Validator(self.tool.input_schema).iter_errors(args))
+        self.assertEqual([(list(e.path), e.validator) for e in errors], [(["issues"], "maxItems")])
+        with self.assertRaisesRegex(ToolError, "factory_start_project accepts at most 9 issues"):
+            self.tool.fn(args)
+        self.assertEqual((self.github.issues, self.foreman.store.projects()), ({}, []))
+
     def test_the_tool_refuses_unknown_or_missing_keys_with_the_key_list(self):
         for args in (self.lead_args(extra="no"), {k: v for k, v in self.lead_args().items() if k != "ownerWords"}):
             with self.assertRaisesRegex(ToolError, "factory_start_project requires exactly the keys "):
@@ -488,7 +716,7 @@ class StartProjectToolTest(unittest.TestCase):
     def test_the_tool_starts_the_project_and_passes_owner_words_through(self):
         made = self.tool.fn(self.lead_args(issues=[{"title": "One", "body": FENCED},
                                                    {"title": "Two", "body": FENCED, "after": []}]))
-        self.assertEqual(made["project"]["members"], [f"{REPO}#200", f"{REPO}#201"])
+        self.assertEqual(made["project"]["members"], [f"{REPO}#200", f"{REPO}#201", f"{REPO}#202"])
         self.assertEqual(made["project"]["approval"]["words"], "go.")
         self.assertEqual(self.foreman.store.get(f"{REPO}#201")["projectId"], "self-maintaining-apis")
 
