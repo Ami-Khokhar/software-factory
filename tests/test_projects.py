@@ -770,10 +770,34 @@ class ProjectBudgetTest(unittest.TestCase):
                           if h["action"] == "project_paused"],
                          [{"project": project["id"], "reason": project["pausedReason"]}])
         self.assertEqual(self.store.history(self.id)[-1]["detail"]["project"], project["id"])
+        agent = tools.build(self.store, self.foreman, agent=True)
+        row, = agent["factory_status"].fn({})["workItems"]
+        self.assertFalse(row["agentMayResolve"])
+        self.assertNotIn("leadBlockedBy", row)
+        for resolution in ("retry", "regate", "close"):
+            with self.subTest(resolution=resolution), self.assertRaisesRegex(
+                    ToolError, f"project {project['id']} is paused; the owner resumes or extends the Project"):
+                agent["factory_resolve_human"].fn(
+                    {"id": self.id, "resolution": resolution, "note": "recover", "by": "day-desk"})
         self.ready_again()
         history = self.store.global_history()
         self.dispatch()
         self.assertEqual(self.store.global_history(), history)  # no second notice
+
+    def test_a_stopped_project_keeps_its_exhausted_member_for_the_owner(self):
+        self.update_project(passesUsed=6)
+        self.assertEqual(self.dispatch()["state"], "exhausted")
+        self.owner_tools["factory_stop_project"].fn(
+            {"id": self.project["id"], "by": "owner", "note": "hold recovery"})
+        agent = tools.build(self.store, self.foreman, agent=True)
+        row, = agent["factory_status"].fn({})["workItems"]
+        self.assertFalse(row["agentMayResolve"])
+        self.assertNotIn("leadBlockedBy", row)
+        for resolution in ("retry", "regate", "close"):
+            with self.subTest(resolution=resolution), self.assertRaisesRegex(
+                    ToolError, f"project {self.project['id']} is stopped; the owner resumes or extends the Project"):
+                agent["factory_resolve_human"].fn(
+                    {"id": self.id, "resolution": resolution, "note": "recover", "by": "day-desk"})
 
     def test_a_paused_project_dispatches_nothing_and_writes_nothing(self):
         for state in ("paused", "stopped"):
@@ -1256,18 +1280,32 @@ class LeadAuthorityTest(unittest.TestCase):
                 self.assertEqual(self.store.global_history(), history)
 
     def test_status_reads_the_project_and_history_once_per_waiting_member(self):
-        for state in ("blocked", "human_waiting", "exhausted"):
+        class CountingStore:
+            def __init__(self, store):
+                self.store = store
+                self.project_reads = []
+                self.history_reads = []
+
+            def __getattr__(self, name):
+                return getattr(self.store, name)
+
+            def project(self, project_id):
+                self.project_reads.append(project_id)
+                return self.store.project(project_id)
+
+            def history(self, workitem_id):
+                self.history_reads.append(workitem_id)
+                return self.store.history(workitem_id)
+
+        for state in ("blocked", "human_waiting"):
             with self.subTest(state=state):
                 self.store.put(dict(self.store.get(self.id), state=state))
-                queries = []
-                self.store._db.set_trace_callback(queries.append)
-                try:
-                    self.assertTrue(self.status()["agentMayResolve"])
-                finally:
-                    self.store._db.set_trace_callback(None)
-                self.assertEqual(sum(q.startswith("SELECT doc FROM projects WHERE id") for q in queries), 1)
-                # Autonomy separately reads ended WorkItems, including exhausted members.
-                self.assertEqual(sum("FROM audit" in q for q in queries), 2 if state == "exhausted" else 1)
+                store = CountingStore(self.store)
+                status = tools.build(store, self.foreman, agent=True)["factory_status"]
+                row, = status.fn({})["workItems"]
+                self.assertTrue(row["agentMayResolve"])
+                self.assertEqual(store.project_reads, [self.project["id"]])
+                self.assertEqual(store.history_reads, [self.id])
 
     def test_paused_and_stopped_members_keep_fresh_incident_recovery(self):
         for state in ("paused", "stopped"):

@@ -63,10 +63,12 @@ def build(store, foreman, agent=False):
             lead_ok, reason = lead_may_act(foreman, wi, "close", project, history)
             if project and project["state"] != "done":
                 row["agentMayResolve"] = agent_may_resolve(wi, history) or lead_ok
-                if project["state"] == "active":
-                    if wi["state"] == "exhausted" and len(store.workorders(wi["id"])) >= projects.MAX_MEMBER_PASSES:
-                        row["agentMayResolve"] = False
+                if wi["state"] == "exhausted":
+                    member_passes = len(store.workorders(wi["id"]))
+                    row["agentMayResolve"] = bool(lead_ok and member_passes < projects.MAX_MEMBER_PASSES)
+                    if member_passes >= projects.MAX_MEMBER_PASSES:
                         reason = reason or f"member used {projects.MAX_MEMBER_PASSES} passes"
+                if project["state"] == "active":
                     row["leadBlockedBy"] = reason
         question = wi.get("question") or {}
         if (wi["state"] in ("dispatching", "implementing") and question.get("text")
