@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://factory.local/schemas/project.schema.json",
+  "title": "Project",
+  "description": "One named goal with a budget of worker passes (ADR-0099). The Lead writes the blueprint before any member runs, so a worker does not itself have to plan. Nothing creates a Project yet (WO-02 will).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "repo",
+    "title",
+    "goal",
+    "blueprint",
+    "doneWhen",
+    "budget",
+    "passesUsed",
+    "state",
+    "pausedReason",
+    "members",
+    "acceptanceItem",
+    "approval",
+    "stateVersion",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "factory.project/v1" },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{2,40}$" },
+    "repo": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+    "title": {
+      "type": "string", "minLength": 1, "maxLength": 100
+    },
+    "goal": {
+      "type": "string", "minLength": 1, "maxLength": 2000,
+      "description": "What done means, in one line the owner said."
+    },
+    "blueprint": {
+      "type": "string", "minLength": 1, "maxLength": 20000,
+      "description": "The Lead's design in Markdown: the modules, files, function names, data shapes and the order of work."
+    },
+    "doneWhen": {
+      "type": "array", "minItems": 1, "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["claim", "command"],
+        "properties": {
+          "claim": { "type": "string", "minLength": 1, "maxLength": 300 },
+          "command": { "type": "string", "minLength": 1, "maxLength": 500 }
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passes", "deadline"],
+      "properties": {
+        "passes": { "type": "integer", "minimum": 1, "maximum": 60 },
+        "deadline": { "type": "string", "format": "date-time" }
+      }
+    },
+    "passesUsed": { "type": "integer", "minimum": 0 },
+    "state": { "enum": ["active", "paused", "done", "stopped"] },
+    "pausedReason": {
+      "type": ["string", "null"],
+      "description": "Set only while state is paused: why, so the owner's notice can say it."
+    },
+    "members": {
+      "type": "array", "uniqueItems": true,
+      "items": { "type": "string" },
+      "description": "The ids of this Project's WorkItems."
+    },
+    "acceptanceItem": {
+      "type": ["string", "null"],
+      "description": "The acceptance WorkItem id; the Project ends when its issue merges (WO-07)."
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["by", "words", "at"],
+      "properties": {
+        "by": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "words": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "stateVersion": {
+      "type": "integer", "minimum": 0,
+      "description": "Optimistic-concurrency version; the store writes version + 1."
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

@@ -15,7 +15,8 @@ AGENT_TOOLS = frozenset({"factory_runtime_status", "factory_status", "factory_re
                          "factory_answer_question",
                          "factory_use_allowance", "factory_queue_retry", "factory_merge_setup_pr",
                          "factory_docker_status", "factory_docker_control",
-                         "factory_set_worker", "factory_register_worker", "factory_set_timeout"})
+                         "factory_set_worker", "factory_register_worker", "factory_set_timeout",
+                         "factory_project_status"})
 WAITING = ("human_waiting", "blocked")
 
 
@@ -85,6 +86,15 @@ def build(store, foreman, agent=False):
                 "passes": len(store.workorders(workitem_id)), "history": history,
                 "allowanceUse": last_allowance_use(history)}
 
+    def project_status(args):
+        project_id = args.get("id")
+        if project_id is None:
+            return {"projects": store.projects()}
+        project = store.project(project_id)
+        if project is None:
+            raise ToolError(f"No project {project_id}")
+        return {"project": project}
+
     def set_timeout(args):
         if set(args) != {"id", "wallMs", "by"}:
             raise ToolError("factory_set_timeout requires exactly id, wallMs and by")
@@ -146,6 +156,13 @@ def build(store, foreman, agent=False):
              {"type": "object", "properties": {"id": {"type": "string", "description": "owner/repo#issue"}},
               "additionalProperties": False},
              "read", status),
+        Tool("factory_project_status",
+             "Read one Project, or all of them: goal, budget, passes used, members, state and "
+             "acceptance.",
+             {"type": "object", "properties": {"id": {"type": "string", "minLength": 1,
+                                                     "description": "the Project id"}},
+              "additionalProperties": False},
+             "read", project_status),
         Tool("factory_repo_check",
              "Check what a GitHub repo needs before the factory can work on it: the factory's token "
              "can push to it, pr-gatekeeper is installed with a verify command, and its AGENTS.md "

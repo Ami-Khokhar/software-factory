@@ -79,6 +79,11 @@ CREATE TABLE IF NOT EXISTS worker_health (
   valid_until TEXT NOT NULL,
   report TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY,
+  state_version INTEGER NOT NULL,
+  doc TEXT NOT NULL
+);
 """
 # Migration 1: WorkItem fields the contract no longer has (#27).
 REMOVED_FIELDS = ("parentGoalId", "baseSha", "provider", "sessionHandle", "sessionNative", "sessionUrl")
@@ -442,6 +447,48 @@ class Store:
                                    "FROM worker_health WHERE worker_id = ?", (worker_id,)).fetchone()
         return (dict(zip(("worker", "binding", "status", "checkedAt", "validUntil", "report"), row))
                 if row else None)
+
+    def create_project(self, doc):
+        """Store one new Project (ADR-0099) as its whole document with stateVersion 1."""
+        stored = dict(doc, stateVersion=1)
+        body = json.dumps(stored, sort_keys=True)
+        with self._lock:
+            try:
+                self._db.execute("INSERT INTO projects VALUES (?, 1, ?)", (doc["id"], body))
+            except sqlite3.IntegrityError:
+                raise Conflict(f"project {doc['id']} exists") from None
+        return stored
+
+    def project(self, project_id):
+        with self._lock:
+            row = self._db.execute("SELECT doc FROM projects WHERE id = ?", (project_id,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def projects(self):
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT doc FROM projects ORDER BY json_extract(doc, '$.createdAt')").fetchall()
+        return [json.loads(row[0]) for row in rows]
+
+    def put_project(self, doc):
+        """Write `doc` if its stateVersion is current. Returns the stored doc: version + 1."""
+        read_version = doc["stateVersion"]
+        stored = dict(doc, stateVersion=read_version + 1, updatedAt=now())
+        body = json.dumps(stored, sort_keys=True)
+        with self._lock:
+            cursor = self._db.execute(
+                "UPDATE projects SET state_version = ?, doc = ? WHERE id = ? AND state_version = ?",
+                (read_version + 1, body, doc["id"], read_version))
+            if cursor.rowcount != 1:
+                raise Conflict(f"project {doc['id']} changed since version {read_version}")
+        return stored
+
+    def project_of(self, workitem_id):
+        """The id of the first Project that names `workitem_id` a member, or None."""
+        for doc in self.projects():
+            if workitem_id in (doc.get("members") or []):
+                return doc["id"]
+        return None
 
     @contextmanager
     def _transaction(self):

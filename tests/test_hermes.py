@@ -38,6 +38,7 @@ class ProfileTest(unittest.TestCase):
             self.assertFalse(listing["annotations"]["readOnlyHint"])
             self.assertFalse(listing["inputSchema"]["additionalProperties"])
         self.assertTrue(driving["factory_runtime_status"].listing()["annotations"]["readOnlyHint"])
+        self.assertTrue(driving["factory_project_status"].listing()["annotations"]["readOnlyHint"])
         real = set(tools.build(None, None))
         self.assertEqual(set(OWNER["tools"]["include"]), real - tools.AGENT_TOOLS - {"factory_tick", "factory_intake"})
 

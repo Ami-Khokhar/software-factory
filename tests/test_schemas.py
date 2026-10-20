@@ -11,6 +11,7 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
+from factory_mcp import projects
 from factory_mcp.documents import check_result
 from factory_mcp.verdict import verdicts
 from tests.fakes import marker_comment
@@ -127,6 +128,21 @@ class SchemaTest(unittest.TestCase):
         self.assertEqual(len(found), 3)
         for verdict in found:
             self.assertEqual([e.message for e in validator.iter_errors(verdict)], [])
+
+    def test_a_new_project_matches_the_project_schema(self):
+        """The stored Project document (`projects.new`) is exactly what schemas/project.schema.json
+        accepts."""
+        validator = Draft202012Validator(schema("project"))
+        project = projects.new({"id": "self-maintaining-apis", "repo": "acme/demo",
+                                "title": "Self-maintaining APIs", "goal": "Build self-maintaining APIs.",
+                                "blueprint": "The modules.",
+                                "doneWhen": [{"claim": "a changed API spec opens a migration PR",
+                                              "command": "go test ./..."}],
+                                "budget": {"passes": 6, "deadline": "2026-11-01T00:00:00Z"},
+                                "approval": {"by": "owner", "words": "go.",
+                                             "at": "2026-10-20T00:00:00Z"}},
+                               "2026-10-20T00:00:00Z")
+        self.assertEqual([e.message for e in validator.iter_errors(project)], [])
     def test_the_workorder_constraints_migrate_to_advisory_lines(self):
         """ADR-0070's migration: a WorkOrder written before the advisory flag — constraints with no
         maxChangedLinesAdvisory — still validates, and the consumers read it as advisory; the flag
