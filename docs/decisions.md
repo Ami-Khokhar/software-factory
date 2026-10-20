@@ -2520,6 +2520,10 @@ output lines in `docs/acceptance/<id>.md`. Failed commands require product fixes
 tests and another run. Checks cannot be changed to pass or mocked. `Paths: *` permits product
 fixes and the evidence file, while the existing protected-path guards still apply. The Project's
 `acceptanceItem` names the last opened WorkItem. An identical start resumes without opening issues.
+For a Project stored before the acceptance issue existed, a null `acceptanceItem` with members
+adopts the last existing member on resume or the next full tick. No new issue opens and members
+stay unchanged. That member's closure completes the legacy Project, without retroactively adding
+end-to-end checks. An interrupted newer start with a null pointer is repaired the same way.
 At the end of a full tick, `_advance_projects` changes an active Project to `done` when acceptance
 is `closed`, clearing `pausedReason`. A missing acceptance item or one ended `cancelled` or
 `exhausted` pauses the Project with "the acceptance issue ended without a merge". Otherwise a
@@ -2527,6 +2531,7 @@ passed deadline pauses it with "the deadline <deadline> passed". Closure takes p
 the deadline. Writes use `put_project`, conflicts wait for another tick, and errors are logged
 per Project. Non-active Projects and single-WorkItem ticks do not advance Projects.
 
-**Consequence.** Done means the product's own end-to-end command passed and the gate reviewed
-the evidence. The factory records `project_done` with the members and passes used, or
+**Consequence.** For newly started Projects, done means the product's own end-to-end command
+passed and the gate reviewed the evidence. Legacy Projects retain their existing final member
+as the completion check. The factory records `project_done` with the members and passes used, or
 `project_paused` with its reason. WorkItem transitions and the gate's merge authority stay the same.

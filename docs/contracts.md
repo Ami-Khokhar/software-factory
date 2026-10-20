@@ -423,15 +423,19 @@ WorkItems in the `projects` table as its whole JSON document, with the same opti
 `stateVersion`. `schemas/project.schema.json` is the contract; `factory_mcp/projects.py` holds the
 limits and the read tool `factory_project_status` is in `tools.AGENT_TOOLS`. The owner's one
 quoted yes (`ownerWords`) starts one, with `factory_start_project`, also in `tools.AGENT_TOOLS`:
-it stores the record, opens the plan's issues in order through `factory_start_plan`'s checks and
-makes each opened WorkItem a member with its `projectId` set (ADR-0100). Re-running the same
-request — the same resolved repo, title, goal, blueprint, doneWhen checks, budget and plan —
+it opens at most 9 plan issues in order through `factory_start_plan`'s checks, then one acceptance
+issue last, depending on every plan issue (ADR-0105). It stores the record, makes each opened
+WorkItem a member with its `projectId` set (ADR-0100), and sets `acceptanceItem` to the last member.
+Re-running the same request — the same resolved repo, title, goal, blueprint, doneWhen checks,
+budget and plan —
 resumes the joins that died, answers the stored record and adds no second `project_started`
 audit row; any other call for a taken id is refused: creating a second with the same id
-conflicts. The states other than
-`active`, and the fields `passesUsed` and `acceptanceItem`, have no writer yet: WO-03 to WO-07
-write them. The store's Project records ship ahead of their first caller (WO-02): the
-work order adds the record before anything starts a Project. The keys:
+conflicts. At the end of a full tick, `_advance_projects` writes `state` and `pausedReason`:
+a closed acceptance WorkItem makes the Project `done` and clears the reason. A missing,
+cancelled or exhausted acceptance item, or a passed deadline, makes it `paused` with a reason
+(ADR-0105). A legacy null `acceptanceItem` with members adopts the last member on resume or
+advancement, without opening another issue. `passesUsed` is still unwritten by this branch.
+The keys:
 
 | Key | What it means |
 |---|---|
@@ -444,7 +448,7 @@ work order adds the record before anything starts a Project. The keys:
 | `doneWhen` | 1 to 5 `{claim, command}` checks; the acceptance issue runs them (WO-07). |
 | `budget` | `{passes, deadline}`: the whole Project's budget of worker passes, 1 to 60 within the deadline. The owner extends past 60 (WO-03). Passes are charged per worker pass (WO-03). |
 | `passesUsed` | The passes charged so far. Starts at 0. |
-| `state` | `active`, `paused`, `done` or `stopped` (WO-02 writes `active`). |
+| `state` | `active`, `paused`, `done` or `stopped`. Start writes `active`; full ticks write `done` or `paused` (ADR-0105). |
 | `pausedReason` | Set only while `paused`: why, so the owner's notice can say it. |
 | `members` | The WorkItem ids of the Project, unique. The Lead adds them as it starts issues (WO-02); a split's replacements inherit the Project (WO-04). |
 | `acceptanceItem` | The one member that carries the final acceptance checks; the Project ends when its issue merges (WO-07). |
