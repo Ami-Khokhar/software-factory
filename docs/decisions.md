@@ -2522,6 +2522,27 @@ same remaining pass. An extension resumes held members, but an exhausted member 
 retry and cannot bypass its lifetime cap. A pass already charged is not refunded if saving or
 submitting the WorkOrder fails. Recovery authority and completion detection remain later work.
 
+## ADR-0103 — A timed-out member gets one longer run before it blocks
+
+**Context.** #302, #307 and #13 each blocked after 20–25 minutes of coding. Worker failover
+(ADR-0081) and salvaged partial work (ADR-0086) do not extend the time available to finish.
+ADR-0089 already bounds a per-item timeout override at 60 minutes.
+
+**Decision.** After worker failover declines to defer a block, an active Project member whose
+latest failure is timeout-class gets one 60-minute run automatically. Timeout-class means a
+`harness timeout` diagnosis or a reason matching `OUT_OF_TIME`. Its effective wall time must
+be below 3600000 ms and the relay must accept that budget. The prepared failed attempt keeps
+its attempts list and becomes `ready`, or `changes_requested` for a fix, with
+`wallMsOverride=3600000` and its active order, provider task, remote verification, recovery and
+block cleared. The write uses `auto_longer_run` with the failure's reason, diagnosis, worker
+and cause when present, plus `was` and `now`. Any prior `auto_longer_run` in the member's
+lifetime history forbids another, even after a retry or cleared override. Attempts are never
+reset by this recovery, and dispatch still enforces the Project budget and member lifetime cap.
+
+**Consequence.** No person and no model is needed for the first timeout recovery. A subsequent
+failure blocks normally. Non-members do not change, and a relay cap below 60 minutes, an
+already long enough run or a non-timeout failure leaves the ordinary block in place.
+
 ## ADR-0104 — A worker follows the Lead's blueprint
 
 **Context.** Issue #13 used 4 passes of 25 minutes and changed no file. The worker spent its

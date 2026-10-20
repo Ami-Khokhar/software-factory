@@ -64,6 +64,7 @@ RELAY_RETRIES_MAX = 2
 # This is the worker-health signal recovery acts on; whether the cause is evidence-backed is the
 # attempt's business, never this one (ADR-0081).
 OUT_OF_TIME = re.compile(r"task timed_out|the harness timed out")
+LONGER_RUN_MS = 3600000  # the longest per-item run ADR-0089 allows
 DEFAULT_REVIEWER = "deepseek-v4.1-flash"  # pr-gatekeeper's reviewer_model when the key is absent
 WIP_MOVES_MAX = 2  # how far a salvage wip may move forward before timeouts stop costing pushes
 PARTIAL_WORK = ("A worker ran out of time. Its unfinished work is the commit you start from. "
@@ -1440,10 +1441,29 @@ class Foreman:
                 return True
         return False
 
+    def _longer_run(self, wi, reason, diagnosis):
+        """Give an active Project member one longer run before a timeout block (ADR-0103).
+        `wi` is the failed attempt's prepared record, with its attempts and next order state."""
+        project = self.store.project(wi["projectId"]) if wi.get("projectId") else None
+        if not project or project["state"] != "active":
+            return None
+        if not (diagnosis.get("cause") == "harness timeout" or OUT_OF_TIME.search(reason or "")):
+            return None
+        if any(h["action"] == "auto_longer_run" for h in self.store.history(wi["id"])):
+            return None
+        if (wi.get("wallMsOverride") or self.config.wall_ms) >= LONGER_RUN_MS:
+            return None
+        try:
+            self._check_timeout(LONGER_RUN_MS)
+        except RelayLimitError:
+            return None
+        return dict(wi, wallMsOverride=LONGER_RUN_MS, blockedOn=None)
+
     def fail(self, wi, order, reason, diagnosis=None):
         """Record the attempt; two failed attempts block the WorkItem with the evidence, unless the
         failure ran out of the clock and routing still has a worker this WorkItem never tried: that
-        recovery attempt is granted before the block (ADR-0081, _defer_block). The diagnosis
+        recovery attempt is granted before the block (ADR-0081, _defer_block). An active Project
+        member then gets one longer run for a timeout (ADR-0103, _longer_run). The diagnosis
         (diagnostics.diagnose) rides with the reason: an evidence-backed cause with its sanitized
         bounded context, nothing when a cause stays unknown. A diagnosis that names the environment
         (diagnostics.environment_fault) pauses the WorkItem on the first attempt instead: a second
@@ -1468,6 +1488,10 @@ class Foreman:
             if deferred is not None:
                 new = deferred
             else:
+                longer = self._longer_run(new, reason, diagnosis)
+                if longer is not None:
+                    return self._write(wi, longer, "auto_longer_run", **detail,
+                                       was=wi.get("wallMsOverride"), now=LONGER_RUN_MS)
                 new.update(state="blocked",
                            blockedOn=f"{len(attempts)} worker attempts at the {order['kind']} WorkOrder failed. "
                                      "Fix the cause named in attempts, then call factory_resolve_human.")
