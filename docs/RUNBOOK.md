@@ -321,7 +321,9 @@ Day Desk steers worker and timeout decisions within the same allowlist and crede
   are refused. Setting it only stores the value and an audit event: it never retries, dispatches,
   resets passes, or grants an allowance. The agent token exposes this write tool too.
   For an approved longer run, call it while the item is blocked, read back
-  `factory_status.workItem.wallMsOverride`, then separately authorize the retry. Verify the next
+  `factory_status.workItem.wallMsOverride`, then answer it with a retry. Day Desk sets it from the
+  evidence it already has (a verify that runs long, a pass that timed out with work in progress)
+  and reports the value; it needs no separate approval. Verify the next
   stored WorkOrder's `budget.wallMs`, relay task's `timeoutMs`, and actual Result phases before
   calling the experiment successful. A global env change is unnecessary. Old WorkOrders retain
   their frozen budget. The runner still reserves 60 seconds and subtracts checkout-lock wait time,

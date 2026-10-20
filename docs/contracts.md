@@ -347,7 +347,10 @@ must hold before the controller is allowed to write:
    rollback-journal mode, so a restart after an interruption finds the last phase and a copy
    of `factory.sqlite3` alone is the whole store.
 8. **A replacement is planned and validated before it writes.** `factory_replace_issue` (ADR-0059)
-   reads the whole dependency graph of the repo's WorkItems and computes every edge change before
+   runs without the owner when it is a split: the replacements together carry the original
+   issue's `## Acceptance` bullets, with every replacement carrying at least one (ADR-0097). Any
+   other replacement changes what the work is and carries the owner's approval.
+   The call reads the whole dependency graph of the repo's WorkItems and computes every edge change before
    anything is written: the original must be waiting on recovery with no live worker pass (an
    active WorkOrder, a live relay task or a state that would dispatch one; failed attempts with
    nothing running on it are history, not a live worker), a dependent

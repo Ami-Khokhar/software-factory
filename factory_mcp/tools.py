@@ -394,9 +394,12 @@ def build(store, foreman, agent=False):
               "properties": {"by": {"type": "string", "minLength": 1}}}, "write",
              lambda args: worker_ops.reload(store, foreman.relay, args["by"], agent=agent)),
         Tool("factory_replace_issue",
-             "The owner's replacement of a WorkItem that is waiting on recovery (human_waiting or "
+             "Replace a WorkItem that is waiting on recovery (human_waiting or "
              "blocked) with ordered "
-             "replacement issues of the same repo: the first inherits the original's "
+             "replacement issues of the same repo. A split runs without the owner when the "
+             "replacements together carry the original issue's '## Acceptance' bullets, each "
+             "replacement carrying at least one; any other replacement changes what the work is and "
+             "is the owner's decision. The first inherits the original's "
              "upstream dependencies, each next one waits for the one before it, and every direct "
              "dependent of the original now waits for the last replacement, keeping its other "
              "dependencies. The whole graph is planned and validated before anything is written: a "
@@ -426,8 +429,8 @@ def build(store, foreman, agent=False):
                                                                   "body": {"type": "string", "minLength": 1}}}]}},
                              "by": {"type": "string", "minLength": 1, "description": "who asked"},
                              "note": {"type": "string", "minLength": 1, "description":
-                                      "the owner's approval: Day Desk quotes the owner's words in chat "
-                                      "approving this replacement, and the owner's own call says what "
+                                      "why: Day Desk says why for a split, and quotes the owner's words "
+                                      "in chat approving a scope change; the owner's own call says what "
                                       "they approved"},
                              "requestId": {"type": "string", "minLength": 1, "description":
                                            "a stable ID for this replacement request: every repeat of "
