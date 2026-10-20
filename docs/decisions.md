@@ -2522,6 +2522,31 @@ same remaining pass. An extension resumes held members, but an exhausted member 
 retry and cannot bypass its lifetime cap. A pass already charged is not refunded if saving or
 submitting the WorkOrder fails. Recovery authority and completion detection remain later work.
 
+## ADR-0102 — The Lead recovers inside its Project
+
+**Context.** A Project shares a pass budget, but the one-answer rule and per-item recovery
+budget can still stop Day Desk from recovering a member with passes left in its Project.
+
+**Decision.** For members of an active Project only, this supersedes the one-answer rule
+(ADR-0030, ADR-0081) and Day Desk's per-item budget check in `resolve_human` (ADR-0035).
+The Lead may retry, regate or close repeatedly without spending `incident.agentAnswered`.
+A retry cannot exceed the member's lifetime cap of 8 passes. An exhausted member may recover
+once the owner extends the Project, unless its recorded lifetime WorkOrders reach the member
+pass cap. At that cap, Day Desk may still close or regate a blocked or human_waiting member,
+but may not retry, close or regate an exhausted member without the owner.
+Dispatch still enforces the shared Project budget (ADR-0101).
+
+Safety stops (ADR-0007) and environment faults (ADR-0051) still require the owner. Merges and
+the owner's tools do not change. Non-members retain the existing one-answer and budget rules.
+Split replacements join the original's Project before the original is cancelled. They stay
+`factory:proposed` until approved. For an acceptance-preserving split in an active Project,
+Day Desk approves each replacement with `factory_approve_issue`.
+
+**Consequence.** The Lead recovers inside the approved Project without asking again for each
+incident. `human_resolved` records the Project, and status reports `agentMayResolve` and
+`leadBlockedBy` for waiting or exhausted members. A member at its pass cap must be split or
+left to the owner. Other recovery tools keep their existing checks.
+
 ## ADR-0103 — A timed-out member gets one longer run before it blocks
 
 **Context.** #302, #307 and #13 each blocked after 20–25 minutes of coding. Worker failover

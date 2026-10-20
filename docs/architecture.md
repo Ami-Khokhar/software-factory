@@ -41,8 +41,9 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 - **pr-gatekeeper** reviews every PR and merges it on MERGE. factory-mcp has no merge tool
   (ADR-0004).
 - **Day Desk** is the owner's front door in Telegram (ADR-0013), and it drives the factory: with
-  `FACTORY_AGENT_TOKEN` it plans, starts issues and answers each escalation once, and factory-mcp
-  lists only `tools.AGENT_TOOLS` for that token (ADR-0030). Within an owner-approved plan
+  `FACTORY_AGENT_TOKEN` it plans, starts issues and answers each escalation once. Active Project
+  members may be answered repeatedly (ADR-0102). factory-mcp lists only `tools.AGENT_TOOLS` for
+  that token (ADR-0030). Within an owner-approved plan
   allowance (ADR-0069, scoped membership per ADR-0075) it retries on evidence and replaces with
   open issues the allowance's approved membership covers, counted, without asking once per
   recovery; safety stops and confirmed environment faults still need a person. Its bounded Docker tools
@@ -198,12 +199,13 @@ The states are the enum in `schemas/workitem.schema.json`.
 | `ready`, `changes_requested` (a member) | the Project's budget is spent | `exhausted`, and the Project is `paused` |
 | `ready`, `changes_requested` (a member) | the Project is `paused` or `stopped` | unchanged, with no dispatch or audit write |
 | `ready`, `changes_requested` (a member) | 8 WorkOrders were dispatched over the member's lifetime | `exhausted`; the Lead splits it or the owner decides |
-| `human_waiting`, `blocked` | `factory_resolve_human`: retry, regate or close | `ready` or `changes_requested`, `reviewing`, or `cancelled`; a regate with no gate run going and no new verdict edits the PR body's `<!-- factory regate n -->` line, which starts a gate run (ADR-0034) |
-| `exhausted` | the owner's `factory_resolve_human`: retry or close; Day Desk is refused, unless `ownerAsked` marks what the owner asked for in chat (ADR-0043, ADR-0046) | `ready` or `changes_requested` with a fresh budget of passes for non-members, or `cancelled`; a member keeps its lifetime cap and Project budget (ADR-0035, ADR-0101) |
+| `human_waiting`, `blocked` | `factory_resolve_human`: retry, regate or close; for a member of an active Project, Day Desk answers as often as the budget allows, except a safety stop or environment fault (ADR-0102) | `ready` or `changes_requested`, `reviewing`, or `cancelled`; a regate with no gate run going and no new verdict edits the PR body's `<!-- factory regate n -->` line, which starts a gate run (ADR-0034) |
+| `exhausted` | the owner's `factory_resolve_human`: retry or close; for a member of an active Project, Day Desk answers as often as the budget allows, except a safety stop or environment fault, and cannot retry, close or regate a member exhausted by its lifetime pass cap (ADR-0102); otherwise Day Desk needs `ownerAsked` (ADR-0043, ADR-0046) | `ready` or `changes_requested` with a fresh budget of passes for non-members, or `cancelled`; a member keeps its lifetime cap and Project budget (ADR-0035, ADR-0101) |
 
-`closed` and `cancelled` are terminal, and so is `exhausted` until the owner retries it.
-`human_waiting` is not: it waits for a decision `factory_resolve_human` makes, Day Desk's once per
-incident or the owner's (ADR-0030, ADR-0097).
+`closed` and `cancelled` are terminal. `exhausted` waits for the owner's retry or the Lead's
+recovery of an active Project member within its lifetime cap (ADR-0102). `human_waiting` waits
+for a decision `factory_resolve_human` makes, Day Desk's once per incident or the owner's
+(ADR-0030, ADR-0097), with repeated answers for active Project members (ADR-0102).
 
 ## The worker contract
 
@@ -278,7 +280,7 @@ incident or the owner's (ADR-0030, ADR-0097).
 | The original retires before the replacement can run: its unmerged PR is closed, never merged, and a merged or unverifiable PR stops the run with the barrier held; a replay closes nothing twice (ADR-0066) | `Foreman._retire_original`, `Foreman.replace_issue` | `test_recovery_creation`: `test_the_original_pr_is_closed_before_the_issue_and_is_never_merged`, `test_a_merged_original_pr_stops_before_anything_can_run`, `test_an_unverifiable_original_pr_stops_before_activation`, `test_a_lost_pr_close_replays_and_closes_nothing_twice` |
 | An issue starts only after each `Depends on #n` issue merged | `Foreman._wait_for` | `test_plan`: `test_a_dependent_waits_while_its_dependency_is_open_and_starts_once_it_merged`, `test_a_dependency_that_ends_without_a_merge_sends_the_dependent_to_a_person` |
 | Dependencies change only before any worker pass, in one repo, without a cycle or an ended issue; a stranded `human_waiting` one may change too | `Foreman.set_dependencies` | `test_dependencies`: `test_a_workitem_no_worker_has_touched_may_change_and_any_other_may_not`, `test_a_human_waiting_workitem_with_no_pass_may_change_its_order`, `test_a_dependency_must_be_an_open_issue_of_the_same_repo_that_has_not_ended`, `test_a_change_that_would_make_a_cycle_is_refused` |
-| An escalation is an incident answered once; only a material change re-arms it, a dependency that resumed clears it, and a tick alone never re-arms it (ADR-0081) | `Foreman._write`, `Foreman._recheck_dependency`, `foreman.agent_may_resolve` | `test_autonomous_recovery`: `test_a_material_change_re_arms_the_incident_once_and_an_unchanged_one_never_does`, `test_an_unchanged_dependency_never_re_arms_and_a_changed_one_re_arms_once`, `test_a_dependency_that_comes_back_resumes_the_workitem_without_a_person`, `test_a_human_verdict_stays_for_the_owner_across_ticks_and_recoveries`; `test_ops`: `test_an_owner_asked_close_answers_a_workitem_day_desk_already_answered` |
+| An escalation is an incident answered once; a member of an active Project is answered as often as the budget allows, except a safety stop, an environment fault and the 8-pass cap; only a material change re-arms a non-member incident, a dependency that resumed clears it, and a tick alone never re-arms it (ADR-0081) | `Foreman._write`, `Foreman._recheck_dependency`, `foreman.agent_may_resolve` | `test_autonomous_recovery`: `test_a_material_change_re_arms_the_incident_once_and_an_unchanged_one_never_does`, `test_an_unchanged_dependency_never_re_arms_and_a_changed_one_re_arms_once`, `test_a_dependency_that_comes_back_resumes_the_workitem_without_a_person`, `test_a_human_verdict_stays_for_the_owner_across_ticks_and_recoveries`; `test_ops`: `test_an_owner_asked_close_answers_a_workitem_day_desk_already_answered` |
 | The harness never touches the host | `worker/runner.py` | `test_worker_runner`: `test_the_harness_gets_a_copy_and_never_the_checkout`, `test_hooks_and_filters_the_harness_plants_never_run_on_the_host` |
 | A patch for a remote-verify repo reaches the WorkItem's branch only after its `factory-verify` run passed | `Foreman._remote_verify` | `test_remote_verify`: `test_a_pass_deletes_the_scratch_branch_then_pushes_the_branch_and_opens_the_pr`, `test_a_failure_is_an_attempt_with_the_log_tail_and_the_next_order_carries_it` |
 | Passes of one repo take its checkout in turns, up to `FACTORY_PASSES_PER_REPO` at once | `worker/runner.py` `checkout_lock`, `Foreman.dispatch` | `test_worker_runner`: `test_a_runner_waits_for_the_checkout_while_another_pass_holds_it`; `test_safety`: `test_passes_of_one_repo_run_at_once_up_to_the_limit` |
@@ -301,7 +303,8 @@ incident or the owner's (ADR-0030, ADR-0097).
 - **Attempt**: a pass that failed. Two in a row block the WorkItem, unless a timeout-class failure
   still has an untried worker the policy would choose: that one recovery attempt runs first
   (ADR-0081).
-- **Blocked**: stopped after the failed attempts of its budget, until a person answers.
+- **Blocked**: stopped after the failed attempts of its budget, until a person answers or the
+  Lead recovers an active Project member (ADR-0102).
 - **Exhausted**: stopped because the budget of passes ran out; only the owner's retry, which buys
   a fresh budget, starts it again for non-members. Members need remaining Project budget and
   fewer than 8 lifetime passes. The owner extends or resumes a Project with `factory extend`

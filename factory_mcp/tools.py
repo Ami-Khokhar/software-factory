@@ -1,8 +1,8 @@
 """The factory tools that Day Desk (Hermes) and the factory CLI call. Each one declares its effect."""
 from datetime import datetime, timezone
 
-from . import docker, lessons, metrics, repos, runtime, worker_ops
-from .foreman import MAX_ALLOWANCE, MAX_PLAN_ISSUES, RECOVERY_ACTIONS, Foreman, agent_may_resolve
+from . import docker, lessons, metrics, projects, repos, runtime, worker_ops
+from .foreman import MAX_ALLOWANCE, MAX_PLAN_ISSUES, RECOVERY_ACTIONS, Foreman, agent_may_resolve, lead_may_act
 from .github import GitHubError
 from .mcp import Tool, ToolError
 
@@ -53,10 +53,23 @@ def build(store, foreman, agent=False):
         row = {key: wi.get(key) for key in ("id", "state", "prNumber", "blockedOn", "waitingOn",
                                             "pendingRetry", "projectId", "headSha", "gateRound",
                                             "worker", "updatedAt")}
+        history = store.history(wi["id"]) if wi["state"] in (*WAITING, "exhausted") else []
         if wi["state"] in WAITING:
-            row["agentMayResolve"] = agent_may_resolve(wi, store.history(wi["id"]))
+            row["agentMayResolve"] = agent_may_resolve(wi, history)
         elif wi["state"] == "exhausted":
             row["blockedOn"] = Foreman._reason(wi)
+        if wi.get("projectId") and wi["state"] in (*WAITING, "exhausted"):
+            project = store.project(wi["projectId"])
+            lead_ok, reason = lead_may_act(foreman, wi, "close", project, history)
+            if project and project["state"] != "done":
+                row["agentMayResolve"] = agent_may_resolve(wi, history) or lead_ok
+                if wi["state"] == "exhausted":
+                    member_passes = len(store.workorders(wi["id"]))
+                    row["agentMayResolve"] = bool(lead_ok and member_passes < projects.MAX_MEMBER_PASSES)
+                    if member_passes >= projects.MAX_MEMBER_PASSES:
+                        reason = reason or f"member used {projects.MAX_MEMBER_PASSES} passes"
+                if project["state"] == "active":
+                    row["leadBlockedBy"] = reason
         question = wi.get("question") or {}
         if (wi["state"] in ("dispatching", "implementing") and question.get("text")
                 and not question.get("answer")):
