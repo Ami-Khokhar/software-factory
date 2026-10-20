@@ -2531,7 +2531,9 @@ budget can still stop Day Desk from recovering a member with passes left in its 
 (ADR-0030, ADR-0081) and Day Desk's per-item budget check in `resolve_human` (ADR-0035).
 The Lead may retry, regate or close repeatedly without spending `incident.agentAnswered`.
 A retry cannot exceed the member's lifetime cap of 8 passes. An exhausted member may recover
-once the owner extends the Project, unless its terminal reason names the member pass cap.
+once the owner extends the Project, unless its recorded lifetime WorkOrders reach the member
+pass cap. At that cap, Day Desk may still close or regate a blocked or human_waiting member,
+but may not retry, close or regate an exhausted member without the owner.
 Dispatch still enforces the shared Project budget (ADR-0101).
 
 Safety stops (ADR-0007) and environment faults (ADR-0051) still require the owner. Merges and

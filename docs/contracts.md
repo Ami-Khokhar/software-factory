@@ -283,8 +283,10 @@ dispatch-preflight consumption of these records are separate operations.
 `factory_status` list rows expose `agentMayResolve` for waiting WorkItems. It is true when the
 per-item incident rule allows an answer or the Lead may act on an active Project member.
 For active members, waiting or exhausted rows also expose `leadBlockedBy`: the safety stop or
-environment fault blocking Lead authority, or `null` when it may act. A retry reaching the
-member pass cap does not block close or regate. Done Projects use the plain non-member computation.
+environment fault or exhausted lifetime pass cap blocking Lead authority, or `null` when it may
+act. A blocked or human_waiting member at the cap may still be closed or regated. An exhausted
+member at the cap may not be retried, closed or regated by Day Desk without the owner.
+Done Projects use the plain non-member computation.
 Rows for paused, stopped, missing and done Projects omit `leadBlockedBy`.
 
 ## Runtime status and tool discovery

@@ -96,10 +96,9 @@ def agent_may_resolve(wi, history):
     return not incident.get("agentAnswered")
 
 
-def lead_may_act(foreman, wi, resolution):
+def lead_may_act(foreman, wi, resolution, project, history=None):
     """Whether the Lead may recover this member inside its active Project (ADR-0102)."""
     project_id = wi.get("projectId")
-    project = foreman.store.project(project_id) if project_id is not None else None
     if project is None:
         return False, "not a project member"
     if project["state"] != "active":
@@ -107,7 +106,7 @@ def lead_may_act(foreman, wi, resolution):
     stop = foreman._safety_stop(wi)
     if stop:
         return False, f"safety stop: {stop}"
-    cause = foreman._env_paused(wi)
+    cause = foreman._env_paused(wi, history)
     if cause:
         return False, f"environment fault: {cause}"
     if resolution == "retry" and len(foreman.store.workorders(wi["id"])) >= projects.MAX_MEMBER_PASSES:
@@ -859,7 +858,8 @@ class Foreman:
             if used >= projects.MAX_MEMBER_PASSES:
                 self._finish_recovery(wi, False)
                 return self._write(wi, dict(wi, state="exhausted", recovery=None, terminalReason=(
-                    f"{projects.MAX_MEMBER_PASSES} passes on one member; the Lead splits it or the owner decides")),
+                    f"the member pass cap is {projects.MAX_MEMBER_PASSES} and {used} passes are on record; "
+                    "the Lead splits it or the owner decides")),
                     "exhausted", project=project_id)
         else:
             used = len(orders) - (wi.get("passesBefore") or 0)  # a person's retry buys a fresh budget
@@ -1518,7 +1518,9 @@ class Foreman:
 
     def _lead_may_act(self, wi, resolution):
         """Whether the Lead may recover this member inside its active Project (ADR-0102)."""
-        return lead_may_act(self, wi, resolution)
+        project_id = wi.get("projectId")
+        project = self.store.project(project_id) if project_id is not None else None
+        return lead_may_act(self, wi, resolution, project)
 
     def resolve_human(self, workitem_id, resolution, note, by, agent=False, owner_asked=False):
         """A person's answer to human_waiting, blocked or exhausted (ADR-0006): retry, regate or close.
@@ -1549,7 +1551,7 @@ class Foreman:
             if agent and not owner_asked and (
                     wi["state"] == "exhausted" and (not lead_ok or wi.get("projectId") and passes >= projects.MAX_MEMBER_PASSES)
                     or not lead_ok and resolution == "retry" and spent):
-                if lead_reason and lead_reason.startswith("project "):
+                if lead_reason and lead_reason.startswith("project ") and lead_reason.endswith((" is paused", " is stopped")):
                     raise ToolError(f"{workitem_id}: {lead_reason}; the owner resumes or extends the Project, "
                                     f"or answers: factory retry|regate|close {workitem_id} <note>")
                 raise ToolError(f"{workitem_id} used its budget of passes, so the owner decides whether to spend "
@@ -1806,10 +1808,10 @@ class Foreman:
         text = " ".join([wi.get("blockedOn") or "", *(wi.get("attempts") or [])]).lower()
         return next((stop for stop in SAFETY_STOPS if stop in text), None)
 
-    def _env_paused(self, wi):
+    def _env_paused(self, wi, history=None):
         """The confirmed environment fault the WorkItem is still paused on, or None (#239, ADR-0051):
         the last attempt that failed named the environment and no human_resolved has followed it."""
-        for h in reversed(self.store.history(wi["id"])):
+        for h in reversed(self.store.history(wi["id"]) if history is None else history):
             if h["action"] == "human_resolved":
                 return None
             if (h["action"] == "attempt_failed"

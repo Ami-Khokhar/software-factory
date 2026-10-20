@@ -793,7 +793,8 @@ class ProjectBudgetTest(unittest.TestCase):
             self.ready_again(passesBefore=8)  # the owner's retry never resets a member's cap
         wi = self.dispatch()
         self.assertEqual((wi["state"], wi["terminalReason"]),
-                         ("exhausted", "8 passes on one member; the Lead splits it or the owner decides"))
+                         ("exhausted", "the member pass cap is 8 and 8 passes are on record; "
+                          "the Lead splits it or the owner decides"))
         self.assertEqual(self.store.project(self.project["id"])["passesUsed"], 8)
         self.assertEqual(len(self.relay.tasks), 8)
         self.assertEqual(self.store.history(self.id)[-1]["detail"]["project"], self.project["id"])
@@ -1185,6 +1186,18 @@ class LeadAuthorityTest(unittest.TestCase):
         self.wait()
         self.split_member()
 
+    def test_waiting_members_at_the_cap_can_still_close_or_regate(self):
+        self.passes(projects.MAX_MEMBER_PASSES)
+        self.github.add_pr(REPO, 100, self.store.get(self.id)["branch"], "c1")
+        for state in ("blocked", "human_waiting"):
+            for resolution, expected in (("close", "cancelled"), ("regate", "reviewing")):
+                with self.subTest(state=state, resolution=resolution):
+                    self.store.put(dict(self.store.get(self.id), state=state, prNumber=100, headSha="c1",
+                                        incident={"id": 1, "agentAnswered": True}))
+                    self.assertTrue(self.status()["agentMayResolve"])
+                    self.assertIsNone(self.status()["leadBlockedBy"])
+                    self.assertEqual(self.resolve(resolution)["state"], expected)
+
     def split_member(self):
         bullets = ["- first thing — done when: test_one passes", "- second thing — done when: test_two passes"]
         self.github.issues[(REPO, 7)]["body"] = "## Acceptance\n" + "\n".join(bullets)
@@ -1229,6 +1242,33 @@ class LeadAuthorityTest(unittest.TestCase):
         self.assertNotIn("leadBlockedBy", self.status())
         self.assertEqual(self.resolve()["state"], "ready")
 
+    def test_a_done_project_budget_refusal_leaves_the_decision_to_the_owner(self):
+        self.store.put_project(dict(self.store.project(self.project["id"]), state="done"))
+        self.passes(self.foreman.config.max_passes)
+        for state in ("blocked", "exhausted"):
+            with self.subTest(state=state):
+                self.store.put(dict(self.store.get(self.id), state=state))
+                before, history = self.store.get(self.id), self.store.global_history()
+                with self.assertRaisesRegex(ToolError, "used its budget of passes, so the owner decides") as caught:
+                    self.resolve()
+                self.assertNotIn("resumes or extends", str(caught.exception))
+                self.assertEqual(self.store.get(self.id), before)
+                self.assertEqual(self.store.global_history(), history)
+
+    def test_status_reads_the_project_and_history_once_per_waiting_member(self):
+        for state in ("blocked", "human_waiting", "exhausted"):
+            with self.subTest(state=state):
+                self.store.put(dict(self.store.get(self.id), state=state))
+                queries = []
+                self.store._db.set_trace_callback(queries.append)
+                try:
+                    self.assertTrue(self.status()["agentMayResolve"])
+                finally:
+                    self.store._db.set_trace_callback(None)
+                self.assertEqual(sum(q.startswith("SELECT doc FROM projects WHERE id") for q in queries), 1)
+                # Autonomy separately reads ended WorkItems, including exhausted members.
+                self.assertEqual(sum("FROM audit" in q for q in queries), 2 if state == "exhausted" else 1)
+
     def test_paused_and_stopped_members_keep_fresh_incident_recovery(self):
         for state in ("paused", "stopped"):
             with self.subTest(state=state):
@@ -1243,7 +1283,8 @@ class LeadAuthorityTest(unittest.TestCase):
         self.store.put(dict(self.store.get(self.id), state="ready", blockedOn=None))
         self.foreman.tick(self.id)
         self.assertEqual(self.store.get(self.id)["terminalReason"],
-                         f"{projects.MAX_MEMBER_PASSES} passes on one member; "
+                         f"the member pass cap is {projects.MAX_MEMBER_PASSES} and "
+                         f"{projects.MAX_MEMBER_PASSES + 1} passes are on record; "
                          "the Lead splits it or the owner decides")
 
     def test_exhausted_member_cap_uses_lifetime_passes_not_reason(self):
@@ -1253,8 +1294,12 @@ class LeadAuthorityTest(unittest.TestCase):
         self.passes(projects.MAX_MEMBER_PASSES)
         self.store.put(dict(self.store.get(self.id), state="exhausted",
                             terminalReason="project spent its passes"))
-        with self.assertRaisesRegex(ToolError, "used its budget of passes"):
-            self.resolve("close")
+        self.assertFalse(self.status()["agentMayResolve"])
+        self.assertEqual(self.status()["leadBlockedBy"],
+                         f"member used {projects.MAX_MEMBER_PASSES} passes")
+        for resolution in ("retry", "close", "regate"):
+            with self.subTest(resolution=resolution), self.assertRaisesRegex(ToolError, "used its budget of passes"):
+                self.resolve(resolution)
 
     def test_split_project_version_race_names_the_resumable_request(self):
         store = self.store
