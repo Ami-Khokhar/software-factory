@@ -94,6 +94,49 @@ class NewIssueTest(unittest.TestCase):
         self.assertEqual(self.new(), "Greet by name\n\n## Acceptance\n- greet says hello — done when: test_greet passes\n")
 
 
+class ProjectCliTest(unittest.TestCase):
+    def test_project_cli_prints_the_budget(self):
+        project = {"id": "demo-project", "title": "Demo", "state": "paused",
+                   "pausedReason": "the budget of 30 passes is spent", "passesUsed": 30,
+                   "budget": {"passes": 30, "deadline": "2026-11-01T00:00:00Z"},
+                   "members": ["o/r#7", "o/r#8"], "acceptanceItem": "o/r#8"}
+        with mock.patch.object(cli, "call", side_effect=[{"project": project}, {"workItems": [
+                {"id": "o/r#7", "state": "closed"}, {"id": "o/r#8", "state": "exhausted"}]}]) as call, \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            cli.main(["project", "demo-project"])
+        self.assertEqual(output.getvalue().splitlines(), ["Demo",
+                         "paused: the budget of 30 passes is spent", "30 of 30 passes",
+                         "deadline: 2026-11-01 05:30 IST", "members: o/r#7: closed, o/r#8: exhausted",
+                         "acceptance: o/r#8"])
+        self.assertEqual(call.call_args_list, [mock.call("factory_project_status", {"id": "demo-project"}),
+                                               mock.call("factory_status")])
+
+    def test_extend_and_stop_project_call_the_owner_tools(self):
+        for command, args, tool, fields in (
+                ("extend", ["demo", "10"], "factory_extend_project",
+                 {"id": "demo", "passes": 10, "deadline": None, "by": "Ami"}),
+                ("extend", ["demo", "10", "2026-11-01T00:00:00Z"], "factory_extend_project",
+                 {"id": "demo", "passes": 10, "deadline": "2026-11-01T00:00:00Z", "by": "Ami"}),
+                ("stop-project", ["demo", "wait", "please"], "factory_stop_project",
+                 {"id": "demo", "note": "wait please", "by": "Ami"})):
+            with self.subTest(command=command, args=args), \
+                    mock.patch.object(cli, "run", return_value=subprocess.CompletedProcess([], 0, "Ami\n")) as run, \
+                    mock.patch.object(cli, "call", return_value={"project": {
+                        "id": "demo", "state": "active", "budget": {"passes": 40}}}) as call, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                cli.main([command, *args])
+                call.assert_called_once_with(tool, fields)
+                run.assert_called_once_with("git", "config", "user.name")
+
+    def test_project_commands_refuse_bad_usage_without_calling_the_server(self):
+        for command in (["project"], ["extend", "demo", "many"], ["extend", "demo"],
+                        ["stop-project", "demo"]):
+            with self.subTest(command=command), mock.patch.object(cli, "call") as call:
+                with self.assertRaises(SystemExit):
+                    cli.main(command)
+                call.assert_not_called()
+
+
 class UpdateTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()

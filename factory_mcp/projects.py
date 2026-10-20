@@ -7,6 +7,7 @@ fix; `new` builds the stored document from fields that pass.
 import re
 
 MAX_PASSES = 60          # one Project's budget ceiling; the owner extends past it (WO-03)
+MAX_MEMBER_PASSES = 8  # one member's share of a Project's budget
 MAX_BLUEPRINT = 20000    # characters
 MAX_DONE_WHEN = 5
 PROJECT_ID = re.compile(r"^[a-z0-9][a-z0-9-]{2,40}$")

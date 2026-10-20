@@ -11,6 +11,7 @@ import secrets
 import time
 import threading
 import uuid
+from datetime import datetime
 
 from . import (diagnostics, documents, gate_secrets, jev_rank, lessons, patches, projects, registry,
                repos, routing, setup_merge, sizing, workitem)
@@ -828,12 +829,25 @@ class Foreman:
         if running >= self.config.passes_per_repo:
             return wi
         orders = self.store.workorders(wi["id"])
-        used = len(orders) - (wi.get("passesBefore") or 0)  # a person's retry buys a fresh budget
-        if used >= self.config.max_passes:
-            self._finish_recovery(wi, False)  # the budget stopped the attempt the recovery chose
-            return self._write(wi, dict(wi, state="exhausted", recovery=None, terminalReason=(
-                f"{used} worker passes used; FACTORY_MAX_PASSES is {self.config.max_passes}")),
-                "exhausted")
+        project_id = wi.get("projectId")
+        project = self.store.project(project_id) if project_id else None
+        if project and project["state"] in ("paused", "stopped"):
+            return wi
+        member = project and project["state"] != "done"
+        if member:
+            used = len(orders)
+            if used >= projects.MAX_MEMBER_PASSES:
+                self._finish_recovery(wi, False)
+                return self._write(wi, dict(wi, state="exhausted", recovery=None, terminalReason=(
+                    f"{used} passes on one member; the Lead splits it or the owner decides")),
+                    "exhausted")
+        else:
+            used = len(orders) - (wi.get("passesBefore") or 0)  # a person's retry buys a fresh budget
+            if used >= self.config.max_passes:
+                self._finish_recovery(wi, False)  # the budget stopped the attempt the recovery chose
+                return self._write(wi, dict(wi, state="exhausted", recovery=None, terminalReason=(
+                    f"{used} worker passes used; FACTORY_MAX_PASSES is {self.config.max_passes}")),
+                    "exhausted")
         allowed = [agent for agent, _ in self.config.workers]
         unknown = [agent for agent in named if agent not in allowed]
         if unknown:  # the relay also holds agents with no sandbox; an issue must not reach them
@@ -883,6 +897,17 @@ class Foreman:
                                     continuation.get("sha") if continuation else None,
                                     project=self.store.project(wi["projectId"]) if wi.get("projectId") else None)
         order["ask"] = {"url": self.config.ask_url, "token": secrets.token_hex(16)}  # ADR-0098
+        if member:
+            try:
+                self.store.charge_project_pass(project_id)
+            except Conflict as exc:
+                paused_project = getattr(exc, "paused_project", None)
+                if paused_project:
+                    self.store.log("project_paused", {"project": project_id,
+                                   "reason": paused_project["pausedReason"]}, None)
+                self._finish_recovery(wi, False)
+                return self._write(wi, dict(wi, state="exhausted", recovery=None,
+                                           terminalReason=str(exc)), "exhausted", project=project_id)
         self.store.save_workorder(order)
         wi = self._write(wi, dict(wi, state="dispatching", activeWorkOrderId=order["id"], worker=worker,
                                   recovery=recovery, question=None),
@@ -1770,6 +1795,53 @@ class Foreman:
                                 f"cause above, or close #{number}")
                 raise ToolError(message) from None
         return {"repo": repo, "issues": opened}
+
+    def extend_project(self, project_id, passes, deadline, by):
+        """The owner adds passes and resumes a Project, including one that was stopped."""
+        if isinstance(passes, bool) or not isinstance(passes, int) or not 1 <= passes <= 60:
+            raise ToolError("extending a project needs passes from 1 to 60; supply an integer")
+        if deadline is not None:
+            try:
+                if not isinstance(deadline, str) or "T" not in deadline:
+                    raise ValueError()
+                parsed = datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    raise ValueError()
+            except ValueError:
+                raise ToolError("extending a project needs an ISO date-time deadline with a timezone; "
+                                "supply one or null to keep the old deadline") from None
+        if not isinstance(by, str) or not by.strip():
+            raise ToolError("extending a project needs by; name the owner adding passes")
+        with self.runtime_lock:
+            project = self.store.project(project_id)
+            if project is None:
+                raise ToolError(f"No project {project_id}; read factory_project_status for its id")
+            budget = dict(project["budget"], passes=project["budget"]["passes"] + passes)
+            if deadline is not None:
+                budget["deadline"] = deadline
+            try:
+                stored = self.store.put_project(dict(project, budget=budget, state="active",
+                                                     pausedReason=None))
+            except Conflict as exc:
+                raise ToolError(f"{exc}; read factory_project_status and try again") from None
+            self.store.log("project_extended", {"project": project_id, "by": by,
+                                                "was": project["budget"], "now": budget})
+            return stored
+
+    def stop_project(self, project_id, by, note):
+        """The owner holds a Project's members until an explicit extension resumes it."""
+        if not all(isinstance(value, str) and value.strip() for value in (by, note)):
+            raise ToolError("stopping a project needs by and note; name the owner and why it stops")
+        with self.runtime_lock:
+            project = self.store.project(project_id)
+            if project is None:
+                raise ToolError(f"No project {project_id}; read factory_project_status for its id")
+            try:
+                stored = self.store.put_project(dict(project, state="stopped", pausedReason=note))
+            except Conflict as exc:
+                raise ToolError(f"{exc}; read factory_project_status and try again") from None
+            self.store.log("project_stopped", {"project": project_id, "by": by, "note": note})
+            return stored
 
     def start_project(self, fields, issues, by, owner_words):
         """The owner's one yes starts a Project (ADR-0100): store its record, open the plan's

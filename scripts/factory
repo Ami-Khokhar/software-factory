@@ -5,6 +5,9 @@
   factory add-repo <owner/repo>           check a repo and enable it (it needs pr-gatekeeper)
   factory bench <owner/repo> [-w <worker>] ...  file the benchmark's tasks in a sandbox repo
   factory bench report [<run>]            grade a run: person needed, passes, lines, time, hidden tests
+  factory project <id>                   show a Project and its budget
+  factory extend <id> <passes> [<deadline>]  add passes and resume a Project
+  factory stop-project <id> <note>       hold a Project
   factory status [<owner/repo#n>]
   factory watch                           print each new owner blocker or material progress step (Hermes cron)
   factory drive-queue                     the escalations Day Desk may still answer (its job's monitor)
@@ -37,6 +40,8 @@ import tempfile
 import time
 import urllib.request
 import zipfile
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 CONFIG = Path.home() / ".config" / "factory-mcp"
@@ -426,6 +431,42 @@ def cmd_lessons_path(_):
     except (ValueError, OSError) as exc:
         die(f"{path}: {exc}")
     print(f"{path} ({found} {'lessons' if found != 1 else 'lesson'})")
+
+
+def cmd_project(args):
+    if len(args) != 1:
+        die("usage: factory project <id>")
+    project = call("factory_project_status", {"id": args[0]})["project"]
+    states = {wi["id"]: wi["state"] for wi in call("factory_status")["workItems"]}
+    deadline = datetime.fromisoformat(project["budget"]["deadline"].replace("Z", "+00:00"))
+    print(project["title"])
+    print(project["state"] + (f": {project['pausedReason']}" if project["pausedReason"] else ""))
+    print(f"{project['passesUsed']} of {project['budget']['passes']} passes")
+    print("deadline: " + deadline.astimezone(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d %H:%M IST"))
+    print("members: " + (", ".join(f"{id_}: {states.get(id_, 'not taken in')}"
+                                   for id_ in project["members"]) or "none"))
+    print("acceptance: " + (project["acceptanceItem"] or "none"))
+
+
+def cmd_extend(args):
+    if len(args) not in (2, 3):
+        die("usage: factory extend <id> <passes> [<deadline>]")
+    try:
+        passes = int(args[1])
+    except ValueError:
+        die("extend: passes must be an integer from 1 to 60")
+    who = run("git", "config", "user.name").stdout.strip() or os.environ.get("USER", "owner")
+    project = call("factory_extend_project", {"id": args[0], "passes": passes,
+                    "deadline": args[2] if len(args) == 3 else None, "by": who})["project"]
+    print(f"{project['id']}: {project['state']}, budget {project['budget']['passes']} passes")
+
+
+def cmd_stop_project(args):
+    if len(args) < 2:
+        die("usage: factory stop-project <id> <note>")
+    who = run("git", "config", "user.name").stdout.strip() or os.environ.get("USER", "owner")
+    project = call("factory_stop_project", {"id": args[0], "note": " ".join(args[1:]), "by": who})["project"]
+    print(f"{project['id']}: {project['state']}")
 
 
 def cmd_resolve(resolution, args):
@@ -840,6 +881,12 @@ def main(argv):
         cmd_add_repo(args)
     elif command == "bench":
         cmd_bench(args)
+    elif command == "project":
+        cmd_project(args)
+    elif command == "extend":
+        cmd_extend(args)
+    elif command == "stop-project":
+        cmd_stop_project(args)
     elif command == "status":
         cmd_status(args)
     elif command == "watch":

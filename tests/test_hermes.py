@@ -40,7 +40,11 @@ class ProfileTest(unittest.TestCase):
         self.assertTrue(driving["factory_runtime_status"].listing()["annotations"]["readOnlyHint"])
         self.assertTrue(driving["factory_project_status"].listing()["annotations"]["readOnlyHint"])
         real = set(tools.build(None, None))
-        self.assertEqual(set(OWNER["tools"]["include"]), real - tools.AGENT_TOOLS - {"factory_tick", "factory_intake"})
+        owner_only = {"factory_extend_project", "factory_stop_project"}
+        self.assertTrue(owner_only <= real - set(driving))
+        # These owner CLI tools deliberately stay outside Day Desk's owner-server include.
+        self.assertEqual(set(OWNER["tools"]["include"]),
+                         real - tools.AGENT_TOOLS - {"factory_tick", "factory_intake"} - owner_only)
 
     def test_the_skill_names_only_tools_day_desk_has(self):
         text = (PROFILE / "skills" / "software-factory" / "SKILL.md").read_text()

@@ -194,9 +194,12 @@ The states are the enum in `schemas/workitem.schema.json`.
 | `merged` | factory-mcp closes the issue | `closed` |
 | any live state | the PR closed without a merge | `human_waiting` |
 | any live state | the issue closed without a merged PR | `cancelled` |
-| `ready`, `changes_requested` | `FACTORY_MAX_PASSES` WorkOrders were dispatched since the last person's retry | `exhausted` |
+| `ready`, `changes_requested` (a non-member, or a member of a done Project) | `FACTORY_MAX_PASSES` WorkOrders were dispatched since the last person's retry | `exhausted` |
+| `ready`, `changes_requested` (a member) | the Project's budget is spent | `exhausted`, and the Project is `paused` |
+| `ready`, `changes_requested` (a member) | the Project is `paused` or `stopped` | unchanged, with no dispatch or audit write |
+| `ready`, `changes_requested` (a member) | 8 WorkOrders were dispatched over the member's lifetime | `exhausted`; the Lead splits it or the owner decides |
 | `human_waiting`, `blocked` | `factory_resolve_human`: retry, regate or close | `ready` or `changes_requested`, `reviewing`, or `cancelled`; a regate with no gate run going and no new verdict edits the PR body's `<!-- factory regate n -->` line, which starts a gate run (ADR-0034) |
-| `exhausted` | the owner's `factory_resolve_human`: retry or close; Day Desk is refused, unless `ownerAsked` marks what the owner asked for in chat (ADR-0043, ADR-0046) | `ready` or `changes_requested` with a fresh budget of passes, or `cancelled` (ADR-0035) |
+| `exhausted` | the owner's `factory_resolve_human`: retry or close; Day Desk is refused, unless `ownerAsked` marks what the owner asked for in chat (ADR-0043, ADR-0046) | `ready` or `changes_requested` with a fresh budget of passes for non-members, or `cancelled`; a member keeps its lifetime cap and Project budget (ADR-0035, ADR-0101) |
 
 `closed` and `cancelled` are terminal, and so is `exhausted` until the owner retries it.
 `human_waiting` is not: it waits for a decision `factory_resolve_human` makes, Day Desk's once per
@@ -292,13 +295,17 @@ incident or the owner's (ADR-0030, ADR-0097).
 - **Result**: what a worker hands back: a patch, and the evidence.
 - **Verdict**: the gate's decision on one PR head: MERGE, CHANGES or HUMAN, with findings.
 - **Tick**: one pass of reconcile, then at most one action, for each WorkItem.
-- **Pass**: one worker task. `FACTORY_MAX_PASSES` caps them per WorkItem.
+- **Pass**: one worker task. Active Project members charge the shared Project budget at dispatch,
+  after worker routing and timeout checks, with a lifetime cap of 8 passes per member (ADR-0101).
+  Non-members and members of done Projects keep `FACTORY_MAX_PASSES` per retry budget.
 - **Attempt**: a pass that failed. Two in a row block the WorkItem, unless a timeout-class failure
   still has an untried worker the policy would choose: that one recovery attempt runs first
   (ADR-0081).
 - **Blocked**: stopped after the failed attempts of its budget, until a person answers.
 - **Exhausted**: stopped because the budget of passes ran out; only the owner's retry, which buys
-  a fresh budget, starts it again. The owner may ask Day Desk to make it in Telegram (ADR-0043).
+  a fresh budget, starts it again for non-members. Members need remaining Project budget and
+  fewer than 8 lifetime passes. The owner extends or resumes a Project with `factory extend`
+  (ADR-0101). The owner may ask Day Desk for a retry in Telegram (ADR-0043).
 - **Autonomy rate**: of the WorkItems that ended, the share that merged with no human state, no
   commit other than a worker's or the gate's merge of the base branch (ADR-0039), and a MERGE
   verdict on the merged head (`metrics.autonomy`). It is the project's measure of success.

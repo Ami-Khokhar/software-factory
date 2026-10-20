@@ -69,6 +69,7 @@ class McpServerTest(unittest.TestCase):
                                   "factory_propose_issue", "factory_add_repo", "factory_approve_issue",
                                   "factory_bootstrap_repo", "factory_approve_lesson",
                                   "factory_retire_lesson", "factory_start_plan",
+                                  "factory_extend_project", "factory_stop_project",
                                   "factory_start_project",
                                   "factory_set_dependencies", "factory_replace_issue",
                                   "factory_docker_control", "factory_approve_plan_allowance",

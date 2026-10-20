@@ -109,6 +109,16 @@ def build(store, foreman, agent=False):
             {key: args[key] for key in required - {"issues", "by", "ownerWords"}},
             args["issues"], args["by"], args["ownerWords"])
 
+    def extend_project(args):
+        if set(args) != {"id", "passes", "deadline", "by"}:
+            raise ToolError("factory_extend_project requires exactly id, passes, deadline and by")
+        return {"project": foreman.extend_project(args["id"], args["passes"], args["deadline"], args["by"])}
+
+    def stop_project(args):
+        if set(args) != {"id", "by", "note"}:
+            raise ToolError("factory_stop_project requires exactly id, by and note")
+        return {"project": foreman.stop_project(args["id"], args["by"], args["note"])}
+
     def set_timeout(args):
         if set(args) != {"id", "wallMs", "by"}:
             raise ToolError("factory_set_timeout requires exactly id, wallMs and by")
@@ -390,6 +400,22 @@ def build(store, foreman, agent=False):
                              "by": {"type": "string", "minLength": 1,
                                     "description": "who started the Project"}}},
              "write", start_project),
+        Tool("factory_extend_project",
+             "The owner adds passes to a Project and makes it active again. Day Desk cannot call this.",
+             {"type": "object", "required": ["id", "passes", "deadline", "by"],
+              "additionalProperties": False,
+              "properties": {"id": {"type": "string", "minLength": 1},
+                             "passes": {"type": "integer", "minimum": 1, "maximum": 60},
+                             "deadline": {"type": ["string", "null"], "format": "date-time"},
+                             "by": {"type": "string", "minLength": 1}}},
+             "write", extend_project),
+        Tool("factory_stop_project",
+             "The owner stops a Project and holds its members. Day Desk cannot call this.",
+             {"type": "object", "required": ["id", "by", "note"], "additionalProperties": False,
+              "properties": {"id": {"type": "string", "minLength": 1},
+                             "by": {"type": "string", "minLength": 1},
+                             "note": {"type": "string", "minLength": 1}}},
+             "write", stop_project),
         Tool("factory_set_dependencies",
              "Change which issues a WorkItem waits for, before any worker has touched it: replaces the "
              "'Depends on #n' lines of its issue with the issue numbers given, and [] lets it start at "
