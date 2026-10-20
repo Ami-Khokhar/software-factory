@@ -223,6 +223,21 @@ class UpdateTest(unittest.TestCase):
         self.assertFalse(any("unittest" in call.args[0] for call in run.call_args_list))
         self.assertEqual(len(self.restarts), 1)
 
+    def test_a_deploy_that_adds_a_tool_tells_the_chat_to_reload(self):
+        # Hermes lists MCP tools once per connection, so a tool a deploy adds stays invisible to a
+        # running Day Desk gateway. The update names it and the one command that loads it (#333).
+        self.commit("factory_mcp/tools.py", 'Tool("factory_status")\n')
+        git(self.dev, "push", "-q", "origin", "HEAD:main")
+        _, printed = self.deploy_with()  # nothing to compare against: no reload line
+        self.assertNotIn("/reload-mcp", printed)
+        self.commit("factory_mcp/tools.py", 'Tool("factory_status")\nTool("factory_set_timeout")\n')
+        git(self.dev, "push", "-q", "origin", "HEAD:main")
+        _, printed = self.deploy_with()
+        self.assertIn("new tools: factory_set_timeout", printed)
+        self.assertIn("send /reload-mcp in that chat", printed)
+        _, printed = self.deploy_with("notes.txt", "x\n")  # no tool change: no reload line
+        self.assertNotIn("/reload-mcp", printed)
+
     def test_a_dockerfile_update_rebuilds_the_worker_image(self):
         self.commit("worker/Dockerfile", "FROM scratch\n")
         git(self.dev, "push", "-q", "origin", "HEAD:main")
