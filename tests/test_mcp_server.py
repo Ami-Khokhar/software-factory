@@ -63,7 +63,7 @@ class McpServerTest(unittest.TestCase):
         reads = {t["name"] for t in tools if t["annotations"]["readOnlyHint"] is True}
         writes = {t["name"] for t in tools if t["annotations"]["readOnlyHint"] is False}
         self.assertEqual(reads, {"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons",
-                                 "factory_report", "factory_docker_status"})
+                                 "factory_report", "factory_docker_status", "factory_project_status"})
         self.assertEqual(writes, {"factory_intake", "factory_tick", "factory_resolve_human",
                                   "factory_answer_question",
                                   "factory_propose_issue", "factory_add_repo", "factory_approve_issue",
@@ -110,7 +110,8 @@ class McpServerTest(unittest.TestCase):
                                   "factory_use_allowance", "factory_queue_retry", "factory_merge_setup_pr",
                                   "factory_docker_status", "factory_docker_control",
                                   "factory_set_worker", "factory_register_worker", "factory_set_timeout",
-                                  "factory_check_worker", "factory_reload_workers"})
+                                  "factory_check_worker", "factory_reload_workers",
+                                  "factory_project_status"})
         refused = self.rpc("tools/call", {"name": "factory_bootstrap_repo",
                                           "arguments": {"repo": "o/r", "by": "day-desk"}}, token=AGENT)
         self.assertIn("error", refused)  # an unknown tool for this token, not a call that ran

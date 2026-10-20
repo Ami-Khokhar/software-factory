@@ -403,6 +403,35 @@ must hold before the controller is allowed to write:
    state does: the allowance recovers an attempt, never buys fresh budget, and an exhausted item
    goes back to the owner.
 
+## Project
+
+A Project (ADR-0099) is one named goal with a shared budget of worker passes, stored beside the
+WorkItems in the `projects` table as its whole JSON document, with the same optimistic
+`stateVersion`. `schemas/project.schema.json` is the contract; `factory_mcp/projects.py` holds the
+limits and the read tool `factory_project_status` is in `tools.AGENT_TOOLS`. The states other than
+`active`, and the fields `passesUsed`, `members` and `acceptanceItem`, have no writer yet: WO-02
+to WO-04 write them. The store's Project records ship ahead of their first caller (WO-02): the
+work order adds the record before anything starts a Project. The keys:
+
+| Key | What it means |
+|---|---|
+| `schemaVersion` | Always `factory.project/v1`. |
+| `id` | 3 to 41 characters of lowercase letters, digits and dashes, starting with a letter or digit (pattern `^[a-z0-9][a-z0-9-]{2,40}$`). One Project per id; creating a second with the same id conflicts. |
+| `repo` | The GitHub repo the Project works on, `owner/repo`. |
+| `title` | 1 to 100 characters: the goal's name in the owner's notices. |
+| `goal` | 1 to 2000 characters: what done means, in the owner's words. |
+| `blueprint` | 1 to 20000 characters of Markdown: the Lead's design (modules, files, function names, data shapes, order of work). It rides in every member's WorkOrder (WO-06), so a worker does not itself have to plan. |
+| `doneWhen` | 1 to 5 `{claim, command}` checks; the acceptance issue runs them (WO-07). |
+| `budget` | `{passes, deadline}`: the whole Project's budget of worker passes, 1 to 60 within the deadline. The owner extends past 60 (WO-03). Passes are charged per worker pass (WO-03). |
+| `passesUsed` | The passes charged so far. Starts at 0. |
+| `state` | `active`, `paused`, `done` or `stopped` (WO-02 writes `active`). |
+| `pausedReason` | Set only while `paused`: why, so the owner's notice can say it. |
+| `members` | The WorkItem ids of the Project, unique. The Lead adds them as it starts issues (WO-02); a split's replacements inherit the Project (WO-04). |
+| `acceptanceItem` | The one member that carries the final acceptance checks; the Project ends when its issue merges (WO-07). |
+| `approval` | `{by, words, at}`: who said go and what they said. |
+| `stateVersion` | Optimistic-concurrency version; the store writes version + 1. |
+| `createdAt`, `updatedAt` | When the Project was written. `projects()` reads in `createdAt` order. |
+
 ## Versioning
 
 - The `schemaVersion` const is the version. Every producer and consumer of

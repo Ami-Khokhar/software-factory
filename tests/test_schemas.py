@@ -11,6 +11,7 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
+from factory_mcp import projects
 from factory_mcp.documents import check_result
 from factory_mcp.verdict import verdicts
 from tests.fakes import marker_comment
@@ -35,6 +36,38 @@ def result(**fields):
 
 BASIC_DIAGNOSTICS = {"elapsedMs": 60000, "phases": [
     {"phase": "environment setup", "elapsedMs": 20000}]}
+
+PROJECT_AT = "2026-10-20T00:00:00Z"
+PROJECT_FIELDS = {"id": "self-maintaining-apis", "repo": "acme/demo",
+                  "title": "Self-maintaining APIs", "goal": "Build self-maintaining APIs.",
+                  "blueprint": "The Lead's design.",
+                  "doneWhen": [{"claim": "a changed API spec opens a migration PR",
+                                "command": "go test ./..."}],
+                  "budget": {"passes": 6, "deadline": "2026-11-01T00:00:00Z"},
+                  "approval": {"by": "owner", "words": "go.", "at": PROJECT_AT}}
+
+
+def project_fields(**over):
+    doc = dict(PROJECT_FIELDS)
+    doc.update(over)
+    return doc
+
+
+# (case, the field pushed just past its schema limit). Every limit projects.problem and the
+# schema share, one over-case each.
+PROJECT_OVER = [
+    ("an id", "id", "a" * 42),
+    ("a title", "title", "x" * 101),
+    ("a goal", "goal", "x" * 2001),
+    ("a blueprint", "blueprint", "x" * 20001),
+    ("a sixth doneWhen check", "doneWhen", [{"claim": "c", "command": "x"}] * 6),
+    ("a doneWhen claim", "doneWhen", [{"claim": "c", "command": "x"},
+                                      {"claim": "x" * 301, "command": "x"}]),
+    ("a doneWhen command", "doneWhen", [{"claim": "c", "command": "x" * 501}]),
+    ("the pass budget", "budget", {"passes": 61, "deadline": "2026-11-01T00:00:00Z"}),
+    ("an approval by", "approval", {"by": "x" * 101, "words": "go.", "at": PROJECT_AT}),
+    ("approval words", "approval", {"by": "owner", "words": "x" * 501, "at": PROJECT_AT}),
+]
 
 
 # (case, Result, accepted). Each case varies one rule the schema states.
@@ -127,6 +160,38 @@ class SchemaTest(unittest.TestCase):
         self.assertEqual(len(found), 3)
         for verdict in found:
             self.assertEqual([e.message for e in validator.iter_errors(verdict)], [])
+
+    def test_a_new_project_matches_the_project_schema(self):
+        """The stored Project document (`projects.new`) is exactly what schemas/project.schema.json
+        accepts: one document with every shared field exactly at its limit validates and
+        `projects.problem` passes it; one field just over its limit is refused by both, so the
+        schema and the checks cannot drift apart."""
+        validator = Draft202012Validator(schema("project"),
+                                         format_checker=Draft202012Validator.FORMAT_CHECKER)
+
+        def agrees(fields, doc):
+            """problem passes exactly what the schema accepts."""
+            self.assertEqual(projects.problem(fields) is None,
+                             [e.message for e in validator.iter_errors(doc)] == [],
+                             "the schema and the checks disagree")
+
+        # Every field at its own limit: the widest document the schema accepts.
+        at_limit = project_fields(id="a" * 41, title="x" * 100, goal="x" * 2000,
+                                  blueprint="x" * 20000,
+                                  doneWhen=[{"claim": "x" * 300, "command": "x" * 500}] * 5,
+                                  budget={"passes": 60, "deadline": "2026-11-01T00:00:00Z"},
+                                  approval={"by": "x" * 100, "words": "x" * 500, "at": PROJECT_AT})
+        self.assertIsNone(projects.problem(at_limit), "the full in-bounds document reads clean")
+        self.assertEqual([e.message for e in validator.iter_errors(projects.new(at_limit, PROJECT_AT))],
+                         [], "the full in-bounds document validates")
+
+        for case, key, value in PROJECT_OVER:
+            with self.subTest(case):
+                over = {key: value}
+                agrees(project_fields(**over),
+                       dict(projects.new(project_fields(), PROJECT_AT), **over))
+                self.assertIsNotNone(projects.problem(project_fields(**over)))
+
     def test_the_workorder_constraints_migrate_to_advisory_lines(self):
         """ADR-0070's migration: a WorkOrder written before the advisory flag — constraints with no
         maxChangedLinesAdvisory — still validates, and the consumers read it as advisory; the flag

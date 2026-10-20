@@ -2434,3 +2434,31 @@ The ask route is authenticated only by the per-pass token, so it grants nothing 
 about that one pass, and the token dies with the pass. One question may wait at a time; a second is
 refused, so a confused harness cannot flood Day Desk. The wait is bounded, so a silent Day Desk
 costs at most a few minutes of one pass and never the pass itself.
+
+## ADR-0099 — A Project is a stored goal with one pass budget
+
+**Context.** In the week of 13–20 Oct 2026 WorkItems sat in `blocked` or `human_waiting` for
+174.5 hours, about 134 of which ended only when the owner wrote in the chat. Three things drove
+that: the per-item budget of 4 passes and the one-answer rule (ADR-0030, ADR-0081) sent every
+second failure back to the owner; Day Desk's drive job re-runs the model only when the queue text
+changes, so a blocked item went unwatched for hours after its one answer; and a worker pass that
+had to plan its own work spent its passes reading the code — #13 used 4 passes of 25 minutes and
+changed no file. One goal's pieces were budgeted and recovered one item at a time, so the Lead had
+no room to trade a pass from a healthy piece to a stuck one.
+
+**Decision.** factory-mcp stores a Project: one record per goal, beside the WorkItems, written
+like a WorkItem with the same optimistic `stateVersion`. It carries an `id`, the `repo`, a `title`
+and the owner's `goal`, the Lead's `blueprint` (at most 20000 characters of Markdown), 1 to 5
+`doneWhen` checks, a `budget` of 1 to 60 worker passes and a `deadline`, the `passesUsed` so far,
+the `members` (the WorkItem ids of the goal), an `acceptanceItem`, `approval` (who said go and
+what they said), and a `state` of `active`, `paused`, `done` or `stopped` with a `pausedReason`.
+The limits live in `factory_mcp/projects.py`; the contract is `schemas/project.schema.json`; the
+read tool `factory_project_status` is in `tools.AGENT_TOOLS`. The store keeps them in a new
+`projects` table with no migration on older stores, like `worker_health`.
+
+**Consequence.** Nothing reads a Project yet: this ADR only names the record and its limits.
+WO-02 starts a Project from the Lead's plan and adds its first members, WO-03 charges its budget,
+WO-04 and WO-05 give Day Desk recovery authority and a longer run inside that budget, WO-06 puts
+the blueprint in the WorkOrder, WO-07 ends the Project when the acceptance issue merges, and
+WO-08 sends the owner only Project-level events. A WorkItem without a `projectId` behaves exactly
+as before.
