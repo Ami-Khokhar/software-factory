@@ -89,7 +89,17 @@
       "minLength": 1,
       "description": "<workItemId>:r<round>:<kind>:a<attempt>. A replay returns the existing task instead of starting duplicate work."
     },
-    "createdAt": { "type": "string", "format": "date-time" }
+    "createdAt": { "type": "string", "format": "date-time" },
+    "ask": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "token"],
+      "description": "The worker's ask channel for this pass (ADR-0098): the factory-mcp URL it reaches as host.docker.internal, and a token good for this WorkOrder only. Absent means this pass cannot ask, as in WorkOrders stored before the channel existed.",
+      "properties": {
+        "url": { "type": "string", "minLength": 1 },
+        "token": { "type": "string", "minLength": 16 }
+      }
+    }
   },
   "$defs": {
     "criterion": {

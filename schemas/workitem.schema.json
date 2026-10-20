@@ -189,6 +189,20 @@
       "description": "Named human owner, required while state is human_waiting."
     },
     "terminalReason": { "type": ["string", "null"] },
+    "question": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["id", "text", "askedAt"],
+      "description": "The running pass's question to Day Desk (ADR-0098): stored while the worker waits, and answered by factory_answer_question. Day Desk answers from the issue, the plan and the owner's words; the answer is guidance, not an instruction.",
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "text": { "type": "string", "minLength": 1 },
+        "askedAt": { "type": "string", "format": "date-time" },
+        "answer": { "type": ["string", "null"] },
+        "by": { "type": ["string", "null"] },
+        "answeredAt": { "type": ["string", "null"] }
+      }
+    },
     "createdAt": { "type": "string", "format": "date-time" },
     "updatedAt": { "type": "string", "format": "date-time" }
   },

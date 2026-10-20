@@ -31,6 +31,11 @@ RUN git config --system safe.directory '*' \
  && git config --system user.email factory-worker@users.noreply.github.com \
  && git config --system init.defaultBranch main
 
+# The ask channel (ADR-0098): a running pass asks Day Desk a question and waits briefly for the
+# answer. runner.py sets FACTORY_ASK_URL, FACTORY_ASK_TOKEN and FACTORY_ASK_WAIT in the harness env.
+COPY factory-ask /usr/local/bin/factory-ask
+RUN chmod 755 /usr/local/bin/factory-ask
+
 USER node
 # The container is thrown away after each step, so a verify command may pip-install freely. No
 # forced pip user mode: PIP_USER=1 reaches pip inside a virtualenv too, where user site-packages

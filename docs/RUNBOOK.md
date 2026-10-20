@@ -211,6 +211,14 @@ only once `factory-mcp` with the `Result.diagnostics` consumer (#189–#191) is 
 an old image keeps producing legacy Results, and a rebuilt one produces diagnostics only a deployed
 consumer reads. Roll out one change at a time, consumers before their producers, and pilot each
 producer change on one owner-approved live issue before a broader rollout.
+The image also carries `factory-ask` (ADR-0098): a running pass posts one question to Day Desk and
+waits briefly for the answer. The runner sets `FACTORY_ASK_URL`
+(`http://host.docker.internal:<FACTORY_PORT>/worker/ask`), `FACTORY_ASK_TOKEN` (that pass's own
+token) and `FACTORY_ASK_WAIT`; the route is the same loopback listener as MCP, so nothing new is
+exposed. It needs Docker Desktop, whose `host.docker.internal` reaches the host loopback: on a
+Linux Docker host a container cannot reach that listener, so `factory-ask` prints NO_ANSWER and the
+pass carries on without an answer. A deploy that changes `worker/Dockerfile` rebuilds and retags the image, which is how a
+pass gets the command.
 An agent registered before #98 must add its `--credential` and
 `--env` flags: without them the runner mounts no login and the harness fails on its first call.
 Register each worker in `~/.config/agent-relay/agents.json`
