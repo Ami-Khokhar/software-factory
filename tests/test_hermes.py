@@ -52,6 +52,93 @@ class ProfileTest(unittest.TestCase):
         self.assertLessEqual(set(re.findall(r"factory_[a-z_]+", text)),
                              set(tools.AGENT_TOOLS) | set(OWNER["tools"]["include"]))
 
+    def test_the_skill_has_the_lead_sections(self):
+        text = (PROFILE / "skills" / "software-factory" / "SKILL.md").read_text()
+        headings = ("## Lead a Project", "## Recover a member", "## What goes to the owner")
+        for heading in headings:
+            self.assertIn(heading, text)
+        lead = text[text.index(headings[0]):text.index(headings[1])]
+        for number, step in enumerate(("Brainstorm.", "Brief.", "Blueprint.", "Plan.",
+                                       "Start.", "Report the start"), 1):
+            self.assertIn(f"{number}. **{step}**", lead)
+        for phrase in ("2 sentences and one concrete example", "at most 3 questions",
+                       "unless the owner asks", "at most 12 lines", "`doneWhen`",
+                       "budget in passes", "deadline in IST", '"Say go to start."',
+                       "Before the owner's go", "README, AGENTS.md, the tree of its source folder",
+                       "files the goal touches", "`blueprint-template.md`", "at most about 400",
+                       "`Paths:` lines", "functions, signatures and data shapes",
+                       "- <claim> — done when: <a test name or command>", "what must not change",
+                       "Set `after` only", "independent issues run in parallel", "at most 9 issues",
+                       "factory adds the acceptance issue", "go, yes, start or an equal word",
+                       "`factory_start_project`", "owner's exact message in `ownerWords`",
+                       "Do not ask again", "Project id, the number of issues, the budget",
+                       "expected finish in IST", "say nothing until the Project is done or paused"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, lead)
+        owner = text[text.index(headings[2]):text.index("## What the factory can run")]
+        self.assertEqual(len(re.findall(r"(?m)^- ", owner)), 4)
+        for phrase in ("how to try the product", "budget, deadline or a failed acceptance end",
+                       "cost to continue", "safety stop or an environment fault", "new paid provider",
+                       "a secret", "`.github/` or `AGENTS.md`", "change to acceptance"):
+            self.assertIn(phrase, owner)
+
+    def test_the_skill_names_only_project_tools_that_exist(self):
+        folder = PROFILE / "skills" / "software-factory"
+        real = set(tools.build(None, None))
+        for name in ("SKILL.md", "blueprint-template.md"):
+            with self.subTest(file=name):
+                self.assertLessEqual(set(re.findall(r"\bfactory_[a-zA-Z0-9_]+\b",
+                                                    (folder / name).read_text())), real)
+
+    def test_the_skill_recovers_members_without_the_non_member_owner_fallback(self):
+        text = (PROFILE / "skills" / "software-factory" / "SKILL.md").read_text()
+        recovery = text[text.index("## Recover a member"):text.index("## What goes to the owner")]
+        for phrase in ("Read only the one WorkItem the drive queue names", "`factory_status` and its id",
+                       "last 2 `attempts`", "Do not read the full status unless a decision needs another item",
+                       "Use the first row that matches", "Do one action", "Read back the state",
+                       "`leadBlockedBy` is a safety stop or an environment fault",
+                       "Continue from the kept partial work. Finish the remaining acceptance bullets",
+                       "fewer than 2 timeouts", "next worker in `FACTORY_WORKERS` that has not failed here",
+                       "Start by editing <files from the blueprint>. Do not explore other code.",
+                       "2 or more timeouts", "2 or 3 replacements that keep every acceptance bullet",
+                       "files and signatures from the blueprint", "`factory_approve_issue`",
+                       "Make <test id> pass. The failure: <one line>.", "over 1000 source lines",
+                       "blueprint's module lines", "Gate CHANGES with blocking findings",
+                       "factory dispatches the fix pass", "regate, once", "second time, do nothing",
+                       "`factory_answer_question` from the blueprint", '"passes on one member"',
+                       "Retry once with a note that names the evidence. The next time, split.",
+                       "Never ask the owner about a row", "Never retry the same failure with the same note twice",
+                       "Never spend a pass only to diagnose", "read the attempts and the audit"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, recovery)
+        drive = self.drive_section()
+        for phrase in ("project <id>: acceptance <item> is changes_requested|blocked|human_waiting",
+                       "Read that item with `factory_status` and the item id",
+                       "Act only through the existing tools", 'use "Recover a member"',
+                       "answer again even when the escalation is unchanged",
+                       "safety stop, an environment fault and a member at its 8-pass cap",
+                       "`leadBlockedBy`", "(non-members)"):
+            self.assertIn(phrase, drive)
+        for heading in ("## Plan work", "## Answer an escalation", "## A worker's question"):
+            section = text[text.index(heading):].split("\n## ", 1)[0]
+            self.assertIn("(non-members)", section)
+
+    def test_the_blueprint_template_names_the_design_and_runtime_checks(self):
+        text = (PROFILE / "skills" / "software-factory" / "blueprint-template.md").read_text()
+        self.assertEqual(text.splitlines()[0], "At most 20000 characters. Name real paths and real "
+                         "function names. A worker copies these names.")
+        sections = re.findall(r"(?m)^## (.+)\n([^#]+)", text)
+        self.assertEqual([heading for heading, _ in sections],
+                         ["Goal and example", "Out of scope", "Modules", "Data shapes",
+                          "Order of work", "Conventions", "Done when"])
+        for heading, example in sections:
+            with self.subTest(heading=heading):
+                self.assertEqual(len(example.strip().splitlines()), 1)
+        self.assertIn("`worker/runner.py`", text)
+        self.assertIn("`ask_channel_from(text)`", text)
+        self.assertIn("`id: str`, `text: str`, `askedAt: str`", text)
+        self.assertIn("python3 -m unittest discover -s tests -p 'test_*.py'", text)
+
     def test_the_install_asks_for_every_secret_the_config_uses(self):
         manifest = yaml.safe_load((PROFILE / "distribution.yaml").read_text())
         used = set(re.findall(r"\$\{([A-Z_]+)\}", (PROFILE / "config.yaml").read_text()))
