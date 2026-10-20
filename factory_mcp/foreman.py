@@ -846,7 +846,8 @@ class Foreman:
                              problem=PARTIAL_WORK, fix=None, test=None)] + list(findings)
         order = documents.workorder(wi, kind, attempt, self.config, base, findings,
                                     self._lessons(wi, findings),
-                                    continuation.get("sha") if continuation else None)
+                                    continuation.get("sha") if continuation else None,
+                                    project=self.store.project(wi["projectId"]) if wi.get("projectId") else None)
         order["ask"] = {"url": self.config.ask_url, "token": secrets.token_hex(16)}  # ADR-0098
         self.store.save_workorder(order)
         wi = self._write(wi, dict(wi, state="dispatching", activeWorkOrderId=order["id"], worker=worker,

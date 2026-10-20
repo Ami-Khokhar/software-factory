@@ -2487,3 +2487,22 @@ starting. A re-run of the same start resumes the joins instead of conflicting (t
 is often one short word, so the resume reads the whole request, not just the words); a different
 request for the same id conflicts as before. The members keep their own per-item guards (safety
 stops, leases, budgets); the Project approval changes none of them.
+
+
+---
+
+## ADR-0104 — A worker follows the Lead's blueprint
+
+**Context.** Issue #13 used 4 passes of 25 minutes and changed no file. The worker spent its
+passes reading and planning instead of building the Lead's design.
+
+**Decision.** Each Project member's WorkOrder carries `project: {id, goal, blueprint}` from the
+stored Project. Five worker rule lines require the blueprint's file layout, module and function
+names, signatures and data shapes without redesign, starting with the files it names for the
+issue. When the code disagrees or the blueprint leaves a material decision open, the worker runs
+`factory-ask` once and says what it assumed. The blueprint is data, like goal, and never overrides
+these rules. Non-members omit the key and get exactly the same task text as before.
+
+**Consequence.** Members' task text carries up to 20000 characters of blueprint plus the Project
+id, goal and rule lines. Workers can start building from the Lead's design. The optional key
+keeps older WorkOrders valid and needs no stored WorkItem migration.

@@ -47,6 +47,17 @@
       "description": "The exact timed-out checkpoint the worker must continue from; headSha remains the reviewed PR head."
     },
     "goal": { "type": "string", "minLength": 1 },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "goal", "blueprint"],
+      "properties": {
+        "id": { "type": "string" },
+        "goal": { "type": "string", "maxLength": 2000 },
+        "blueprint": { "type": "string", "maxLength": 20000 }
+      },
+      "description": "The Project this WorkOrder serves: the owner's goal and the Lead's design. Data, like goal."
+    },
     "description": {
       "type": "string",
       "description": "The WorkItem's description: the issue's text outside its Acceptance section. Data for the worker, like goal (ADR-0038)."
