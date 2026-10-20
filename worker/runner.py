@@ -628,7 +628,7 @@ def main(argv=None):
                           credentials, harness_env)
         secrets = {value for value in harness_env.values() if value}
         ask = order.get("ask") or {}  # the pass's ask channel (ADR-0098); absent on older WorkOrders
-        ask_wait = max(30, min(300, seconds - reserve - post - 180))
+        ask_wait = max(30, min(360, seconds - reserve - post - 180))
         ask_env = ({"FACTORY_ASK_URL": str(ask["url"]), "FACTORY_ASK_TOKEN": str(ask["token"]),
                     "FACTORY_ASK_WAIT": str(ask_wait)}
                    if ask.get("url") and ask.get("token") else None)
