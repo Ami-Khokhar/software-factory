@@ -546,6 +546,15 @@ def changed_between(since, new, path):
                           capture_output=True).returncode != 0
 
 
+def tool_names(rev):
+    """The factory tools a commit declares in `factory_mcp/tools.py`, or None when this checkout
+    cannot read that commit. The names drive the reload notice only; the live listing stays the
+    authority on what a token may call."""
+    shown = subprocess.run(["git", "-C", str(HERE), "show", f"{rev}:factory_mcp/tools.py"],
+                           capture_output=True, text=True)
+    return set(re.findall(r'Tool\("(factory_[a-z_]+)"', shown.stdout)) if shown.returncode == 0 else None
+
+
 def deploy_steps(since, new, restart):
     """The deploy steps for everything that changed between two commits. A step that fails exits
     here, before the caller advances the deploy record, so the next update runs it again."""
@@ -801,6 +810,11 @@ def cmd_update(args):
         deploy_steps(since, new, restart=new != old or changed("worker/Dockerfile"))
     deployed_file.write_text(new + "\n")
     print(f"update: deployed source {new[:7]} (was {since[:7]}); runtime acceptance remains unverified")
+    before, after = tool_names(since), tool_names(new)
+    if before is not None and after is not None and before != after:
+        added = f"; new tools: {', '.join(sorted(after - before))}" if after - before else ""
+        print(f"update: the factory's tool list changed{added}. The running Day Desk gateway keeps the "
+              "list it loaded at its last start, so send /reload-mcp in that chat to load the change.")
     if changed("tenant/hermes/config.yaml"):
         print("update: tenant/hermes/config.yaml changed. The live ~/.hermes/profiles/day-desk/config.yaml "
               "keeps your model and Telegram settings, so merge any other change into it by hand (RUNBOOK)")
