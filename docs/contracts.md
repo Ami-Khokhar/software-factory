@@ -465,8 +465,14 @@ members without dispatch writes. Each member also has a lifetime cap of 8 passes
 `passesBefore`. Non-members, missing Projects and done Projects keep `FACTORY_MAX_PASSES`.
 `factory_extend_project` and `factory_stop_project` are owner-only tools. An extension resumes
 paused and stopped Projects without resetting `passesUsed` or any member's lifetime count.
-The Project schema's 60-pass ceiling describes starting budgets. Owner-extended records can
-exceed it (ADR-0101).
+A done Project refuses extension with a ToolError directing the owner to
+`factory_project_status`. The stored Project schema permits totals above 60. The start limit
+lives in `factory_start_project` and `projects.problem` (ADR-0101).
+
+Until WO-04 replaces them, Day Desk's per-item budget checks in `resolve_human`, `queue_retry`
+and `use_allowance`, and the audit budget in `_recovery_budget`, still use `FACTORY_MAX_PASSES`
+and `passesBefore` for members. These recovery checks remain per-item. An owner retry does
+not replenish a member's shared Project budget or lifetime cap (ADR-0101).
 
 ## Versioning
 

@@ -40,8 +40,7 @@ import tempfile
 import time
 import urllib.request
 import zipfile
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 CONFIG = Path.home() / ".config" / "factory-mcp"
@@ -438,12 +437,17 @@ def cmd_project(args):
         die("usage: factory project <id>")
     project = call("factory_project_status", {"id": args[0]})["project"]
     states = {wi["id"]: wi["state"] for wi in call("factory_status")["workItems"]}
-    deadline = datetime.fromisoformat(project["budget"]["deadline"].replace("Z", "+00:00"))
+    deadline = project["budget"]["deadline"]
+    try:
+        deadline = datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+        deadline = deadline.astimezone(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%d %H:%M IST")
+    except ValueError:
+        deadline = project["budget"]["deadline"]
     print(project["title"])
     print(project["state"] + (f": {project['pausedReason']}" if project["pausedReason"] else ""))
     print(f"{project['passesUsed']} of {project['budget']['passes']} passes")
-    print("deadline: " + deadline.astimezone(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d %H:%M IST"))
-    print("members: " + (", ".join(f"{id_}: {states.get(id_, 'not taken in')}"
+    print("deadline: " + deadline)
+    print("members: " + (", ".join(f"{id_}: {states.get(id_, 'not in the store')}"
                                    for id_ in project["members"]) or "none"))
     print("acceptance: " + (project["acceptanceItem"] or "none"))
 

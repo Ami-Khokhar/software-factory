@@ -794,6 +794,7 @@ class ProjectBudgetTest(unittest.TestCase):
                          ("exhausted", "8 passes on one member; the Lead splits it or the owner decides"))
         self.assertEqual(self.store.project(self.project["id"])["passesUsed"], 8)
         self.assertEqual(len(self.relay.tasks), 8)
+        self.assertEqual(self.store.history(self.id)[-1]["detail"]["project"], self.project["id"])
 
     def test_no_worker_charges_no_pass(self):
         self.github.contents[(REPO, ".github/pr-gatekeeper.json")] = '{"reviewer_model": "codex"}'
@@ -809,12 +810,29 @@ class ProjectBudgetTest(unittest.TestCase):
             {"id": self.project["id"], "passes": 60, "deadline": None, "by": "owner"})["project"]
         self.assertEqual((project["state"], project["pausedReason"], project["budget"]),
                          ("active", None, {"passes": 66, "deadline": "2026-11-01T00:00:00Z"}))
+        self.assertEqual(schema_errors("project", project), [])
         self.assertEqual(self.dispatch()["state"], "implementing")
         self.assertEqual(self.store.project(project["id"])["passesUsed"], 7)
         self.assertEqual([h["detail"] for h in self.store.global_history()
                           if h["action"] == "project_extended"],
                          [{"project": project["id"], "by": "owner", "was": self.project["budget"],
                            "now": project["budget"]}])
+
+    def test_a_done_project_cannot_be_extended(self):
+        project = self.update_project(state="done")
+        history = self.store.global_history()
+        with self.assertRaisesRegex(ToolError, "Project .* is done.*factory_project_status"):
+            self.owner_tools["factory_extend_project"].fn(
+                {"id": project["id"], "passes": 1, "deadline": None, "by": "owner"})
+        self.assertEqual(self.store.project(project["id"]), project)
+        self.assertEqual(self.store.global_history(), history)
+
+    def test_a_members_retry_refusal_does_not_promise_a_fresh_budget(self):
+        self.store.save_workorder({"id": "prior/1", "workItemId": self.id})
+        self.store.put(dict(self.store.get(self.id), state="blocked", blockedOn="verify failed"))
+        with self.assertRaisesRegex(ToolError, "the owner decides; a member keeps its Project budget and lifetime cap"):
+            self.foreman.queue_retry(self.id, "plan", "retry/member", "day-desk", "verify failed")
+        self.assertIsNone(self.store.request("retry/member"))
 
     def test_day_desk_cannot_extend_or_stop_a_project(self):
         agent = tools.build(self.store, self.foreman, agent=True)

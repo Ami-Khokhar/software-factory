@@ -840,7 +840,7 @@ class Foreman:
                 self._finish_recovery(wi, False)
                 return self._write(wi, dict(wi, state="exhausted", recovery=None, terminalReason=(
                     f"{used} passes on one member; the Lead splits it or the owner decides")),
-                    "exhausted")
+                    "exhausted", project=project_id)
         else:
             used = len(orders) - (wi.get("passesBefore") or 0)  # a person's retry buys a fresh budget
             if used >= self.config.max_passes:
@@ -1625,8 +1625,11 @@ class Foreman:
                 raise ToolError(f"{workitem_id}'s environment failed ({cause}) and is not repaired; the owner decides")
             used = len(self.store.workorders(workitem_id)) - (wi.get("passesBefore") or 0)
             if used >= self.config.max_passes:
-                raise ToolError(f"{workitem_id} used its {used} passes of budget; only the owner's retry buys "
-                                "a fresh budget")
+                project = self.store.project(wi["projectId"]) if wi.get("projectId") else None
+                advice = ("the owner decides; a member keeps its Project budget and lifetime cap"
+                          if project and project["state"] != "done"
+                          else "only the owner's retry buys a fresh budget")
+                raise ToolError(f"{workitem_id} used its {used} passes of budget; {advice}")
             allowance = self.store.allowance(plan_id)
             scope = allowance.get("scope") if allowance else None
             if not allowance or "retry" not in allowance["actions"] or not scope \
@@ -1816,6 +1819,8 @@ class Foreman:
             project = self.store.project(project_id)
             if project is None:
                 raise ToolError(f"No project {project_id}; read factory_project_status for its id")
+            if project["state"] == "done":
+                raise ToolError(f"Project {project_id} is done; read it with factory_project_status")
             budget = dict(project["budget"], passes=project["budget"]["passes"] + passes)
             if deadline is not None:
                 budget["deadline"] = deadline

@@ -111,6 +111,30 @@ class ProjectCliTest(unittest.TestCase):
         self.assertEqual(call.call_args_list, [mock.call("factory_project_status", {"id": "demo-project"}),
                                                mock.call("factory_status")])
 
+    def test_project_prints_an_unparseable_deadline_and_a_missing_member(self):
+        project = {"title": "Demo", "state": "active", "pausedReason": None, "passesUsed": 0,
+                   "budget": {"passes": 6, "deadline": "not-a-date-time"},
+                   "members": ["o/r#7"], "acceptanceItem": None}
+        with mock.patch.object(cli, "call", side_effect=[{"project": project}, {"workItems": []}]), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            cli.main(["project", "demo"])
+        self.assertIn("deadline: not-a-date-time\n", output.getvalue())
+        self.assertIn("members: o/r#7: not in the store\n", output.getvalue())
+
+    def test_project_prints_a_member_missing_from_the_store(self):
+        project = {"title": "Demo", "state": "active", "pausedReason": None, "passesUsed": 0,
+                   "budget": {"passes": 6, "deadline": "2026-11-01T00:00:00Z"},
+                   "members": ["o/r#7"], "acceptanceItem": None}
+        with mock.patch.object(cli, "call", side_effect=[{"project": project}, {"workItems": []}]), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            cli.main(["project", "demo"])
+        self.assertIn("members: o/r#7: not in the store\n", output.getvalue())
+
+    def test_project_cli_loads_without_timezone_data(self):
+        module = importlib.util.module_from_spec(importlib.util.spec_from_loader("factory_cli", LOADER))
+        with mock.patch.dict("sys.modules", {"zoneinfo": None}):
+            LOADER.exec_module(module)
+
     def test_extend_and_stop_project_call_the_owner_tools(self):
         for command, args, tool, fields in (
                 ("extend", ["demo", "10"], "factory_extend_project",
