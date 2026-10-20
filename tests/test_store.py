@@ -125,6 +125,7 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(dict(doc, wallMsOverride=None, pendingRetry=None, projectId=None),
                          migrated)
         reopened.close()
+
     def test_journal_survives_interruption_without_sidecar_files(self):
         """A store left un-closed (server SIGTERM) keeps committed data, and nothing lives outside
         factory.sqlite3: a copy of that file alone is the whole store (#197: no WAL sidecars)."""

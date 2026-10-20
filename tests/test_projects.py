@@ -5,6 +5,7 @@ owner's one yes starts a Project (ADR-0100) from the Lead's plan, through the Fo
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from factory_mcp import projects, tools
 from factory_mcp.config import Config
@@ -271,6 +272,84 @@ class StartProjectTest(unittest.TestCase):
         self.assertEqual(again["members"], [f"{REPO}#200", f"{REPO}#300", f"{REPO}#301"])
         with self.assertRaisesRegex(ToolError, "No project other-project"):
             self.foreman.add_project_members("other-project", [f"{REPO}#300"])
+
+    def test_start_project_builds_members_and_the_record_from_the_resolved_repo(self):
+        """The caller may spell the repo in another case than the allowlist does: the stored repo
+        and every member id use the spelling start_plan resolved, so the joins name WorkItems the
+        factory actually runs, not dead ids."""
+        foreman = Foreman(Store(":memory:"), FakeGitHub(),
+                          Config(mcp_token="t", repos=frozenset({"Acme/Widgets"})), FakeRelay())
+        fields = self.lead_fields(repo="acme/widgets", id="resolved-spelling")
+        made = foreman.start_project(fields, self.plan("One"), "amteshwar", "go.")
+        self.assertEqual(fields["repo"], "acme/widgets")  # the caller's dict keeps its own spelling
+        self.assertEqual((made["project"]["repo"], made["project"]["members"]),
+                         ("Acme/Widgets", ["Acme/Widgets#200"]))
+        self.assertEqual(foreman.store.get("Acme/Widgets#200")["projectId"], "resolved-spelling")
+        self.assertEqual(foreman.store.get("acme/widgets#200"), None)
+        self.assertEqual([row["detail"]["members"] for row in foreman.store.global_history()
+                          if row["action"] == "project_started"], [["Acme/Widgets#200"]])
+
+    def test_the_intake_join_waits_under_the_workitems_lease_and_refuses_when_it_stays_busy(self):
+        """The intake-side join is the lease path, not a bare write: a tick holding the WorkItem's
+        lease makes intake wait through the 5 one-second retries and then refuse loud, with the
+        projectId still unset and no uncaught Conflict escaping the intake."""
+        self.foreman.start_project(self.lead_fields(), self.plan("One"), "amteshwar", "go.")
+        project = self.foreman.store.project("self-maintaining-apis")
+        self.foreman.store.put_project(dict(project, members=project["members"] + [f"{REPO}#300"]))
+        self.github.add_issue(REPO, 300)
+        self.foreman.store.acquire(f"{REPO}#300", "a-tick")
+        sleeps = []
+        with mock.patch("factory_mcp.foreman.time.sleep", side_effect=lambda s: sleeps.append(s)):
+            with self.assertRaisesRegex(ToolError, "o/r#300 is being ticked and its lease stayed "
+                                                   "busy through 5 retries"):
+                self.foreman.intake(REPO, 300)
+        self.assertEqual(sleeps, [1] * 5)
+        self.assertEqual(self.foreman.store.get(f"{REPO}#300")["projectId"], None)
+
+    def test_the_intake_join_joins_during_a_retry_once_the_lease_frees(self):
+        """A tick releases while the join waits: the retry takes the lease and completes the join
+        inside the same intake call, which returns the joined WorkItem."""
+        self.foreman.start_project(self.lead_fields(), self.plan("One"), "amteshwar", "go.")
+        project = self.foreman.store.project("self-maintaining-apis")
+        self.foreman.store.put_project(dict(project, members=project["members"] + [f"{REPO}#300"]))
+        self.github.add_issue(REPO, 300)
+        self.foreman.store.acquire(f"{REPO}#300", "a-tick")
+        with mock.patch("factory_mcp.foreman.time.sleep",
+                        side_effect=lambda _s: self.foreman.store.release(f"{REPO}#300", "a-tick")):
+            wi = self.foreman.intake(REPO, 300)
+        self.assertEqual(wi["projectId"], "self-maintaining-apis")
+        self.assertEqual([h["detail"] for h in self.foreman.store.history(f"{REPO}#300")
+                          if h["action"] == "project_joined"],
+                         [{"project": "self-maintaining-apis", "from": "ready", "to": "ready"}])
+
+    def test_start_project_resumes_a_join_that_died_without_opening_the_plan_again(self):
+        """A join that exhausted its retries raised the ToolError whose advice ('call the tool
+        again') is now true: the same call, same id, same `by` and same quoted ownerWords, finds
+        its own Project, opens no second plan, finishes the joins, and names the start once."""
+        self.foreman.store.acquire(f"{REPO}#200", "a-tick")
+        with mock.patch("factory_mcp.foreman.time.sleep"):
+            with self.assertRaisesRegex(ToolError, "o/r#200 is being ticked"):
+                self.foreman.start_project(self.lead_fields(), self.plan("One", "Two"),
+                                           "amteshwar", "go.")
+        self.assertEqual(list(self.github.issues), [(REPO, 200), (REPO, 201)])  # the plan stands
+        project = self.foreman.store.project("self-maintaining-apis")
+        self.assertEqual(project["members"], [f"{REPO}#200", f"{REPO}#201"])
+        self.assertEqual((self.foreman.store.get(f"{REPO}#200")["projectId"],
+                          self.foreman.store.get(f"{REPO}#201")["projectId"]), (None, None))
+        started = [row for row in self.foreman.store.global_history()
+                   if row["action"] == "project_started"]
+        self.assertEqual(started, [])  # the first call raised before naming the start
+        self.foreman.store.release(f"{REPO}#200", "a-tick")
+        made = self.foreman.start_project(self.lead_fields(), self.plan("One", "Two"),
+                                          "amteshwar", "go.")
+        self.assertEqual(made["issues"], [])
+        self.assertEqual([(self.foreman.store.get(f"{REPO}#200")["projectId"],
+                           self.foreman.store.get(f"{REPO}#201")["projectId"])],
+                         [("self-maintaining-apis", "self-maintaining-apis")])
+        self.assertEqual([row["detail"] for row in self.foreman.store.global_history()
+                          if row["action"] == "project_started"],
+                         [{"project": "self-maintaining-apis", "by": "amteshwar",
+                           "members": [f"{REPO}#200", f"{REPO}#201"], "passes": 30}])
 
     def test_status_names_each_workitems_project(self):
         self.foreman.start_project(self.lead_fields(), self.plan("One", "Two"), "amteshwar", "go.")

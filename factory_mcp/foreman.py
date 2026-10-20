@@ -121,8 +121,7 @@ class Foreman:
         if wi.get("projectId") is None:  # an issue the Project already lists joins it (WO-02)
             project_id = self.store.project_of(wi["id"])
             if project_id:
-                wi = self._write(wi, dict(wi, projectId=project_id), "project_joined",
-                                 project=project_id)
+                wi = self._join_project(wi["id"], project_id)  # under the WorkItem's own lease
         return wi
 
     def _enabled(self, repo, by):
@@ -1744,23 +1743,51 @@ class Foreman:
         if problem:
             raise ToolError(f"{problem}. No issue was opened")
         project_id = fields["id"]
-        if self.store.project(project_id) is not None:
-            raise ToolError(f"project {project_id} exists; choose another id, or read it with "
-                            "factory_project_status")
+        stored = self.store.project(project_id)
+        if stored is None:
+            return self._project_from_plan(fields, issues, by)
+        if (stored["approval"].get("by") == by and stored["approval"].get("words") == owner_words):
+            # the same call re-run after a join died: its plan is already open, so resume
+            return self._resume_project(stored, by)
+        raise ToolError(f"project {project_id} exists; choose another id, or read it with "
+                        "factory_project_status")
+
+    def _project_from_plan(self, fields, issues, by):
+        """The steps after a start_project call's checks: open the plan, store the Project under
+        the repo spelling start_plan resolved (the allowlist's, so the members name the WorkItem
+        ids the factory actually runs), join the members, and name the start once."""
+        project_id = fields["id"]
         opened = self.start_plan(fields["repo"], issues, by)
-        members = [workitem.workitem_id(fields["repo"], item["issue"]) for item in opened["issues"]]
-        stored = self.store.create_project(dict(projects.new(fields, now()), members=members))
+        repo = opened["repo"]
+        members = [workitem.workitem_id(repo, item["issue"]) for item in opened["issues"]]
+        stored = self.store.create_project(dict(projects.new(fields, now()), repo=repo,
+                                                members=members))
         for member in members:
             self._join_project(member, project_id)
         self.store.log("project_started", {"project": project_id, "by": by, "members": members,
                                            "passes": fields["budget"]["passes"]})
         return {"project": stored, "issues": opened["issues"]}
 
+    def _resume_project(self, project, by):
+        """The same start_project call, re-run after a join died (ADR-0100): the Project and its
+        plan's issues are already stored, so no issue opens again. Each listed WorkItem that is
+        in the store but has no `projectId` yet is joined, then the start is named once, so one
+        successful run leaves exactly one `project_started` line."""
+        for member in project["members"]:
+            wi = self.store.get(member)
+            if wi is not None and wi.get("projectId") != project["id"]:
+                self._join_project(member, project["id"])
+        self.store.log("project_started", {"project": project["id"], "by": by,
+                                           "members": project["members"],
+                                           "passes": project["budget"]["passes"]})
+        return {"project": self.store.project(project["id"]), "issues": []}
+
     def _join_project(self, workitem_id, project_id):
         """Set one WorkItem `projectId` under its own lease, so a concurrent tick cannot take the
         WorkItem away between the read and the write. A busy lease is retried up to 5 times, one
-        second apart; past that a ToolError names the WorkItem and asks for the call again. The
-        lease is released on every way out."""
+        second apart, and a write that lost the version race is re-read and retried the same way;
+        past the retries a ToolError names the WorkItem and asks for the call again, which the
+        next start_project call resumes. The lease is released on every way out."""
         if not self.store.acquire(workitem_id, self.holder):
             for _ in range(5):
                 time.sleep(1)
@@ -1770,9 +1797,17 @@ class Foreman:
                 raise ToolError(f"{workitem_id} is being ticked and its lease stayed busy through "
                                 "5 retries, so call the tool again")
         try:
-            wi = self.store.get(workitem_id)
-            return self._write(wi, dict(wi, projectId=project_id), "project_joined",
-                               project=project_id)
+            for _ in range(5):
+                wi = self.store.get(workitem_id)
+                if wi is None:
+                    return None
+                try:
+                    return self._write(wi, dict(wi, projectId=project_id), "project_joined",
+                                       project=project_id)
+                except Conflict:  # a tick wrote between the read and the write; read it again
+                    continue
+            raise ToolError(f"{workitem_id} changed while its projectId was written; call the "
+                            "tool again")
         finally:
             self.store.release(workitem_id, self.holder)
 
