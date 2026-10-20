@@ -15,6 +15,69 @@ starting issues and answering escalations run without a yes per call, and factor
 bound them. Setting up a repo (factory_bootstrap_repo, factory_add_repo) and the lessons
 (factory_approve_lesson, factory_retire_lesson) also run without a yes per call. The shell below is not a way into the factory.
 
+## Lead a Project
+
+1. **Brainstorm.** Talk with the owner until you can write the goal in 2 sentences and one concrete example.
+   Ask at most 3 questions in one message.
+   Do not talk about files, modules or models with the owner unless the owner asks.
+2. **Brief.** Send one message of at most 12 lines.
+   Include the goal, the example, what is out of scope, the `doneWhen` checks in plain words, the budget in passes and the deadline in IST.
+   End with: "Say go to start."
+3. **Blueprint.** Before the owner's go, read the target repo's README, AGENTS.md, the tree of its source folder and the files the goal touches.
+   Write the blueprint with `blueprint-template.md` in this skill's folder.
+   Do not show the blueprint to the owner unless the owner asks.
+4. **Plan.** Split the blueprint into issues.
+   Keep each issue to at most about 400 source lines.
+   Name its files in `Paths:` lines.
+   Copy the exact files to create or change, functions, signatures and data shapes from the blueprint into each issue.
+   Give each issue `## Acceptance` bullets of the form `- <claim> — done when: <a test name or command>`.
+   Add one bullet that says what must not change.
+   Set `after` only to the issues it really needs so independent issues run in parallel.
+   Use at most 9 issues.
+   The factory adds the acceptance issue.
+5. **Start.** When the owner's message says go, yes, start or an equal word, call `factory_start_project`.
+   Put the owner's exact message in `ownerWords`.
+   Do not ask again.
+6. **Report the start** in one line with the Project id, the number of issues, the budget and the expected finish in IST.
+   After that, say nothing until the Project is done or paused, unless the owner asks.
+
+## Recover a member
+
+Read only the one WorkItem the drive queue names with `factory_status` and its id.
+Read only its last 2 `attempts`.
+Do not read the full status unless a decision needs another item.
+Use the first row that matches.
+Do one action.
+Read back the state.
+Use `factory_resolve_human` for retry and regate.
+
+| What the attempts and state show | Action |
+|---|---|
+| `leadBlockedBy` is a safety stop or an environment fault | Do nothing. The owner gets the notice. |
+| Timeout, and the member's `wip` is set (partial work was kept) | `factory_resolve_human` retry. Note: "Continue from the kept partial work. Finish the remaining acceptance bullets: <list them>." |
+| Timeout, no `wip`, fewer than 2 timeouts on this member | `factory_set_worker` to the next worker in `FACTORY_WORKERS` that has not failed here, then retry. Note: "Start by editing <files from the blueprint>. Do not explore other code." |
+| Timeout, no `wip`, 2 or more timeouts on this member | Split with `factory_replace_issue` into 2 or 3 replacements that keep every acceptance bullet. Give each replacement the files and signatures from the blueprint. Approve each replacement with `factory_approve_issue`. |
+| Failing test named in the attempt | Retry. Note: "Make <test id> pass. The failure: <one line>." |
+| Size ceiling (over 1000 source lines) | Split as in the timeout row, along the blueprint's module lines. |
+| Gate CHANGES with blocking findings | Do nothing. The factory dispatches the fix pass. |
+| Gate CHANGES with no finding, or the gate was silent | `factory_resolve_human` regate, once. The second time, do nothing: the owner gets the notice. |
+| A worker question is waiting | Answer it with `factory_answer_question` from the blueprint. |
+| `exhausted` with "passes on one member" | Split as in the timeout row. |
+| Anything else | Retry once with a note that names the evidence. The next time, split. |
+
+Approve split replacements that keep the acceptance with `factory_approve_issue`.
+Never ask the owner about a row in this table.
+Never retry the same failure with the same note twice.
+Never spend a pass only to diagnose.
+If you need facts, read the attempts and the audit.
+
+## What goes to the owner
+
+- The Project is done: use the factory's notice and add one line on how to try the product.
+- The Project is paused by budget, deadline or a failed acceptance end: give the cost to continue.
+- A safety stop or an environment fault.
+- A new paid provider, a secret, a change to `.github/` or `AGENTS.md`, a change to acceptance.
+
 ## What the factory can run
 
 Workers run in a Linux container with a short list of tools and no secrets. A repo whose verify
@@ -37,6 +100,8 @@ Credential-file readability is not provider authentication, and neither a stale 
 credential file is a reason for a broader token or another repair issue. Report only a real
 blocker or a material change, not the full diagnostic dump.
 
+For active Project members, use "Recover a member" and "What goes to the owner".
+For other WorkItems (non-members), use the rules below.
 You decide the routine work, then say what you decided. The factory's guards are the boundary, not
 a reason to ask:
 
@@ -52,7 +117,9 @@ When the owner has already said in this chat what to do — a yes to a split, a 
 — that is their decision: make the call in the same turn, quote their words as the note where a
 tool asks for them, and report it. Do not ask twice.
 
-Call factory_status with no id to see the board. For each WorkItem in human_waiting, blocked or
+When the owner asks for the board, call factory_status with no id.
+For an active Project member on a drive wake, use "Recover a member".
+For each WorkItem in human_waiting, blocked or
 exhausted, answer it when `agentMayResolve` is true and the rules above let you. List for the owner
 only the ones you cannot answer, with the id, state and `blockedOn`, and name the boundary it hit
 in one line. For the rest, give the state and PR number, and the issue each `waitingOn` one waits
@@ -101,6 +168,9 @@ detail of factory_repo_check. If the command needs a platform or tool the worker
    owner's name as `by`.
 
 ## Plan work
+
+Use this section for work outside an active Project (non-members).
+Use "Lead a Project" for a Project plan.
 
 Turn the owner's goal into issues the factory can finish, as the Plan rules of the factory
 standard in the repo's AGENTS.md ask:
@@ -185,7 +255,8 @@ WorkItem whose Depends-on line moves to the last replacement. A replacement that
 bullets changes what the work is, and that is the owner's decision: get their words in chat, quote
 them as `note`, and set `ownerAsked` true. The factory journals the request under the `requestId`, so a
 repeat resumes where it stopped. A `requestId` you have not used for this WorkItem's replacement
-before refuses as a conflict, the factory tells the owner. Never call it in the factory-drive job.
+before refuses as a conflict, the factory tells the owner. Never call it in the factory-drive job (non-members).
+For an active Project member, split through "Recover a member" in that job.
 Give the replacement issue numbers in the order they run as `replacements`; a replacement that
 does not exist yet is a `{'title': ..., 'body': ...}`
 plan item instead, which the factory opens itself as a `factory:proposed` issue under a marker
@@ -198,8 +269,8 @@ chain onto it, and every dependent of the original now waits for the last one; t
 cancelled and closed, its PR closed while it is still unmerged. It refuses a dependent that had a worker pass, a replacement that had a
 worker pass, an original whose work is still live, a replacement that waits for the original, and a
 cycle, with nothing changed: give
-the reason word for word. The replacements stay `factory:proposed` until a person approves each
-one. When the call succeeds, approve each replacement with factory_approve_issue, one call per
+the reason word for word. The replacements stay `factory:proposed` until approved.
+When the call succeeds, approve each replacement with factory_approve_issue, one call per
 issue, in the same order you named them: the factory re-pointed their dependencies when it ran
 the replacement, so nothing approves them before the call. When the call refuses, approve
 nothing: the replacements stay proposed until you decide the next step.
@@ -216,6 +287,9 @@ word. The usual causes are a missing `## Acceptance` list, an author the factory
 and a repo that fails factory_repo_check.
 
 ## Answer an escalation
+
+Use "Recover a member" for members of an active Project.
+Use the rules below for other WorkItems (non-members).
 
 A factory-watch alert names a WorkItem that waits on the owner. When you may answer it
 (`agentMayResolve` true) and the rules under "Who decides" allow it, answer it in the same turn and
@@ -261,6 +335,9 @@ that keeps the original's acceptance bullets is your call; report it.
 
 ## A worker's question
 
+For an active Project member, read only the queue item and answer from the blueprint.
+Use the steps below for other WorkItems (non-members).
+
 A running worker pass may ask you a question through its ask channel: `factory_status` shows it as
 `question` on the WorkItem, with its `id`, `text` and `askedAt`. The worker is blocked on it, for a
 bounded wait, and then goes on with its own reading.
@@ -278,6 +355,15 @@ bounded wait, and then goes on with its own reading.
 
 ## Drive the factory
 
+The monitor can also print "project <id>: acceptance <item> is changes_requested|blocked|human_waiting".
+Read that item with `factory_status` and the item id.
+Act only through the existing tools.
+For a member of an active Project, use "Recover a member".
+For a member of an active Project with `agentMayResolve` true, answer again even when the escalation is unchanged, except a safety stop, an environment fault and a member at its 8-pass cap.
+Read `leadBlockedBy` for the reason.
+Use "What goes to the owner" for Project reports.
+Use the rules below for other WorkItems (non-members).
+
 The driving job runs this section when the escalations you may answer change. It answers a pending
 `question` on a running WorkItem first, with "A worker's question". For each line of
 factory_status's workItems with `agentMayResolve` true:
@@ -289,7 +375,7 @@ factory_status's workItems with `agentMayResolve` true:
    permits and its `remaining` count. An allowance without a scope is a record the older factory
    wrote and refuses every spend: treat it as absent. The factory-watch job may message the owner
    about the same WorkItem while you act; that is its diagnosing, not a race you must win, and
-   repeated runs of this job read the same facts again, so you answer each escalation once,
+   repeated runs of this job read the same facts again, so you answer each escalation once (non-members),
    whichever route answers it; the tool re-arms one more answer only when a WorkItem's blocking
    facts materially change, and an unchanged escalation waits for the owner.
 2. For this rollout, route an ordinary fixable failure through the allowance only when every fact lines up: the reason shows an ordinary fixable
@@ -321,7 +407,7 @@ factory_status's workItems with `agentMayResolve` true:
      attempts that each ran out of time with a cause the evidence names and a retry still cannot fix (for example a harness timeout that reached the pass budget, where a split may be the honest answer), attempts that each ran out of time with no cause the evidence names — that is an unknown cause, and diagnosis, not a retry on allowance or on your own answer, and no unbounded retrying — a gate HUMAN with findings, or anything you
      cannot tell. Leave it; the owner hears of it.
 4. Call factory_resolve_human with the id, the choice, your note, and `day-desk` as `by`. You may
-   answer each escalation once; when the tool says the blocking facts have not changed and the
+   answer each escalation once (non-members); when the tool says the blocking facts have not changed and the
    owner decides now, leave it. Never set `ownerAsked` here: the owner spends a new budget, this
    job never does.
 5. Do not close a WorkItem; closing gives up the owner's work. Reply with one line per WorkItem you
@@ -350,6 +436,9 @@ many WorkItems went to a person and the top reasons with their counts, the new l
 and the lessons flagged as not working. Report only what factory_report returns.
 
 ## Report a feature's completion
+
+For a Project, use "What goes to the owner".
+Use the guidance below for work outside a Project (non-members).
 
 Implementation merged, runtime verified and live deployed are three different facts; never report
 one of them as another. A multi-issue feature ends with a runtime-verification issue after the

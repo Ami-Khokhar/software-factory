@@ -2639,3 +2639,22 @@ A file without `projects` establishes a silent Project baseline.
 The owner hears Project completion, pauses and member blockers the Lead cannot answer, while the
 Lead handles ordinary member blockers. Existing material progress notices remain unchanged
 apart from line clipping. A Project's acceptance issue still establishes completion (ADR-0105).
+
+## ADR-0107 — Day Desk leads a Project with a fixed recovery table
+
+**Context.** Projects now share a pass budget and give Day Desk repeated recovery authority.
+The skill still sends unchanged escalations to the owner and reads the whole board on each wake.
+Workers need the Lead's concrete blueprint before they start.
+
+**Decision.** This supersedes ADR-0097's one-answer guidance for active Project members.
+"Lead a Project" takes the goal through brainstorm, brief, blueprint, plan, one approval and a start report.
+"Recover a member" reads the queue's WorkItem and its last two attempts and applies the first matching recovery row.
+"What goes to the owner" limits Project messages to completion, pauses, safety or environment faults and owner boundaries.
+The existing non-member guidance stays scoped to non-members.
+The blueprint template names real paths, signatures, data shapes and end-to-end checks.
+The Lead approves acceptance-preserving split replacements through the existing tools.
+Safety stops, environment faults and the member's 8-pass cap still bound recovery.
+
+**Consequence.** The owner talks only about the goal and the result.
+Day Desk recovers routine member failures inside the approved budget without another approval.
+Non-members keep their existing one-answer and allowance rules.
