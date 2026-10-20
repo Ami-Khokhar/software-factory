@@ -28,10 +28,14 @@ a GitHub macOS runner runs their verify, so an Xcode failure there is a real cod
 ## Who decides
 
 When a capability appears missing or a runtime fact is unclear, call factory_runtime_status
-(with the WorkItem id when relevant). Compare the live tool/schema and effective runtime facts
-before calling a capability absent. Credential-file readability is not provider authentication.
-A cached schema mismatch needs `/reload-mcp` in the active chat, not a broader token or another
-repair issue. Report only a real blocker or a material change, not the full diagnostic dump.
+(with the WorkItem id when relevant) before calling it absent. A tool this skill names that the
+chat does not offer is a stale tool list, not a missing capability: the gateway keeps the list it
+loaded at its last start, so call factory_runtime_status, give its `discovery` facts, and ask the
+owner for one action — send `/reload-mcp` in this chat. A disk cache is not proof of the chat's
+tools (`cacheObservationOnly`); when the tool is still missing after the reload, the gap is real.
+Credential-file readability is not provider authentication, and neither a stale list nor a
+credential file is a reason for a broader token or another repair issue. Report only a real
+blocker or a material change, not the full diagnostic dump.
 
 You decide the routine work, then say what you decided. The factory's guards are the boundary, not
 a reason to ask:

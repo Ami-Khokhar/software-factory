@@ -685,7 +685,10 @@ always follows once. A change to `tenant/hermes/config.yaml` is reported: the
 live config also holds your model and Telegram settings, so merge the rest by hand. The one
 factory-owned key the update changes by itself is `mcp_servers.factory_drive.tools.include`, which
 it removes when present: the agent token already limits Day Desk's driving tools, and a stale copy
-of that list once hid `factory_set_dependencies` (ADR-0048).
+of that list once hid `factory_set_dependencies` (ADR-0048). When a deploy changes the tools
+factory-mcp advertises, the update prints the new names and tells you to send `/reload-mcp` in the
+Day Desk chat: the running gateway keeps the list it loaded at its last start, so a tool that a
+deploy adds stays invisible to that chat until it reloads.
 Run `factory update` yourself to deploy at once. The
 tests need the packages in `requirements.txt`, installed once for the Python that runs `factory`
 and that the `factory-update` job names: `/usr/bin/python3 -m pip install -r requirements.txt`.
