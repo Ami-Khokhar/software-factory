@@ -2491,6 +2491,37 @@ stops, leases, budgets); the Project approval changes none of them.
 
 ---
 
+## ADR-0101 — A member's passes come from its Project
+
+**Context.** ADR-0035 budgets each WorkItem separately. A Project needs to share passes across
+its members while preventing one hard issue from consuming the whole goal's budget.
+
+**Decision.** This supersedes ADR-0035 for active Project members only. A dispatch charges one
+Project pass in a SQLite transaction immediately before saving the WorkOrder, after worker
+routing and timeout checks. A spent budget commits a pause before refusing the dispatch and
+exhausting the member. Only that pause's caller emits `project_paused`. A member may dispatch
+at most 8 passes over its lifetime, ignoring `passesBefore`. Paused and stopped Projects hold
+members without writes or audit lines. Done Projects use the non-member path. Non-members,
+including items naming a missing Project, keep `FACTORY_MAX_PASSES` and their retry budgets.
+
+Only the owner may extend or stop a Project. `factory_extend_project` adds 1 to 60 passes,
+keeps the deadline unless given a new ISO date-time with timezone, clears `pausedReason` and
+makes the Project active even after a stop. A done Project refuses extension with a ToolError
+that says it is done and points to `factory_project_status`. The total may exceed the starting
+limit of 60.
+`factory_stop_project` records the owner's note as `pausedReason`. Both tools are excluded from
+Day Desk's token and profile. The CLI exposes `project`, `extend` and `stop-project`.
+
+Until WO-04 replaces them, Day Desk's per-item budget checks in `resolve_human`, `queue_retry`
+and `use_allowance`, and the audit budget in `_recovery_budget`, still use `FACTORY_MAX_PASSES`
+and `passesBefore` for Project members. These recovery checks do not yet use the shared budget
+or lifetime cap. An owner retry does not replenish a member's Project budget or lifetime cap.
+
+**Consequence.** The Project's committed count prevents concurrent members from spending the
+same remaining pass. An extension resumes held members, but an exhausted member still needs a
+retry and cannot bypass its lifetime cap. A pass already charged is not refunded if saving or
+submitting the WorkOrder fails. Recovery authority and completion detection remain later work.
+
 ## ADR-0104 — A worker follows the Lead's blueprint
 
 **Context.** Issue #13 used 4 passes of 25 minutes and changed no file. The worker spent its

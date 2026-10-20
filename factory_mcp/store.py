@@ -491,6 +491,31 @@ class Store:
                 raise Conflict(f"project {doc['id']} changed since version {read_version}")
         return stored
 
+    def charge_project_pass(self, project_id):
+        """Commit one member pass, or commit the spent budget's pause before refusing it."""
+        with self._lock, self._transaction():
+            row = self._db.execute("SELECT doc FROM projects WHERE id = ?", (project_id,)).fetchone()
+            if row is None:
+                raise Conflict(f"no project {project_id}")
+            project = json.loads(row[0])
+            if project["state"] != "active":
+                raise Conflict(f"project {project_id} is {project['state']}")
+            passes = project["budget"]["passes"]
+            spent = project["passesUsed"] >= passes
+            if spent:
+                stored = dict(project, state="paused", pausedReason=(
+                    f"the budget of {passes} passes is spent"))
+            else:
+                stored = dict(project, passesUsed=project["passesUsed"] + 1)
+            stored.update(stateVersion=project["stateVersion"] + 1, updatedAt=now())
+            self._db.execute("UPDATE projects SET state_version = ?, doc = ? WHERE id = ?",
+                             (stored["stateVersion"], json.dumps(stored, sort_keys=True), project_id))
+        if spent:  # raising inside the transaction would roll the pause back
+            exc = Conflict(f"project {project_id} spent its {passes} passes")
+            exc.paused_project = stored  # only the caller that paused it emits the notice
+            raise exc
+        return stored
+
     def project_of(self, workitem_id):
         """The id of the first Project that names `workitem_id` a member, or None. One lookup over
         the stored members arrays, not a parse of every Project document per call."""

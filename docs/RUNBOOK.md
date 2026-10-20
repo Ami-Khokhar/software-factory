@@ -104,6 +104,9 @@ crosses 1001 (a `human_waiting` WorkItem whose `blockedOn` names the decompositi
 | Command | What it does |
 |---|---|
 | `factory new <repo> <title> "<claim> \| <check>" ... [-d <text>] [-w <worker>]` | Opens a `factory:ready` issue; each `-w` adds a `Worker:` line |
+| `factory project <id>` | Six lines: title, state and pause reason, used/total passes, deadline in IST, members and states, acceptance item |
+| `factory extend <id> <passes> [<deadline>]` | Owner adds 1 to 60 passes and makes the Project active, even if stopped; optional ISO date-time with timezone replaces the deadline |
+| `factory stop-project <id> <note>` | Owner stops the Project and holds its members, recording the note |
 | `factory status [<repo#n>]` | What the factory is doing, and what it needs from you |
 | `factory retry\|regate\|close <repo#n> <note>` | Answers an escalation |
 | `factory add-repo <owner/repo>` | Makes a repo a factory target (it needs pr-gatekeeper) |
@@ -126,7 +129,8 @@ crosses 1001 (a `human_waiting` WorkItem whose `blockedOn` names the decompositi
 Limits: a WorkItem gets at most 4 worker passes (then `exhausted`); your `retry` gives it 4 more,
 also from `exhausted` (ADR-0035). You may also ask Day Desk in Telegram to retry it (ADR-0043). Two failed attempts in a row
 block it. Each pass has 20 minutes. Two passes of one repo run at once (`FACTORY_PASSES_PER_REPO`). A PR with no gate verdict
-for 2 hours goes to you.
+for 2 hours goes to you. For a Project member, the Project's shared budget and the 8-pass
+lifetime cap apply instead (see [the Project contract](contracts.md#project), ADR-0101).
 
 What the design does not protect against:
 
@@ -808,7 +812,15 @@ It also reports material state, head, PR, gate-round and worker transitions afte
 A merge or issue closure message says that runtime acceptance still needs confirmation. Without
 `FACTORY_AGENT_TOKEN`, the watcher tells you of every owner blocker at once. To retry an exhausted
 WorkItem, reply to the alert in Telegram:
-Day Desk retries it with a fresh budget, as `factory retry` does (ADR-0043).
+Day Desk retries a non-member with a fresh budget, as `factory retry` does (ADR-0043).
+An active Project member instead spends its Project's shared budget and stops after 8 lifetime
+passes, including passes before a retry. When the Project budget is spent, the next dispatch
+pauses the Project and exhausts that member. A paused or stopped Project dispatches no member.
+The owner runs `factory extend <id> <passes>` to add passes and resume it, then retries the
+exhausted member if it has fewer than 8 passes. An extension preserves the deadline unless a new
+ISO date-time with timezone is supplied, and the total may exceed 60 passes. `factory extend`
+and `factory stop-project` record the git user name and use owner-only tools that Day Desk cannot
+call. Members of done Projects keep the non-member budget rule.
 
 `factory-watch` sends one message for each new owner blocker and each material progress transition,
 and an error message when factory-mcp does not answer. `factory-report` sends the week in one message every Monday at

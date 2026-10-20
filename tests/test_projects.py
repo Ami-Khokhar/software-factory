@@ -524,7 +524,7 @@ class AcceptanceTest(unittest.TestCase):
         self.assertEqual((stored["state"], stored["pausedReason"]), ("done", None))
         self.assertEqual([row["detail"] for row in self.foreman.store.global_history()
                           if row["action"] == "project_done"],
-                         [{"project": project["id"], "members": project["members"], "passesUsed": 0}])
+                         [{"project": project["id"], "members": project["members"], "passesUsed": 1}])
 
     def test_a_cancelled_acceptance_item_pauses_the_project(self):
         for state in ("cancelled", "exhausted", "missing"):
@@ -591,9 +591,11 @@ class AcceptanceTest(unittest.TestCase):
         competing = []
 
         def write_before_update(sql):
-            if sql.startswith("UPDATE projects SET"):
+            if sql.startswith("UPDATE projects SET") and '"state": "done"' in sql:
                 store._db.set_trace_callback(None)
-                changed = dict(project, goal="a concurrent edit", stateVersion=project["stateVersion"] + 1)
+                current = json.loads(store._db.execute("SELECT doc FROM projects WHERE id = ?",
+                                                       (project["id"],)).fetchone()[0])
+                changed = dict(current, goal="a concurrent edit", stateVersion=current["stateVersion"] + 1)
                 store._db.execute("UPDATE projects SET state_version = ?, doc = ? WHERE id = ?",
                                   (changed["stateVersion"], json.dumps(changed), changed["id"]))
                 competing.append(changed)
@@ -719,6 +721,237 @@ class StartProjectToolTest(unittest.TestCase):
         self.assertEqual(made["project"]["members"], [f"{REPO}#200", f"{REPO}#201", f"{REPO}#202"])
         self.assertEqual(made["project"]["approval"]["words"], "go.")
         self.assertEqual(self.foreman.store.get(f"{REPO}#201")["projectId"], "self-maintaining-apis")
+
+
+class ProjectBudgetTest(unittest.TestCase):
+    def setUp(self):
+        self.store = Store(":memory:")
+        self.addCleanup(self.store.close)
+        self.github, self.relay = FakeGitHub(), FakeRelay()
+        self.foreman = Foreman(self.store, self.github,
+                               Config(mcp_token="t", repos=frozenset({REPO}), max_passes=1), self.relay)
+        self.project = self.store.create_project(projects.new(fields(repo=REPO), AT))
+        self.id = f"{REPO}#7"
+        self.github.add_issue(REPO, 7)
+        self.foreman.intake(REPO, 7)
+        self.project = self.foreman.add_project_members(self.project["id"], [self.id])
+        self.owner_tools = tools.build(self.store, self.foreman)
+
+    def dispatch(self):
+        return self.foreman.dispatch(self.store.get(self.id), "implement")
+
+    def ready_again(self, **over):
+        return self.store.put(dict(self.store.get(self.id), state="ready", **over))
+
+    def update_project(self, **over):
+        return self.store.put_project(dict(self.store.project(self.project["id"]), **over))
+
+    def test_a_member_dispatch_charges_the_project(self):
+        self.assertEqual(self.dispatch()["state"], "implementing")
+        self.assertEqual(self.store.project(self.project["id"])["passesUsed"], 1)
+        self.ready_again()
+        self.assertEqual(self.dispatch()["state"], "implementing")  # past FACTORY_MAX_PASSES=1
+        self.assertEqual(self.store.project(self.project["id"])["passesUsed"], 2)
+        self.assertEqual(len(self.relay.tasks), 2)
+
+    def test_a_spent_budget_pauses_the_project_and_exhausts_the_member(self):
+        self.update_project(passesUsed=5)
+        self.assertEqual(self.dispatch()["state"], "implementing")  # the last pass is allowed
+        self.assertEqual(self.store.project(self.project["id"])["passesUsed"], 6)
+        self.ready_again()
+        wi = self.dispatch()
+        project = self.store.project(self.project["id"])
+        self.assertEqual((wi["state"], wi["terminalReason"]),
+                         ("exhausted", f"project {project['id']} spent its 6 passes"))
+        self.assertEqual((project["state"], project["pausedReason"], project["passesUsed"]),
+                         ("paused", "the budget of 6 passes is spent", 6))
+        self.assertEqual(len(self.store.workorders(self.id)), 1)
+        self.assertEqual([h["detail"] for h in self.store.global_history()
+                          if h["action"] == "project_paused"],
+                         [{"project": project["id"], "reason": project["pausedReason"]}])
+        self.assertEqual(self.store.history(self.id)[-1]["detail"]["project"], project["id"])
+        self.ready_again()
+        history = self.store.global_history()
+        self.dispatch()
+        self.assertEqual(self.store.global_history(), history)  # no second notice
+
+    def test_a_paused_project_dispatches_nothing_and_writes_nothing(self):
+        for state in ("paused", "stopped"):
+            with self.subTest(state=state):
+                project = self.update_project(state=state, pausedReason="owner holds it")
+                wi, history = self.store.get(self.id), self.store.global_history()
+                self.assertEqual(self.dispatch(), wi)
+                self.assertEqual(self.store.get(self.id), wi)
+                self.assertEqual(self.store.project(project["id"]), project)
+                self.assertEqual(self.store.global_history(), history)
+                self.assertEqual((self.relay.tasks, self.store.workorders(self.id)), ({}, []))
+
+    def test_a_member_stops_at_eight_passes(self):
+        self.update_project(budget={"passes": 30, "deadline": AT})
+        for _ in range(8):
+            self.assertEqual(self.dispatch()["state"], "implementing")
+            self.ready_again(passesBefore=8)  # the owner's retry never resets a member's cap
+        wi = self.dispatch()
+        self.assertEqual((wi["state"], wi["terminalReason"]),
+                         ("exhausted", "8 passes on one member; the Lead splits it or the owner decides"))
+        self.assertEqual(self.store.project(self.project["id"])["passesUsed"], 8)
+        self.assertEqual(len(self.relay.tasks), 8)
+        self.assertEqual(self.store.history(self.id)[-1]["detail"]["project"], self.project["id"])
+
+    def test_no_worker_charges_no_pass(self):
+        self.github.contents[(REPO, ".github/pr-gatekeeper.json")] = '{"reviewer_model": "codex"}'
+        wi = self.dispatch()
+        self.assertEqual(wi["state"], "human_waiting")
+        self.assertIn("every allowed worker is in the reviewer family", wi["blockedOn"])
+        self.assertEqual(self.store.project(self.project["id"])["passesUsed"], 0)
+        self.assertEqual(self.store.workorders(self.id), [])
+
+    def test_the_owner_extends_a_paused_project_and_it_runs_again(self):
+        self.update_project(state="paused", pausedReason="spent", passesUsed=6)
+        project = self.owner_tools["factory_extend_project"].fn(
+            {"id": self.project["id"], "passes": 60, "deadline": None, "by": "owner"})["project"]
+        self.assertEqual((project["state"], project["pausedReason"], project["budget"]),
+                         ("active", None, {"passes": 66, "deadline": "2026-11-01T00:00:00Z"}))
+        self.assertEqual(schema_errors("project", project), [])
+        self.assertEqual(self.dispatch()["state"], "implementing")
+        self.assertEqual(self.store.project(project["id"])["passesUsed"], 7)
+        self.assertEqual([h["detail"] for h in self.store.global_history()
+                          if h["action"] == "project_extended"],
+                         [{"project": project["id"], "by": "owner", "was": self.project["budget"],
+                           "now": project["budget"]}])
+
+    def test_a_done_project_cannot_be_extended_or_stopped(self):
+        project = self.update_project(state="done")
+        history = self.store.global_history()
+        with self.assertRaisesRegex(ToolError, "Project .* is done.*factory_project_status"):
+            self.owner_tools["factory_extend_project"].fn(
+                {"id": project["id"], "passes": 1, "deadline": None, "by": "owner"})
+        with self.assertRaisesRegex(ToolError, "Project .* is done.*factory_project_status"):
+            self.owner_tools["factory_stop_project"].fn(
+                {"id": project["id"], "by": "owner", "note": "wait for review"})
+        self.assertEqual(self.store.project(project["id"]), project)
+        self.assertEqual(self.store.global_history(), history)
+
+    def test_a_members_allowance_refusal_names_the_shared_budget_and_lifetime_cap(self):
+        self.assertEqual(self.dispatch()["state"], "implementing")
+        wi = self.store.put(dict(self.store.get(self.id), state="blocked", blockedOn="verify failed"))
+        project = self.store.project(self.project["id"])
+        self.assertEqual(len(self.store.workorders(self.id)), self.foreman.config.max_passes)
+        self.assertEqual(project["state"], "active")
+        self.assertLess(project["passesUsed"], project["budget"]["passes"])
+        history = self.store.global_history()
+        with self.assertRaises(ToolError) as raised:
+            self.foreman.use_allowance(self.id, "plan", "retry", "verify failed", "day-desk")
+        self.assertEqual(str(raised.exception),
+                         f"{self.id} used its 1 passes of per-item budget; "
+                         "the Project's shared budget and the member's lifetime cap now govern it")
+        self.assertEqual(self.store.get(self.id), wi)
+        self.assertEqual(self.store.project(project["id"]), project)
+        self.assertEqual(self.store.global_history(), history)
+
+    def test_a_members_retry_refusal_does_not_promise_a_fresh_budget(self):
+        self.store.save_workorder({"id": "prior/1", "workItemId": self.id})
+        self.store.put(dict(self.store.get(self.id), state="blocked", blockedOn="verify failed"))
+        with self.assertRaisesRegex(ToolError, "the owner decides; a member keeps its Project budget and lifetime cap"):
+            self.foreman.queue_retry(self.id, "plan", "retry/member", "day-desk", "verify failed")
+        self.assertIsNone(self.store.request("retry/member"))
+
+    def test_day_desk_cannot_extend_or_stop_a_project(self):
+        agent = tools.build(self.store, self.foreman, agent=True)
+        for name in ("factory_extend_project", "factory_stop_project"):
+            self.assertNotIn(name, tools.AGENT_TOOLS)
+            self.assertNotIn(name, agent)
+            self.assertEqual(self.owner_tools[name].effect, "write")
+
+    def test_a_non_member_still_exhausts_at_factory_max_passes(self):
+        self.ready_again(projectId=None)
+        wi = self.foreman.tick(self.id)["workItem"]
+        self.assertEqual(wi["state"], "implementing")
+        self.relay.finish(wi["providerTaskId"], status="failed", error="crashed")
+        self.assertEqual(self.foreman.tick(self.id)["workItem"]["state"], "ready")
+        wi = self.foreman.tick(self.id)["workItem"]
+        self.assertEqual(wi["state"], "exhausted")
+        self.assertIn("1 worker passes used", wi["terminalReason"])
+        self.assertEqual(self.store.project(self.project["id"])["passesUsed"], 0)
+
+    def test_done_or_missing_projects_use_the_non_member_budget(self):
+        for state in ("done", "missing"):
+            with self.subTest(state=state):
+                self.setUp()
+                self.update_project(state="done")
+                if state == "missing":
+                    self.ready_again(projectId="no-such-project")
+                self.assertEqual(self.dispatch()["state"], "implementing")
+                self.ready_again()
+                wi = self.dispatch()
+                self.assertEqual(wi["state"], "exhausted")
+                self.assertIn("FACTORY_MAX_PASSES", wi["terminalReason"])
+                self.assertEqual(self.store.project(self.project["id"])["passesUsed"], 0)
+
+    def test_stop_holds_members_and_extend_resumes_with_a_new_deadline(self):
+        project = self.owner_tools["factory_stop_project"].fn(
+            {"id": self.project["id"], "by": "owner", "note": "wait for review"})["project"]
+        self.assertEqual((project["state"], project["pausedReason"]), ("stopped", "wait for review"))
+        self.assertEqual(self.dispatch()["state"], "ready")
+        project = self.owner_tools["factory_extend_project"].fn(
+            {"id": project["id"], "passes": 1, "deadline": AT, "by": "owner"})["project"]
+        self.assertEqual((project["state"], project["budget"]["deadline"]), ("active", AT))
+        self.assertEqual(self.dispatch()["state"], "implementing")
+        self.assertEqual([h["detail"] for h in self.store.global_history()
+                          if h["action"] == "project_stopped"],
+                         [{"project": project["id"], "by": "owner", "note": "wait for review"}])
+
+    def test_invalid_extensions_and_stops_change_nothing(self):
+        for passes in (0, 61, True, 1.5, "2"):
+            with self.assertRaisesRegex(ToolError, "passes from 1 to 60"):
+                self.foreman.extend_project(self.project["id"], passes, None, "owner")
+        for deadline in ("tomorrow", "2026-11-01", "2026-11-01T00:00:00", 7):
+            with self.assertRaisesRegex(ToolError, "ISO date-time"):
+                self.foreman.extend_project(self.project["id"], 1, deadline, "owner")
+        for name, args in (("factory_extend_project", {"id": self.project["id"], "passes": 1, "by": "owner"}),
+                           ("factory_stop_project", {"id": self.project["id"], "by": "owner", "note": "x", "extra": 1})):
+            with self.assertRaisesRegex(ToolError, "requires exactly"):
+                self.owner_tools[name].fn(args)
+        with self.assertRaisesRegex(ToolError, "name the owner"):
+            self.foreman.extend_project(self.project["id"], 1, None, "")
+        with self.assertRaisesRegex(ToolError, "name the owner"):
+            self.foreman.stop_project(self.project["id"], "owner", "")
+        with self.assertRaisesRegex(ToolError, "No project"):
+            self.foreman.extend_project("unknown", 1, None, "owner")
+        with self.assertRaisesRegex(ToolError, "No project"):
+            self.foreman.stop_project("unknown", "owner", "wait")
+        self.assertEqual(self.store.project(self.project["id"]), self.project)
+
+    def test_charge_refuses_missing_and_inactive_projects_without_writes(self):
+        with self.assertRaisesRegex(Conflict, "no project missing"):
+            self.store.charge_project_pass("missing")
+        for state in ("paused", "stopped", "done"):
+            project = self.update_project(state=state)
+            with self.assertRaisesRegex(Conflict, f"is {state}"):
+                self.store.charge_project_pass(project["id"])
+            self.assertEqual(self.store.project(project["id"]), project)
+
+    def test_two_connections_cannot_spend_the_same_last_pass(self):
+        import concurrent.futures
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / "factory.sqlite3")
+            stores = [Store(path), Store(path)]
+            try:
+                stores[0].create_project(dict(projects.new(fields(), AT), passesUsed=5))
+                def charge(store):
+                    try:
+                        return store.charge_project_pass(self.project["id"])["passesUsed"]
+                    except Conflict as exc:
+                        return str(exc)
+                with concurrent.futures.ThreadPoolExecutor(2) as pool:
+                    results = list(pool.map(charge, stores))
+                self.assertEqual(sum(result == 6 for result in results), 1)
+                self.assertIn(f"project {self.project['id']} spent its 6 passes", results)
+                self.assertEqual(stores[0].project(self.project["id"])["passesUsed"], 6)
+                self.assertEqual(stores[0].project(self.project["id"])["state"], "paused")
+            finally:
+                for store in stores:
+                    store.close()
 
 
 if __name__ == "__main__":

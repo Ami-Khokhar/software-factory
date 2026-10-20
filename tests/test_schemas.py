@@ -65,7 +65,6 @@ PROJECT_OVER = [
     ("a doneWhen claim", "doneWhen", [{"claim": "c", "command": "x"},
                                       {"claim": "x" * 301, "command": "x"}]),
     ("a doneWhen command", "doneWhen", [{"claim": "c", "command": "x" * 501}]),
-    ("the pass budget", "budget", {"passes": 61, "deadline": "2026-11-01T00:00:00Z"}),
     ("an approval by", "approval", {"by": "x" * 101, "words": "go.", "at": PROJECT_AT}),
     ("approval words", "approval", {"by": "owner", "words": "x" * 501, "at": PROJECT_AT}),
 ]
@@ -176,7 +175,7 @@ class SchemaTest(unittest.TestCase):
                              [e.message for e in validator.iter_errors(doc)] == [],
                              "the schema and the checks disagree")
 
-        # Every field at its own limit: the widest document the schema accepts.
+        # Every starting field at its own limit.
         at_limit = project_fields(id="a" * 41, title="x" * 100, goal="x" * 2000,
                                   blueprint="x" * 20000,
                                   doneWhen=[{"claim": "x" * 300, "command": "x" * 500}] * 5,
@@ -192,6 +191,14 @@ class SchemaTest(unittest.TestCase):
                 agrees(project_fields(**over),
                        dict(projects.new(project_fields(), PROJECT_AT), **over))
                 self.assertIsNotNone(projects.problem(project_fields(**over)))
+
+    def test_the_start_pass_limit_does_not_limit_extended_documents(self):
+        fields = project_fields(budget={"passes": 61, "deadline": "2026-11-01T00:00:00Z"})
+        self.assertIsNotNone(projects.problem(fields))
+        validator = Draft202012Validator(schema("project"),
+                                         format_checker=Draft202012Validator.FORMAT_CHECKER)
+        extended = dict(projects.new(project_fields(), PROJECT_AT), budget=fields["budget"])
+        self.assertEqual(list(validator.iter_errors(extended)), [])
 
     def test_a_workorder_with_a_project_matches_the_schema(self):
         project = projects.new(project_fields(goal="g" * 2000, blueprint="b" * 20000), PROJECT_AT)

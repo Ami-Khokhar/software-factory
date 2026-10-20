@@ -176,12 +176,12 @@ dispatch-preflight consumption of these records are separate operations.
   one is not taken as "the gate finished without a verdict". WorkItems stored
   before this field have none; readers treat that as null.
 - **`WorkItem.passesBefore` is how many worker passes were used before the last
-  person's retry (ADR-0035).** The budget of `FACTORY_MAX_PASSES` counts only the
-  passes after it. WorkItems stored before this field have none; readers treat
+  person's retry (ADR-0035).** For non-members and members of done Projects,
+  `FACTORY_MAX_PASSES` counts only the passes after it. WorkItems stored before this field have none; readers treat
   that as 0. The tool `factory_resolve_human` takes an optional `ownerAsked`
   boolean: Day Desk sets it only when the owner asked in chat for this retry,
   regate or close. It answers a WorkItem whose current escalation Day Desk
-  already answered, and a retry buys a fresh budget like a person's retry; the
+  already answered. For a non-member, a retry buys a fresh budget like a person's retry; the
   history row of the answer holds `agent` and `ownerAsked` (ADR-0043, extended by
   ADR-0046).
 - **`WorkItem.incident` is the escalation's identity (ADR-0081).** `{id, action,
@@ -430,12 +430,12 @@ Re-running the same request — the same resolved repo, title, goal, blueprint, 
 budget and plan —
 resumes the joins that died, answers the stored record and adds no second `project_started`
 audit row; any other call for a taken id is refused: creating a second with the same id
-conflicts. At the end of a full tick, `_advance_projects` writes `state` and `pausedReason`:
-a closed acceptance WorkItem makes the Project `done` and clears the reason. A missing,
-cancelled or exhausted acceptance item, or a passed deadline, makes it `paused` with a reason
-(ADR-0105). A legacy null `acceptanceItem` with members adopts the last member on resume or
-advancement, without opening another issue. `passesUsed` is still unwritten by this branch.
-The keys:
+conflicts. Dispatch charges `passesUsed` and pauses a spent budget; the owner can stop or
+extend the Project (ADR-0101). At the end of a full tick, `_advance_projects` writes `state`
+and `pausedReason`: a closed acceptance WorkItem makes the Project `done` and clears the
+reason. A missing, cancelled or exhausted acceptance item, or a passed deadline, makes it
+`paused` with a reason (ADR-0105). A legacy null `acceptanceItem` with members adopts the last
+member on resume or advancement, without opening another issue. The keys:
 
 | Key | What it means |
 |---|---|
@@ -446,15 +446,33 @@ The keys:
 | `goal` | 1 to 2000 characters: what done means, in the owner's words. |
 | `blueprint` | 1 to 20000 characters of Markdown: the Lead's design (modules, files, function names, data shapes, order of work). It rides in every member's WorkOrder (WO-06), so a worker does not itself have to plan. |
 | `doneWhen` | 1 to 5 `{claim, command}` checks; the acceptance issue runs them (WO-07). |
-| `budget` | `{passes, deadline}`: the whole Project's budget of worker passes, 1 to 60 within the deadline. The owner extends past 60 (WO-03). Passes are charged per worker pass (WO-03). |
+| `budget` | `{passes, deadline}`: the whole Project's budget of worker passes. Starting budgets are 1 to 60. Owner extensions add 1 to 60 passes and may take the total above 60 (ADR-0101). A supplied replacement deadline is an ISO date-time with timezone. |
 | `passesUsed` | The passes charged so far. Starts at 0. |
-| `state` | `active`, `paused`, `done` or `stopped`. Start writes `active`; full ticks write `done` or `paused` (ADR-0105). |
-| `pausedReason` | Set only while `paused`: why, so the owner's notice can say it. |
+| `state` | `active`, `paused`, `done` or `stopped`. Start writes `active`; dispatch pauses a
+spent budget; the owner stops a Project; full ticks write `done` or `paused` (ADR-0105). |
+| `pausedReason` | Why the Project is `paused` or `stopped`: how it stalled. An extension
+clears it. |
 | `members` | The WorkItem ids of the Project, unique. The Lead adds them as it starts issues (WO-02); a split's replacements inherit the Project (WO-04). |
 | `acceptanceItem` | The one member that carries the final acceptance checks; the Project ends when its issue merges (WO-07). |
 | `approval` | `{by, words, at}`: who said go and what they said. |
 | `stateVersion` | Optimistic-concurrency version; the store writes version + 1. |
 | `createdAt`, `updatedAt` | When the Project was written. `projects()` reads in `createdAt` order. |
+
+Active Project members charge this shared budget just before a WorkOrder is saved, after worker
+routing and timeout checks. The charge commits in one transaction. A spent budget commits a
+pause and refuses the next pass, exhausting that member. A paused or stopped Project holds its
+members without dispatch writes. Each member also has a lifetime cap of 8 passes, regardless of
+`passesBefore`. Non-members, missing Projects and done Projects keep `FACTORY_MAX_PASSES`.
+`factory_extend_project` and `factory_stop_project` are owner-only tools. An extension resumes
+paused and stopped Projects without resetting `passesUsed` or any member's lifetime count.
+A done Project refuses extension with a ToolError directing the owner to
+`factory_project_status`. The stored Project schema permits totals above 60. The start limit
+lives in `factory_start_project` and `projects.problem` (ADR-0101).
+
+Until WO-04 replaces them, Day Desk's per-item budget checks in `resolve_human`, `queue_retry`
+and `use_allowance`, and the audit budget in `_recovery_budget`, still use `FACTORY_MAX_PASSES`
+and `passesBefore` for members. These recovery checks remain per-item. An owner retry does
+not replenish a member's shared Project budget or lifetime cap (ADR-0101).
 
 ## Versioning
 
