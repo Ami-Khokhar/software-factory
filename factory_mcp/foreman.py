@@ -535,10 +535,18 @@ class Foreman:
     def _notify(self, wi):
         """Tell the owner on the issue. A failed comment is logged; it never blocks the transition."""
         reason = self._reason(wi)
-        ask = ("Nothing more will happen until a person decides: call `factory_resolve_human` with "
-               "`retry`, `regate` or `close`." if wi["state"] != "exhausted" else
-               "The WorkItem has used its budget and stopped.")
-        body = (f"**software-factory needs a person.** WorkItem `{wi['id']}` is `{wi['state']}`.\n\n"
+        if wi["state"] == "exhausted":
+            headline, ask = ("software-factory needs a person",
+                             "The WorkItem has used its budget and stopped.")
+        elif agent_may_resolve(wi, self.store.history(wi["id"])):
+            headline = "software-factory is waiting on a decision"
+            ask = ("Day Desk decides this one first and reports here. A person decides when the answer "
+                   "needs a fresh pass budget, or when Day Desk says it cannot.")
+        else:
+            headline = "software-factory needs a person"
+            ask = ("Nothing more will happen until a person decides: call `factory_resolve_human` with "
+                   "`retry`, `regate` or `close`.")
+        body = (f"**{headline}.** WorkItem `{wi['id']}` is `{wi['state']}`.\n\n"
                 f"```\n{reason[:600]}\n```\n\n{ask}\n\n@{wi.get('owner') or wi['repo'].split('/')[0]}")
         try:
             self.github.comment(wi["repo"], wi["issueNumber"], body)
@@ -1811,11 +1819,35 @@ class Foreman:
                                  f"there and run scripts/provider_health.py before any WorkOrder "
                                  f"goes to it")}
 
+    def _split_keeps_acceptance(self, wi, replacements):
+        """Whether the replacements together carry the original issue's acceptance bullets, with
+        every replacement carrying at least one. That is the same work in smaller pieces, which Day
+        Desk may decide; a replacement that changes the bullets changes what the work is, and stays
+        the owner's decision (ADR-0097)."""
+        def key(rows):
+            return sorted((row["claim"], row["doneWhen"]) for row in rows)
+
+        original = key(workitem.parse_acceptance(
+            self.github.issue(wi["repo"], wi["issueNumber"]).get("body"))[0])
+        if not original:
+            return False
+        together = []
+        for entry in replacements:
+            body = entry.get("body") if isinstance(entry, dict) else \
+                self.github.issue(wi["repo"], entry).get("body")
+            part = workitem.parse_acceptance(body)[0]
+            if not part:
+                return False
+            together.extend(part)
+        return original == key(together)
+
     def replace_issue(self, workitem_id, replacements, by, note, request_id, *, agent=False,
                       owner_asked=False, allowance_plan_id=None):
-        """Replace a WorkItem waiting on recovery with ordered replacement issues (ADR-0059). The
-        owner approves the replacement: Day Desk calls it only when the owner asked for it in chat
-        (`owner_asked`, ADR-0035 / ADR-0043), with the owner's approval words as the note; the owner's
+        """Replace a WorkItem waiting on recovery with ordered replacement issues (ADR-0059). A
+        split that carries the original's acceptance bullets across the replacements runs without
+        the owner and is Day Desk's call; any other replacement is the owner's decision: Day Desk
+        calls it only when the owner asked for it in chat (`owner_asked`, ADR-0035 / ADR-0043), with
+        the owner's approval words as the note; the owner's
         own call carries its approval as the note and leaves ownerAsked unset. The caller passes a
         stable request ID: the journal is keyed by the WorkItem, so the same request ID with the same
         inputs replays where the run stopped, and a different request ID for the same original
@@ -1837,11 +1869,6 @@ class Foreman:
         if owner_asked and not agent:
             raise ToolError("ownerAsked is Day Desk's flag for a decision the owner asked for in chat; the "
                             "owner's own call does not need it")
-        if agent and not owner_asked and not allowance_plan_id:
-            raise ToolError(f"replacing {workitem_id} is the owner's decision, because it cancels "
-                            "the owner's work: get the owner's words of approval in chat, quote them as "
-                            "the note, name the owner as by, and set ownerAsked true; or run it inside "
-                            "an owner-approved plan allowance with allowancePlanId")
         if not agent and allowance_plan_id:
             raise ToolError("allowancePlanId is Day Desk's allowance-backed replacement (ADR-0069); "
                             "the owner's own call carries its approval as the note")
@@ -1881,6 +1908,14 @@ class Foreman:
                 raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
             journal_id = f"replace/{workitem_id}"
             record = self.store.request(journal_id)
+            if (agent and not owner_asked and not allowance_plan_id and not record
+                    and not self._split_keeps_acceptance(wi, replacements)):
+                raise ToolError(
+                    f"replacing {workitem_id} changes what the work is, and that is the owner's "
+                    "decision: a split that carries the original's '## Acceptance' bullets across the "
+                    "replacements runs without it; otherwise get the owner's words of approval in chat, "
+                    "quote them as the note, name the owner as by, and set ownerAsked true, or run it "
+                    "inside an owner-approved plan allowance with allowancePlanId")
             active = {row["requestId"] for row in self.store.active_pauses()}
             if record and record["phase"] == REQUEST_PHASES[-1] and journal_id in active:
                 # the run completed; only its release was killed. The journal says done, so the

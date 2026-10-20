@@ -71,8 +71,9 @@ class ReplaceIssueTest(unittest.TestCase):
         self.assertEqual(self.github.writes, [])
 
     def test_day_desk_may_replace_only_on_the_owners_approval(self):
-        """A replacement cancels the owner's work and opens the factory's own issues, so a driving
-        Day Desk call is refused: the owner decides, as ownerAsked says they asked in chat."""
+        """A replacement that changes what the work is cancels the owner's work and opens the
+        factory's own issues, so a driving Day Desk call is refused: the owner decides, as
+        ownerAsked says they asked in chat. A split that keeps the acceptance is the next test."""
         self.wait()
         with self.assertRaisesRegex(ToolError, "is the owner's decision"):
             self.replace(agent=True)
@@ -86,6 +87,23 @@ class ReplaceIssueTest(unittest.TestCase):
         self.assertEqual(replaced[0]["detail"].get("ownerAsked"), True)
         self.assertEqual(replaced[0]["detail"].get("note"), "you may replace it")
         self.assertEqual(replaced[0]["detail"].get("requestId"), f"req/{ORIGINAL}")
+
+    def test_day_desk_may_split_an_issue_that_keeps_its_acceptance(self):
+        """A split that carries the original's acceptance bullets is the same work in smaller
+        pieces, so Day Desk makes it without the owner and without ownerAsked (ADR-0097)."""
+        self.github.issues[(REPO, int(ORIGINAL.split("#")[1]))]["body"] = (
+            "## Acceptance\n- first thing — done when: test_one passes\n"
+            "- second thing — done when: test_two passes\n")
+        self.wait()
+        items = [{"title": "First", "body": "Paths: src/one.py\n\n## Acceptance\n"
+                                            "- first thing — done when: test_one passes\n"},
+                 {"title": "Second", "body": "Paths: src/two.py\n\n## Acceptance\n"
+                                             "- second thing — done when: test_two passes\n"}]
+        wi = self.foreman.replace_issue(ORIGINAL, items, "day-desk", "too big for one pass",
+                                        "split-req", agent=True)
+        self.assertEqual(wi["state"], "cancelled")
+        replaced = [h for h in self.foreman.store.history(ORIGINAL) if h["action"] == "replaced"]
+        self.assertNotIn("ownerAsked", replaced[0]["detail"])
 
     def test_ownerAsked_is_not_the_owners_own_flag(self):
         self.wait()

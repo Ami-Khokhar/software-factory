@@ -2378,3 +2378,30 @@ instead of 13. A verify that needs more than 3 minutes now runs out of its own c
 pass at the verification phase, so raising that floor is a change here, not a config knob. On a
 harness timeout the verify reserve and the post-harness float are both still unspent, which is what
 salvage and the Result run on; on a `remoteVerify` order only the 60-second buffer and the float do.
+
+## ADR-0097 — Day Desk decides routine work; the owner decides boundaries
+
+**Context.** Between 2026-10-01 and 2026-10-19 the Day Desk chat handed the owner 26 decisions,
+and 20 were routine: a retry, a split, a dependency, a timeout, a gate that failed itself. The
+tools already allowed those calls, and the owner had usually said yes in general terms ("smaller
+chunks are fine") before being asked again for the specific call. The friction came from the
+skill and the factory's own words: `What needs the owner` listed routine cases, the Drive rules
+called a dependency and a CHANGES-with-no-code-finding "needs a person", `factory_replace_issue`
+refused any split Day Desk did not have `ownerAsked` for, and the escalation comment said
+"nothing more will happen until a person decides" before Day Desk had tried.
+
+**Decision.** Day Desk decides, and then says what it decided. It may answer any escalation the
+guards accept (one answer per incident, inside the passes the WorkItem has left), split an issue
+when the replacements together carry the original's `## Acceptance` bullets with every replacement
+carrying at least one, set a longer run from the evidence, free a dependency, and choose a worker
+among FACTORY_WORKERS. The owner decides a new pass budget or allowance, a merge, a change to
+`.github/` or `AGENTS.md`, a replacement that changes the acceptance, a credential or secret, a
+new worker in FACTORY_WORKERS, and closing work that could still succeed. A factory comment names
+Day Desk as the first decider when the incident is one it may answer. An owner instruction in
+chat that covers the action, even in general terms, is the owner's words for `ownerAsked`; Day
+Desk quotes it and does not ask again.
+
+**Consequence.** A split that keeps the acceptance no longer needs an owner approval, and the
+factory refuses one that changes it without the owner's words. The one-answer rule and the pass
+budget still bound an agent answer, so the change cannot spend a new budget. The Drive job still
+never sets `ownerAsked`, because nobody is in the chat to say yes.
