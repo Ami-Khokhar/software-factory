@@ -2612,3 +2612,29 @@ per Project. Non-active Projects and single-WorkItem ticks do not advance Projec
 passed and the gate reviewed the evidence. Legacy Projects retain their existing final member
 as the completion check. The factory records `project_done` with the members and passes used, or
 `project_paused` with its reason. WorkItem transitions and the gate's merge authority stay the same.
+
+
+## ADR-0106 — Day Desk wakes on a stuck item every 30 minutes, and the owner hears Project events
+
+**Context.** Stuck items #13, #12 and #3 waited 6.2, 7.0 and 19.3 hours respectively.
+Day Desk's monitor runs the model only when queue text changes, so a stable blocker stopped
+waking it. ADR-0093's per-item owner notices also interrupt recovery inside an active Project.
+
+**Decision.** This refines ADR-0093. Each answerable queue item includes whole minutes since
+its UTC `updatedAt`, rounded down in 30-minute steps and capped at 360. Legacy rows without a
+timestamp retain their old queue line. Active Projects also list acceptance items in `blocked`,
+`human_waiting` or `changes_requested` so Day Desk sees stuck acceptance work.
+
+The watcher reads Projects once per run. For active Project members it suppresses waiting
+notices except when `leadBlockedBy` starts with `safety stop` or `environment fault`.
+Non-members keep the existing waiting and grace rules. A Project entering `done` reports its
+closed-member count, passes used against budget and up to ten closed-member PR URLs. A Project
+entering `paused`, or changing its pause reason, reports the reason and `factory extend` hint.
+All watcher lines are clipped. The version 2 watch file retains `waiting` and `progress`, adds
+`projects` mapping ids to states, and stores `projectPausedReasons` to detect a changed reason.
+A file without `projects` establishes a silent Project baseline.
+
+**Consequence.** Stuck work wakes Day Desk every 30 minutes for six hours, then stays stable.
+The owner hears Project completion, pauses and member safety or environment stops, while the
+Lead handles ordinary member blockers. Existing material progress notices remain unchanged
+apart from line clipping. A Project's acceptance issue still establishes completion (ADR-0105).

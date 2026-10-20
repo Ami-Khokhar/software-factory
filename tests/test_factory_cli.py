@@ -735,6 +735,144 @@ class WatchTest(unittest.TestCase):
             (command or cli.cmd_watch)([])
         return printed.getvalue()
 
+    def project_run(self, projects, *rows, command=None, driving=False):
+        printed = io.StringIO()
+        secrets = {"FACTORY_AGENT_TOKEN": "a"} if driving else {}
+        with mock.patch.object(cli, "call", side_effect=[{"workItems": list(rows)},
+                                                         {"projects": projects}]) as call, \
+                mock.patch.object(cli, "read_env", return_value=secrets), \
+                contextlib.redirect_stdout(printed):
+            (command or cli.cmd_watch)([])
+        self.assertEqual(call.call_args_list, [mock.call("factory_status"),
+                                               mock.call("factory_project_status")])
+        lines = printed.getvalue().splitlines()
+        if command is None:
+            self.assertTrue(all(len(line) <= cli.REPORT_WIDTH for line in lines))
+        return lines
+
+    def project(self, **changes):
+        return dict({"id": "demo", "repo": "o/r", "title": "Demo", "state": "active",
+                     "members": ["o/r#7"], "acceptanceItem": "o/r#7", "pausedReason": None,
+                     "passesUsed": 23, "budget": {"passes": 30, "deadline": "2026-11-01T00:00:00Z"}},
+                    **changes)
+
+    def test_drive_queue_shows_the_wait_in_thirty_minute_steps(self):
+        row = {"id": "o/r#7", "state": "blocked", "agentMayResolve": True,
+               "blockedOn": "verify exited 1", "updatedAt": "2026-10-21T04:54:00Z"}
+        for elapsed, bucket in ((0, 0), (1799, 0), (1800, 30), (3599, 30), (3600, 60)):
+            with self.subTest(elapsed=elapsed), mock.patch.object(cli, "datetime", wraps=cli.datetime) as clock:
+                clock.now.return_value = cli.datetime.strptime(row["updatedAt"], "%Y-%m-%dT%H:%M:%SZ").replace(
+                    tzinfo=cli.timezone.utc) + cli.timedelta(seconds=elapsed)
+                self.assertEqual(self.project_run([], row, command=cli.cmd_drive_queue),
+                                 [f"o/r#7 is blocked (waiting {bucket}m): verify exited 1"])
+                clock.now.assert_called_once_with(cli.timezone.utc)
+
+    def test_drive_queue_stops_counting_at_six_hours(self):
+        row = {"id": "o/r#7", "state": "blocked", "agentMayResolve": True,
+               "blockedOn": "verify exited 1", "updatedAt": "2026-10-20T00:00:00Z"}
+        for hours in (6, 7, 48):
+            with self.subTest(hours=hours), mock.patch.object(cli, "datetime", wraps=cli.datetime) as clock:
+                clock.now.return_value = cli.datetime(2026, 10, 20, tzinfo=cli.timezone.utc) + cli.timedelta(hours=hours)
+                self.assertEqual(self.project_run([], row, command=cli.cmd_drive_queue),
+                                 ["o/r#7 is blocked (waiting 360m): verify exited 1"])
+
+    def test_drive_queue_lists_a_stuck_acceptance_item(self):
+        for state in ("blocked", "human_waiting", "changes_requested", "implementing", "closed"):
+            for project_state in ("active", "paused", "done", "stopped"):
+                with self.subTest(state=state, project_state=project_state):
+                    expected = ([f"project demo: acceptance o/r#7 is {state}"]
+                                if project_state == "active" and state in (
+                                    "blocked", "human_waiting", "changes_requested") else [])
+                    self.assertEqual(self.project_run([self.project(state=project_state)],
+                                     {"id": "o/r#7", "state": state}, command=cli.cmd_drive_queue), expected)
+        self.assertEqual(self.project_run([self.project(acceptanceItem=None)], command=cli.cmd_drive_queue), [])
+
+    def test_watch_is_silent_about_a_member_the_lead_may_answer(self):
+        row = {"id": "o/r#7", "state": "implementing", "projectId": "demo"}
+        self.assertEqual(self.project_run([self.project()], row), [])
+        for state in ("blocked", "human_waiting", "exhausted"):
+            for reason in (None, "member used 8 passes", "project demo is paused"):
+                for driving in (False, True):
+                    with self.subTest(state=state, reason=reason, driving=driving):
+                        self.assertEqual(self.project_run([self.project()], dict(row, state=state,
+                                         blockedOn="failed", leadBlockedBy=reason, agentMayResolve=False),
+                                         driving=driving), [])
+        saved = json.loads((cli.STATE / "watch.json").read_text())
+        self.assertEqual(saved["waiting"], {})
+        self.assertEqual(saved["progress"]["o/r#7"]["state"], "exhausted")
+
+    def test_watch_tells_the_owner_about_a_member_safety_stop(self):
+        for state in ("blocked", "human_waiting", "exhausted"):
+            for reason in ("safety stop: HUMAN", "environment fault: Docker unavailable"):
+                with self.subTest(state=state, reason=reason):
+                    row = {"id": "o/r#7", "state": state, "projectId": "demo",
+                           "blockedOn": reason, "leadBlockedBy": reason, "agentMayResolve": False}
+                    self.assertEqual(self.project_run([self.project()], row, driving=True)[0],
+                                     f"o/r#7 is {state}: {reason}")
+                    self.assertEqual(self.project_run([self.project()], row, driving=True), [])
+        row["blockedOn"] = "x" * 200
+        self.assertEqual(self.project_run([self.project()], row)[0], cli.clip("o/r#7 is exhausted: " + "x" * 200))
+
+    def test_watch_tells_the_owner_once_when_a_project_is_done(self):
+        rows = [{"id": f"o/r#{n}", "state": "closed", "prNumber": 100 + n} for n in range(12)]
+        rows += [{"id": "o/r#12", "state": "cancelled", "prNumber": 112}]
+        project = self.project(members=[row["id"] for row in rows] + ["o/r#missing"])
+        self.assertEqual(self.project_run([project], *rows), [])
+        done = dict(project, state="done")
+        self.assertEqual(self.project_run([done], *rows),
+                         ["Project Demo is done: 12 issues merged, 23 of 30 passes used."] +
+                         [f"https://github.com/o/r/pull/{100 + n}" for n in range(10)])
+        self.assertEqual(self.project_run([done], *rows), [])
+        saved = json.loads((cli.STATE / "watch.json").read_text())
+        self.assertEqual(saved["projects"], {"demo": "done"})
+        self.assertEqual(saved["version"], 2)
+        self.assertIn("waiting", saved)
+        self.assertIn("progress", saved)
+        self.project_run([project], *rows)
+        self.assertEqual(self.project_run([dict(done, title="x" * 200)], *rows)[0],
+                         cli.clip("Project " + "x" * 200 + " is done: 12 issues merged, 23 of 30 passes used."))
+
+    def test_watch_tells_the_owner_once_when_a_project_pauses(self):
+        self.project_run([self.project()])
+        paused = self.project(state="paused", pausedReason="budget spent")
+        self.assertEqual(self.project_run([paused]),
+                         ["Project Demo paused: budget spent. To continue: factory extend demo <passes>"])
+        self.assertEqual(self.project_run([paused]), [])
+        changed = dict(paused, pausedReason="deadline passed")
+        self.assertEqual(self.project_run([changed]),
+                         ["Project Demo paused: deadline passed. To continue: factory extend demo <passes>"])
+        self.assertEqual(self.project_run([changed]), [])
+        self.project_run([self.project()])
+        self.assertEqual(self.project_run([changed]),
+                         ["Project Demo paused: deadline passed. To continue: factory extend demo <passes>"])
+        long = dict(changed, pausedReason="x" * 200)
+        self.assertEqual(self.project_run([long]), [cli.clip(
+            "Project Demo paused: " + "x" * 200 + ". To continue: factory extend demo <passes>")])
+
+    def test_watch_first_run_sets_a_project_baseline_and_says_nothing(self):
+        projects = [self.project(id="done", state="done"),
+                    self.project(id="paused", state="paused", pausedReason="budget spent")]
+        legacy = {"version": 2, "waiting": {"o/r#8": ["blocked", "failed"]}, "progress": {}}
+        (cli.STATE / "watch.json").write_text(json.dumps(legacy))
+        row = {"id": "o/r#8", "state": "blocked", "blockedOn": "failed"}
+        self.assertEqual(self.project_run(projects, row), [])
+        self.assertEqual(self.project_run(projects, row), [])
+        saved = json.loads((cli.STATE / "watch.json").read_text())
+        self.assertEqual(saved["projects"], {"done": "done", "paused": "paused"})
+        self.assertEqual(saved["waiting"], legacy["waiting"])
+        self.assertEqual(saved["version"], 2)
+        self.assertIn("o/r#8", saved["progress"])
+
+    def test_watch_still_tells_the_owner_about_a_non_member_block(self):
+        for project_id in (None, "missing", "paused", "done", "stopped"):
+            with self.subTest(project_id=project_id):
+                row = {"id": "o/r#7", "state": "blocked", "blockedOn": f"failed {project_id}",
+                       "projectId": project_id, "agentMayResolve": False}
+                projects = [self.project(id=state, state=state) for state in ("paused", "done", "stopped")]
+                lines = self.project_run(projects, row)
+                self.assertIn(f"o/r#7 is blocked: failed {project_id}", lines)
+                self.assertEqual(self.project_run(projects, row), [])
+
     def test_while_day_desk_drives_the_owner_hears_only_what_it_may_not_answer_or_left_too_long(self):
         now = time.time()
         stamp = lambda ago: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - ago))

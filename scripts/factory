@@ -131,12 +131,18 @@ def cmd_watch(_):
         seen_waiting, seen_progress = (seen if isinstance(seen, dict) else {}), {}
     driving = bool(read_env(CONFIG / "secrets").get("FACTORY_AGENT_TOKEN"))
     workitems = call("factory_status")["workItems"]
+    projects = call("factory_project_status").get("projects", [])
+    active_projects = {p["id"] for p in projects if p["state"] == "active"}
+    lead_waiting = {wi["id"] for wi in workitems
+                    if wi.get("projectId") in active_projects
+                    and not (wi.get("leadBlockedBy") or "").startswith(
+                        ("safety stop", "environment fault"))}
     waiting = {wi["id"]: [wi["state"], wi.get("blockedOn")] for wi in workitems
-               if waits_on_owner(wi, driving, time.time())}
+               if wi["id"] not in lead_waiting and waits_on_owner(wi, driving, time.time())}
     for workitem_id, (state, reason) in sorted(waiting.items()):
         if seen_waiting.get(workitem_id) != [state, reason]:
-            print(f"{workitem_id} is {state}: {reason}\n"
-                  "Reply to this message with retry, regate or close, and a note.")
+            print(clip(f"{workitem_id} is {state}: {reason}"))
+            print(clip("Reply to this message with retry, regate or close, and a note."))
     progress = {wi["id"]: {key: wi.get(key) for key in
                            ("state", "blockedOn", "waitingOn", "headSha", "prNumber", "gateRound", "worker")}
                 for wi in workitems}
@@ -145,13 +151,14 @@ def cmd_watch(_):
         previous = seen_progress.get(workitem_id)
         if previous is None or previous == current or workitem_id in owner_waiting:
             continue
-        if current["state"] in ("human_waiting", "blocked"):
+        if current["state"] in ("human_waiting", "blocked") or (
+                current["state"] == "exhausted" and workitem_id in lead_waiting):
             continue  # a driving agent keeps the existing grace and ownership rule
         if current["state"] in ("closed", "merged"):
             where = (f"source PR #{current['prNumber']} merged" if current.get("prNumber")
                      else "ended without a merged PR")
-            print(f"{workitem_id}: {where}; runtime acceptance is not "
-                  "established by merge or closure.")
+            print(clip(f"{workitem_id}: {where}; runtime acceptance is not "
+                       "established by merge or closure."))
             continue
         details = [current["state"]]
         if current.get("prNumber"):
@@ -164,17 +171,51 @@ def cmd_watch(_):
             details.append(f"worker {current['worker']}")
         if current.get("waitingOn"):
             details.append(f"waiting on #{current['waitingOn']}")
-        print(f"{workitem_id}: " + ", ".join(details))
+        print(clip(f"{workitem_id}: " + ", ".join(details)))
+    seen_projects = seen.get("projects") if isinstance(seen, dict) else None
+    seen_reasons = seen.get("projectPausedReasons", {}) if isinstance(seen, dict) else {}
+    by_id = {wi["id"]: wi for wi in workitems}
+    for project in projects:
+        project_id, state = project["id"], project["state"]
+        if seen_projects is None:
+            continue  # the first Project run establishes a silent baseline
+        if state == "done" and seen_projects.get(project_id) != "done":
+            closed = [by_id[member] for member in project["members"]
+                      if member in by_id and by_id[member]["state"] == "closed"]
+            print(clip(f"Project {project['title']} is done: {len(closed)} issues merged, "
+                       f"{project['passesUsed']} of {project['budget']['passes']} passes used."))
+            for wi in [wi for wi in closed if wi.get("prNumber")][:10]:
+                print(clip(f"https://github.com/{project['repo']}/pull/{wi['prNumber']}"))
+        if state == "paused" and (seen_projects.get(project_id) != "paused"
+                                  or seen_reasons.get(project_id) != project.get("pausedReason")):
+            print(clip(f"Project {project['title']} paused: {project.get('pausedReason')}. "
+                       f"To continue: factory extend {project_id} <passes>"))
     STATE.mkdir(parents=True, exist_ok=True)
-    seen_file.write_text(json.dumps({"version": 2, "waiting": waiting, "progress": progress}))
+    seen_file.write_text(json.dumps({"version": 2, "waiting": waiting, "progress": progress,
+                                    "projects": {p["id"]: p["state"] for p in projects},
+                                    "projectPausedReasons": {p["id"]: p.get("pausedReason")
+                                                             for p in projects if p["state"] == "paused"}}))
 
 
 def cmd_drive_queue(_):
     """For the monitor_script of Day Desk's driving job (ADR-0030): the escalations Day Desk may
     still answer, one per line. Hermes runs the agent only when this output changes."""
-    for wi in call("factory_status")["workItems"]:
+    workitems = call("factory_status")["workItems"]
+    now = datetime.now(timezone.utc)
+    for wi in workitems:
         if wi.get("agentMayResolve"):
-            print(f"{wi['id']} is {wi['state']}: {wi.get('blockedOn')}")
+            waiting = ""
+            if wi.get("updatedAt"):
+                updated = datetime.strptime(wi["updatedAt"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                bucket = min(360, max(0, int((now - updated).total_seconds() // 1800) * 30))
+                waiting = f" (waiting {bucket}m)"
+            print(f"{wi['id']} is {wi['state']}{waiting}: {wi.get('blockedOn')}")
+    by_id = {wi["id"]: wi for wi in workitems}
+    for project in call("factory_project_status").get("projects", []):
+        acceptance = by_id.get(project.get("acceptanceItem"), {})
+        if project["state"] == "active" and acceptance.get("state") in (
+                "blocked", "human_waiting", "changes_requested"):
+            print(f"project {project['id']}: acceptance {project['acceptanceItem']} is {acceptance['state']}")
 
 
 REPORT_WIDTH = 110  # characters per line; 20 such lines fit one Telegram message (4096)
