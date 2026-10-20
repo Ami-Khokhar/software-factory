@@ -804,10 +804,20 @@ hermes -p day-desk cron create "every 10m" --no-agent --script factory-update.sh
   --name factory-update
 ```
 
-`factory-drive` runs the model only when the escalations Day Desk may answer change, and tells you
+`factory drive-queue` lists each escalation Day Desk may answer as
+`o/r#13 is blocked (waiting 30m): verify exited 1`. The wait rounds down to 30-minute
+steps and stops at 360 minutes. It also lists a stuck acceptance item of an active Project as
+`project demo: acceptance o/r#14 is changes_requested` (also `blocked` or `human_waiting`).
+This wakes Day Desk again every 30 minutes while an item remains stuck, up to six hours.
+`factory-drive` runs the model only when this queue text changes, and tells you
 what it chose for each: through the plan allowance when one covers the WorkItem, reading the
 queued `pendingRetry` request back before it answers, else through its own factory_resolve_human answer. `factory-watch` tells you of an escalation Day Desk may not answer, or one
-it left for 30 minutes, and of an exhausted WorkItem either way; unchanged scheduled runs are quiet.
+it left for 30 minutes, and of an exhausted WorkItem either way, for non-members.
+While Day Desk drives, it suppresses waiting notices for members of an active Project only when
+`leadBlockedBy` is empty. A member the Lead cannot answer still notifies the owner, including
+a safety stop, environment fault or member pass cap. These notices name the item and its blocker,
+for example `o/r#13 is blocked: safety stop: pr-gatekeeper decided HUMAN`.
+Unchanged scheduled runs are quiet.
 It also reports material state, head, PR, gate-round and worker transitions after its first progress baseline.
 A merge or issue closure message says that runtime acceptance still needs confirmation. Without
 `FACTORY_AGENT_TOKEN`, the watcher tells you of every owner blocker at once. To retry an exhausted
@@ -821,6 +831,19 @@ exhausted member if it has fewer than 8 passes. An extension preserves the deadl
 ISO date-time with timezone is supplied, and the total may exceed 60 passes. `factory extend`
 and `factory stop-project` record the git user name and use owner-only tools that Day Desk cannot
 call. Members of done Projects keep the non-member budget rule.
+
+Project notices use a silent first-run baseline, including when upgrading an existing
+`watch.json`. After that, `factory-watch` reports:
+
+- `Project Demo is done: 7 issues merged, 23 of 30 passes used.` followed by up to ten
+  PR URLs for members in `closed` or `merged`, once on entering `done`.
+- `Project Demo paused: the budget of 30 passes is spent. To continue: factory extend demo <passes>`
+  once on entering `paused` or when its reason changes.
+- An active member's safety stop or environment fault as the item notice above. Other member
+  waiting notices stay with Day Desk.
+
+Every watcher line is clipped to 110 characters. The version 2 `watch.json` keeps its `waiting`
+and `progress` fingerprints, and adds `projects` (id to state) and `projectPausedReasons`.
 
 `factory-watch` sends one message for each new owner blocker and each material progress transition,
 and an error message when factory-mcp does not answer. `factory-report` sends the week in one message every Monday at
