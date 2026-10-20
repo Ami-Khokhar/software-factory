@@ -12,9 +12,10 @@ from pathlib import Path
 from jsonschema import Draft202012Validator
 
 from factory_mcp import projects
-from factory_mcp.documents import check_result
+from factory_mcp.config import Config
+from factory_mcp.documents import check_result, workorder
 from factory_mcp.verdict import verdicts
-from tests.fakes import marker_comment
+from tests.fakes import marker_comment, workitem
 
 ROOT = Path(__file__).resolve().parent.parent
 ORDER = {"id": "o/r#7:r0:implement:a0", "requiredEvidence": ["tests-pass"]}
@@ -191,6 +192,21 @@ class SchemaTest(unittest.TestCase):
                 agrees(project_fields(**over),
                        dict(projects.new(project_fields(), PROJECT_AT), **over))
                 self.assertIsNotNone(projects.problem(project_fields(**over)))
+
+    def test_a_workorder_with_a_project_matches_the_schema(self):
+        project = projects.new(project_fields(goal="g" * 2000, blueprint="b" * 20000), PROJECT_AT)
+        order = workorder(workitem(), "implement", 0, Config(mcp_token="t", repos=frozenset({"o/r"})), project=project)
+        validator = Draft202012Validator(schema("workorder"))
+        self.assertEqual([e.message for e in validator.iter_errors(order)], [])
+        for key, value in (("id", 1), ("goal", "g" * 2001), ("blueprint", "b" * 20001),
+                           ("goal", None), ("blueprint", []), ("extra", "unknown")):
+            with self.subTest(key=key, value_type=type(value).__name__):
+                self.assertFalse(validator.is_valid(dict(order, project=dict(order["project"], **{key: value}))))
+        for key in ("id", "goal", "blueprint"):
+            with self.subTest(missing=key):
+                self.assertFalse(validator.is_valid(dict(order, project={
+                    k: v for k, v in order["project"].items() if k != key})))
+        self.assertTrue(validator.is_valid({k: v for k, v in order.items() if k != "project"}))
 
     def test_the_workorder_constraints_migrate_to_advisory_lines(self):
         """ADR-0070's migration: a WorkOrder written before the advisory flag — constraints with no

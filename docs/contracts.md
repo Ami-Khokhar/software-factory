@@ -147,6 +147,13 @@ dispatch-preflight consumption of these records are separate operations.
   Result remains failed; the checkpoint is context for another attempt, never
   evidence of completion. Migration 9 marks old checkpoints as provenance version 0 so the Foreman
   can delete their recorded scratch branch and clear them before dispatch.
+- **`WorkOrder.project` is data (ADR-0104).** Optional `{id, goal, blueprint}`, with all three
+  strings required and no other keys. `goal` is at most 2000 characters and `blueprint` at most
+  20000. Each member's implement or fix WorkOrder carries the stored Project's goal and Lead's
+  blueprint. The worker rules require its file layout, names, signatures and data shapes, direct
+  the worker to start with the named files and ask once when code or a material decision disagrees,
+  and keep the blueprint subordinate to the rules. Non-members omit the key and keep their
+  existing task text. Older WorkOrders remain valid without it. No store migration is needed.
 - **`WorkOrder.lessons` is data (ADR-0020).** At most 10 of the repo's
   owner-approved lessons, each `{fingerprint, text}` with text of at most 300
   characters, newest first; `[]` when the repo has none. The worker rules say to
