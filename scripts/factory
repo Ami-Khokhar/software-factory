@@ -134,9 +134,8 @@ def cmd_watch(_):
     projects = call("factory_project_status").get("projects", [])
     active_projects = {p["id"] for p in projects if p["state"] == "active"}
     lead_waiting = {wi["id"] for wi in workitems
-                    if wi.get("projectId") in active_projects
-                    and not (wi.get("leadBlockedBy") or "").startswith(
-                        ("safety stop", "environment fault"))}
+                    if driving and wi.get("projectId") in active_projects
+                    and not wi.get("leadBlockedBy")}
     waiting = {wi["id"]: [wi["state"], wi.get("blockedOn")] for wi in workitems
                if wi["id"] not in lead_waiting and waits_on_owner(wi, driving, time.time())}
     for workitem_id, (state, reason) in sorted(waiting.items()):
@@ -173,7 +172,8 @@ def cmd_watch(_):
             details.append(f"waiting on #{current['waitingOn']}")
         print(clip(f"{workitem_id}: " + ", ".join(details)))
     seen_projects = seen.get("projects") if isinstance(seen, dict) else None
-    seen_reasons = seen.get("projectPausedReasons", {}) if isinstance(seen, dict) else {}
+    raw = seen.get("projectPausedReasons") if isinstance(seen, dict) else None
+    seen_reasons = raw if isinstance(raw, dict) else {}
     by_id = {wi["id"]: wi for wi in workitems}
     for project in projects:
         project_id, state = project["id"], project["state"]
@@ -181,7 +181,7 @@ def cmd_watch(_):
             continue  # the first Project run establishes a silent baseline
         if state == "done" and seen_projects.get(project_id) != "done":
             closed = [by_id[member] for member in project["members"]
-                      if member in by_id and by_id[member]["state"] == "closed"]
+                      if member in by_id and by_id[member]["state"] in ("closed", "merged")]
             print(clip(f"Project {project['title']} is done: {len(closed)} issues merged, "
                        f"{project['passesUsed']} of {project['budget']['passes']} passes used."))
             for wi in [wi for wi in closed if wi.get("prNumber")][:10]:

@@ -791,15 +791,33 @@ class WatchTest(unittest.TestCase):
         row = {"id": "o/r#7", "state": "implementing", "projectId": "demo"}
         self.assertEqual(self.project_run([self.project()], row), [])
         for state in ("blocked", "human_waiting", "exhausted"):
-            for reason in (None, "member used 8 passes", "project demo is paused"):
-                for driving in (False, True):
-                    with self.subTest(state=state, reason=reason, driving=driving):
-                        self.assertEqual(self.project_run([self.project()], dict(row, state=state,
-                                         blockedOn="failed", leadBlockedBy=reason, agentMayResolve=False),
-                                         driving=driving), [])
+            with self.subTest(state=state):
+                self.assertEqual(self.project_run([self.project()], dict(row, state=state,
+                                 blockedOn="failed", leadBlockedBy=None, agentMayResolve=True,
+                                 updatedAt="2026-10-01T00:00:00Z"), driving=True), [])
         saved = json.loads((cli.STATE / "watch.json").read_text())
         self.assertEqual(saved["waiting"], {})
         self.assertEqual(saved["progress"]["o/r#7"]["state"], "exhausted")
+
+    def test_watch_tells_the_owner_about_a_member_the_lead_cannot_answer(self):
+        for state in ("blocked", "human_waiting", "exhausted"):
+            for reason in ("member used 8 passes", "project demo is paused"):
+                with self.subTest(state=state, reason=reason):
+                    row = {"id": "o/r#7", "state": state, "projectId": "demo",
+                           "blockedOn": reason, "leadBlockedBy": reason, "agentMayResolve": False}
+                    self.assertEqual(self.project_run([self.project()], row, driving=True)[0],
+                                     f"o/r#7 is {state}: {reason}")
+                    self.assertEqual(self.project_run([self.project()], row, driving=True), [])
+
+    def test_watch_tells_the_owner_about_a_member_when_day_desk_is_not_driving(self):
+        for state in ("blocked", "human_waiting", "exhausted"):
+            with self.subTest(state=state):
+                row = {"id": "o/r#7", "state": state, "projectId": "demo",
+                       "blockedOn": "failed", "leadBlockedBy": None, "agentMayResolve": True,
+                       "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+                self.assertEqual(self.project_run([self.project()], row, driving=False)[0],
+                                 f"o/r#7 is {state}: failed")
+                self.assertEqual(self.project_run([self.project()], row, driving=False), [])
 
     def test_watch_tells_the_owner_about_a_member_safety_stop(self):
         for state in ("blocked", "human_waiting", "exhausted"):
@@ -831,6 +849,27 @@ class WatchTest(unittest.TestCase):
         self.project_run([project], *rows)
         self.assertEqual(self.project_run([dict(done, title="x" * 200)], *rows)[0],
                          cli.clip("Project " + "x" * 200 + " is done: 12 issues merged, 23 of 30 passes used."))
+
+    def test_watch_done_notice_counts_and_links_a_merged_member(self):
+        rows = [{"id": "o/r#7", "state": "merged", "prNumber": 107},
+                {"id": "o/r#8", "state": "closed", "prNumber": 108}]
+        project = self.project(members=[row["id"] for row in rows])
+        self.assertEqual(self.project_run([project], *rows), [])
+        done = dict(project, state="done")
+        self.assertEqual(self.project_run([done], *rows),
+                         ["Project Demo is done: 2 issues merged, 23 of 30 passes used.",
+                          "https://github.com/o/r/pull/107", "https://github.com/o/r/pull/108"])
+        self.assertEqual(self.project_run([done], *rows), [])
+
+    def test_watch_handles_non_mapping_saved_project_pause_reasons(self):
+        paused = self.project(state="paused", pausedReason="budget spent")
+        for reasons in (None, [], "budget spent", 1):
+            with self.subTest(reasons=reasons):
+                (cli.STATE / "watch.json").write_text(json.dumps(
+                    {"version": 2, "projects": {"demo": "paused"}, "projectPausedReasons": reasons}))
+                self.assertEqual(self.project_run([paused]),
+                                 ["Project Demo paused: budget spent. To continue: factory extend demo <passes>"])
+                self.assertEqual(self.project_run([paused]), [])
 
     def test_watch_tells_the_owner_once_when_a_project_pauses(self):
         self.project_run([self.project()])

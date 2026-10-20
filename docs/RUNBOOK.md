@@ -813,8 +813,9 @@ This wakes Day Desk again every 30 minutes while an item remains stuck, up to si
 what it chose for each: through the plan allowance when one covers the WorkItem, reading the
 queued `pendingRetry` request back before it answers, else through its own factory_resolve_human answer. `factory-watch` tells you of an escalation Day Desk may not answer, or one
 it left for 30 minutes, and of an exhausted WorkItem either way, for non-members.
-For members of an active Project, it suppresses waiting notices unless `leadBlockedBy` starts
-with `safety stop` or `environment fault`. These notices still name the item and its blocker,
+While Day Desk drives, it suppresses waiting notices for members of an active Project only when
+`leadBlockedBy` is empty. A member the Lead cannot answer still notifies the owner, including
+a safety stop, environment fault or member pass cap. These notices name the item and its blocker,
 for example `o/r#13 is blocked: safety stop: pr-gatekeeper decided HUMAN`.
 Unchanged scheduled runs are quiet.
 It also reports material state, head, PR, gate-round and worker transitions after its first progress baseline.
@@ -835,7 +836,7 @@ Project notices use a silent first-run baseline, including when upgrading an exi
 `watch.json`. After that, `factory-watch` reports:
 
 - `Project Demo is done: 7 issues merged, 23 of 30 passes used.` followed by up to ten
-  closed-member PR URLs, once on entering `done`.
+  PR URLs for members in `closed` or `merged`, once on entering `done`.
 - `Project Demo paused: the budget of 30 passes is spent. To continue: factory extend demo <passes>`
   once on entering `paused` or when its reason changes.
 - An active member's safety stop or environment fault as the item notice above. Other member
