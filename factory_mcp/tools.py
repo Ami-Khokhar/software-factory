@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 
 from . import docker, lessons, metrics, repos, runtime, worker_ops
-from .foreman import MAX_ALLOWANCE, MAX_PLAN_ISSUES, RECOVERY_ACTIONS, Foreman, agent_may_resolve
+from .foreman import MAX_ALLOWANCE, MAX_PLAN_ISSUES, RECOVERY_ACTIONS, Foreman, agent_may_resolve, lead_may_act
 from .github import GitHubError
 from .mcp import Tool, ToolError
 
@@ -58,7 +58,12 @@ def build(store, foreman, agent=False):
         elif wi["state"] == "exhausted":
             row["blockedOn"] = Foreman._reason(wi)
         if wi.get("projectId") and wi["state"] in (*WAITING, "exhausted"):
-            row["agentMayResolve"], row["leadBlockedBy"] = foreman._lead_may_act(wi, "retry")
+            lead_ok, reason = lead_may_act(foreman, wi, "close")
+            project = store.project(wi["projectId"])
+            if project and project["state"] != "done":
+                row["agentMayResolve"] = agent_may_resolve(wi, store.history(wi["id"])) or lead_ok
+                if project["state"] == "active":
+                    row["leadBlockedBy"] = reason
         question = wi.get("question") or {}
         if (wi["state"] in ("dispatching", "implementing") and question.get("text")
                 and not question.get("answer")):

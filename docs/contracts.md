@@ -189,7 +189,7 @@ dispatch-preflight consumption of these records are separate operations.
   (attempt_failed), `dependency` and `end` (dependency_ended) or `gateRound`
   (reconcile). A write that escalates computes the identity; the same identity
   keeps the record and its `agentAnswered` flag, a materially changed one becomes
-  `id + 1` with `agentAnswered` false. Day Desk may answer each incident once
+  `id + 1` with `agentAnswered` false. For non-members and members of done Projects, Day Desk may answer each incident once
   (`agentMayResolve`, `factory_resolve_human`); a WorkItem that escalated before
   this field falls back to the once-ever rule over its history, so the store needs
   no migration.
@@ -277,6 +277,15 @@ dispatch-preflight consumption of these records are separate operations.
   the states and fields the WorkItem already has.
 - **Unknown properties are rejected** (`additionalProperties: false`) so a cell
   cannot smuggle vendor-specific fields across a boundary.
+
+## WorkItem status
+
+`factory_status` list rows expose `agentMayResolve` for waiting WorkItems. It is true when the
+per-item incident rule allows an answer or the Lead may act on an active Project member.
+For active members, waiting or exhausted rows also expose `leadBlockedBy`: the safety stop or
+environment fault blocking Lead authority, or `null` when it may act. A retry reaching the
+member pass cap does not block close or regate. Done Projects use the plain non-member computation.
+Rows for paused, stopped, missing and done Projects omit `leadBlockedBy`.
 
 ## Runtime status and tool discovery
 
@@ -469,10 +478,11 @@ A done Project refuses extension with a ToolError directing the owner to
 `factory_project_status`. The stored Project schema permits totals above 60. The start limit
 lives in `factory_start_project` and `projects.problem` (ADR-0101).
 
-Until WO-04 replaces them, Day Desk's per-item budget checks in `resolve_human`, `queue_retry`
-and `use_allowance`, and the audit budget in `_recovery_budget`, still use `FACTORY_MAX_PASSES`
-and `passesBefore` for members. These recovery checks remain per-item. An owner retry does
-not replenish a member's shared Project budget or lifetime cap (ADR-0101).
+Day Desk's budget checks in `queue_retry` and `use_allowance`, and the audit budget in
+`_recovery_budget`, remain per-item: they use `FACTORY_MAX_PASSES` and `passesBefore` for members.
+`resolve_human` instead uses Lead authority for active Project members, allowing repeated answers
+within the Project budget except safety stops, environment faults and the lifetime pass cap.
+An owner retry does not replenish a member's shared Project budget or lifetime cap (ADR-0101).
 
 ## Versioning
 

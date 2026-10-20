@@ -1088,10 +1088,6 @@ class ProjectLongerRunTest(unittest.TestCase):
         self.assertEqual(self.relay.tasks[wi["providerTaskId"]]["timeoutMs"], 3600000)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class LeadAuthorityTest(unittest.TestCase):
     def setUp(self):
         self.store = Store(":memory:")
@@ -1139,10 +1135,6 @@ class LeadAuthorityTest(unittest.TestCase):
                 self.store.put(dict(self.store.get(self.id), state=state, terminalReason=reason))
                 self.assertEqual(self.resolve()["state"], "ready")
                 self.assertIsNone(self.store.get(self.id)["passesBefore"])
-        self.store.put(dict(self.store.get(self.id), state="exhausted",
-                            terminalReason="8 passes on one member; the Lead splits it or the owner decides"))
-        with self.assertRaisesRegex(ToolError, "used its budget of passes"):
-            self.resolve()
 
     def test_a_member_with_a_human_verdict_still_goes_to_the_owner(self):
         self.passes(8)
@@ -1176,19 +1168,21 @@ class LeadAuthorityTest(unittest.TestCase):
         self.store.log("attempt_failed", {"cause": "checkout or setup"}, self.id)
         self.store.put_project(dict(self.store.project(self.project["id"]), state="paused"))
         before, history = self.store.get(self.id), self.store.global_history()
-        with self.assertRaisesRegex(ToolError, "used its budget of passes"):
+        with self.assertRaisesRegex(ToolError,
+                f"project {self.project['id']} is paused; the owner resumes or extends the Project"):
             self.resolve()
         self.assertEqual(self.store.get(self.id), before)
         self.assertEqual(self.store.global_history(), history)
-        self.assertFalse(self.status()["agentMayResolve"])
-        self.assertEqual(self.status()["leadBlockedBy"], f"project {self.project['id']} is paused")
+        self.assertNotIn("leadBlockedBy", self.status())
 
     def test_a_member_at_eight_passes_cannot_be_retried_only_split(self):
         self.passes(8)
         with self.assertRaisesRegex(ToolError, "used its budget of passes"):
             self.resolve()
-        self.assertFalse(self.status()["agentMayResolve"])
-        self.assertEqual(self.status()["leadBlockedBy"], "member used 8 passes")
+        self.assertTrue(self.status()["agentMayResolve"])
+        self.assertIsNone(self.status()["leadBlockedBy"])
+        self.assertEqual(self.resolve("close")["state"], "cancelled")
+        self.wait()
         self.split_member()
 
     def split_member(self):
@@ -1223,9 +1217,69 @@ class LeadAuthorityTest(unittest.TestCase):
                 self.assertIsNone(row["leadBlockedBy"])
         self.store.put_project(dict(self.store.project(self.project["id"]), state="stopped"))
         self.assertFalse(self.status()["agentMayResolve"])
-        self.assertEqual(self.status()["leadBlockedBy"], f"project {self.project['id']} is stopped")
+        self.assertNotIn("leadBlockedBy", self.status())
         self.store.put(dict(self.store.get(self.id), projectId="missing"))
-        self.assertEqual(self.status()["leadBlockedBy"], "not a project member")
+        self.assertNotIn("leadBlockedBy", self.status())
+
+    def test_a_done_project_member_keeps_fresh_incident_recovery(self):
+        self.store.put_project(dict(self.store.project(self.project["id"]), state="done"))
+        self.store.put(dict(self.store.get(self.id), state="human_waiting",
+                            incident={"id": 2, "agentAnswered": False}))
+        self.assertTrue(self.status()["agentMayResolve"])
+        self.assertNotIn("leadBlockedBy", self.status())
+        self.assertEqual(self.resolve()["state"], "ready")
+
+    def test_paused_and_stopped_members_keep_fresh_incident_recovery(self):
+        for state in ("paused", "stopped"):
+            with self.subTest(state=state):
+                self.store.put_project(dict(self.store.project(self.project["id"]), state=state))
+                self.wait(incident={"id": 2, "agentAnswered": False})
+                self.assertTrue(self.status()["agentMayResolve"])
+                self.assertNotIn("leadBlockedBy", self.status())
+                self.assertEqual(self.resolve()["state"], "ready")
+
+    def test_dispatch_cap_message_names_the_limit_even_with_extra_history(self):
+        self.passes(projects.MAX_MEMBER_PASSES + 1)
+        self.store.put(dict(self.store.get(self.id), state="ready", blockedOn=None))
+        self.foreman.tick(self.id)
+        self.assertEqual(self.store.get(self.id)["terminalReason"],
+                         f"{projects.MAX_MEMBER_PASSES} passes on one member; "
+                         "the Lead splits it or the owner decides")
+
+    def test_exhausted_member_cap_uses_lifetime_passes_not_reason(self):
+        self.store.put(dict(self.store.get(self.id), state="exhausted",
+                            terminalReason="8 passes on one member; historical reason"))
+        self.assertEqual(self.resolve()["state"], "ready")
+        self.passes(projects.MAX_MEMBER_PASSES)
+        self.store.put(dict(self.store.get(self.id), state="exhausted",
+                            terminalReason="project spent its passes"))
+        with self.assertRaisesRegex(ToolError, "used its budget of passes"):
+            self.resolve("close")
+
+    def test_split_project_version_race_names_the_resumable_request(self):
+        store = self.store
+
+        def race(sql):
+            if sql.startswith("UPDATE projects SET"):
+                store._db.set_trace_callback(None)
+                current = json.loads(store._db.execute("SELECT doc FROM projects WHERE id = ?",
+                                                       (self.project["id"],)).fetchone()[0])
+                changed = dict(current, stateVersion=current["stateVersion"] + 1)
+                store._db.execute("UPDATE projects SET state_version = ?, doc = ? WHERE id = ?",
+                                  (changed["stateVersion"], json.dumps(changed), changed["id"]))
+
+        store._db.set_trace_callback(race)
+        try:
+            with self.assertRaisesRegex(ToolError,
+                    "replacements were opened but the Project write lost a version race; "
+                    "call the tool again with requestId split/member and the journal resumes"):
+                self.split_member()
+        finally:
+            store._db.set_trace_callback(None)
+        self.assertEqual(store.get(self.id)["state"], "blocked")
+        self.assertEqual(store.request(f"replace/{self.id}")["phase"], "pushing")
+        self.split_member()
+        self.assertEqual(set(self.github.issues), {(REPO, 7), (REPO, 201), (REPO, 202)})
 
     def test_a_non_member_keeps_the_one_answer_rule(self):
         self.store.put(dict(self.store.get(self.id), projectId=None))

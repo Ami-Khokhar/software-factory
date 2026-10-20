@@ -96,6 +96,25 @@ def agent_may_resolve(wi, history):
     return not incident.get("agentAnswered")
 
 
+def lead_may_act(foreman, wi, resolution):
+    """Whether the Lead may recover this member inside its active Project (ADR-0102)."""
+    project_id = wi.get("projectId")
+    project = foreman.store.project(project_id) if project_id is not None else None
+    if project is None:
+        return False, "not a project member"
+    if project["state"] != "active":
+        return False, f"project {project_id} is {project['state']}"
+    stop = foreman._safety_stop(wi)
+    if stop:
+        return False, f"safety stop: {stop}"
+    cause = foreman._env_paused(wi)
+    if cause:
+        return False, f"environment fault: {cause}"
+    if resolution == "retry" and len(foreman.store.workorders(wi["id"])) >= projects.MAX_MEMBER_PASSES:
+        return False, f"member used {projects.MAX_MEMBER_PASSES} passes"
+    return True, None
+
+
 class RepoNotReady(ToolError):
     """The repo failed the repo check: its author can fix that, so discovery tells them (ADR-0027)."""
 
@@ -840,7 +859,7 @@ class Foreman:
             if used >= projects.MAX_MEMBER_PASSES:
                 self._finish_recovery(wi, False)
                 return self._write(wi, dict(wi, state="exhausted", recovery=None, terminalReason=(
-                    f"{used} passes on one member; the Lead splits it or the owner decides")),
+                    f"{projects.MAX_MEMBER_PASSES} passes on one member; the Lead splits it or the owner decides")),
                     "exhausted", project=project_id)
         else:
             used = len(orders) - (wi.get("passesBefore") or 0)  # a person's retry buys a fresh budget
@@ -1499,21 +1518,7 @@ class Foreman:
 
     def _lead_may_act(self, wi, resolution):
         """Whether the Lead may recover this member inside its active Project (ADR-0102)."""
-        project_id = wi.get("projectId")
-        project = self.store.project(project_id) if project_id is not None else None
-        if project is None:
-            return False, "not a project member"
-        if project["state"] != "active":
-            return False, f"project {project_id} is {project['state']}"
-        stop = self._safety_stop(wi)
-        if stop:
-            return False, f"safety stop: {stop}"
-        cause = self._env_paused(wi)
-        if cause:
-            return False, f"environment fault: {cause}"
-        if resolution == "retry" and len(self.store.workorders(wi["id"])) >= projects.MAX_MEMBER_PASSES:
-            return False, "member used 8 passes"
-        return True, None
+        return lead_may_act(self, wi, resolution)
 
     def resolve_human(self, workitem_id, resolution, note, by, agent=False, owner_asked=False):
         """A person's answer to human_waiting, blocked or exhausted (ADR-0006): retry, regate or close.
@@ -1542,8 +1547,11 @@ class Foreman:
             passes = len(self.store.workorders(workitem_id))
             spent = passes - (wi.get("passesBefore") or 0) >= self.config.max_passes
             if agent and not owner_asked and (
-                    wi["state"] == "exhausted" and (not lead_ok or "passes on one member" in (wi.get("terminalReason") or ""))
+                    wi["state"] == "exhausted" and (not lead_ok or wi.get("projectId") and passes >= projects.MAX_MEMBER_PASSES)
                     or not lead_ok and resolution == "retry" and spent):
+                if lead_reason and lead_reason.startswith("project "):
+                    raise ToolError(f"{workitem_id}: {lead_reason}; the owner resumes or extends the Project, "
+                                    f"or answers: factory retry|regate|close {workitem_id} <note>")
                 raise ToolError(f"{workitem_id} used its budget of passes, so the owner decides whether to spend "
                                 f"more: factory retry|close {workitem_id} <note>")
             if agent and not owner_asked and not lead_ok and not agent_may_resolve(wi, self.store.history(workitem_id)):
@@ -2022,7 +2030,7 @@ class Foreman:
     def add_project_members(self, project_id, workitem_ids):
         """Join WorkItems a live Project already lists on its members (WO-04): the ids the Project
         does not have yet are added with put_project, and each new id whose WorkItem is in the
-        store gets its `projectId` the same way starting a Project sets it. No tool calls this.
+        store gets its `projectId` the same way starting a Project sets it.
         Returns the stored Project, or the ToolError when there is no such Project."""
         project = self.store.project(project_id)
         if project is None:
@@ -2469,7 +2477,12 @@ class Foreman:
             # what the cancelled WorkItem tried stays on it: the replacement is the recovery
             # record's continuation, not a wipe of its history
             if wi.get("projectId"):
-                self.add_project_members(wi["projectId"], [workitem.workitem_id(repo, n) for n in numbers])
+                try:
+                    self.add_project_members(wi["projectId"], [workitem.workitem_id(repo, n) for n in numbers])
+                except Conflict:
+                    raise ToolError(f"{workitem_id}'s replacements were opened but the Project write lost a "
+                                    f"version race; call the tool again with requestId {request_id} "
+                                    "and the journal resumes") from None
             new = self._write(wi, dict(wi, state="cancelled", terminalReason=f"replaced by {names}",
                                        blockedOn=None, waitingOn=None), "replaced",
                               replacements=replacements, note=note, requestId=request_id,
