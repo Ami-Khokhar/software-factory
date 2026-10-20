@@ -82,10 +82,11 @@ class StoreTest(unittest.TestCase):
 
         store = Store(self.path)
         self.assertEqual(store.get("o/r#1"), dict(workitem(), stateVersion=3, wallMsOverride=None,
-                                                  pendingRetry=None))
+                                                  pendingRetry=None, projectId=None))
         self.assertEqual(store.get("o/r#2"),
                          dict(workitem(state="human_waiting", blockedOn="gate said HUMAN"),
-                              stateVersion=3, wallMsOverride=None, pendingRetry=None))
+                              stateVersion=3, wallMsOverride=None, pendingRetry=None,
+                              projectId=None))
         store.close()
 
     def test_migration_runs_once_a_store_at_version_2_keeps_its_blocked_on(self):
@@ -103,8 +104,28 @@ class StoreTest(unittest.TestCase):
         store = Store(self.path)
         self.assertEqual(store.get("o/r#1"),
                          dict(workitem(state="cancelled", blockedOn="stale wait"),
-                              stateVersion=3, wallMsOverride=None, pendingRetry=None))
+                              stateVersion=3, wallMsOverride=None, pendingRetry=None,
+                              projectId=None))
         store.close()
+
+    def test_migration_11_gives_old_workitems_a_null_project(self):
+        """A WorkItem stored before the Projects carries no projectId; opening the store gives it
+        a null one, so every read names the Project it belongs to, or none (WO-02)."""
+        Path(self.path).parent.mkdir(parents=True)
+        old = sqlite3.connect(self.path)
+        old.executescript(SCHEMA)
+        doc = dict(workitem(), stateVersion=3)
+        old.execute("INSERT INTO workitems VALUES (?, 3, ?)", (doc["id"], json.dumps(doc)))
+        old.commit()
+        old.close()
+
+        reopened = Store(self.path)
+        migrated = reopened.get("o/r#1")
+        self.assertEqual(migrated["projectId"], None)
+        self.assertEqual(dict(doc, wallMsOverride=None, pendingRetry=None, projectId=None),
+                         migrated)
+        reopened.close()
+
     def test_journal_survives_interruption_without_sidecar_files(self):
         """A store left un-closed (server SIGTERM) keeps committed data, and nothing lives outside
         factory.sqlite3: a copy of that file alone is the whole store (#197: no WAL sidecars)."""

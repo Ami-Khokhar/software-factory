@@ -2462,3 +2462,28 @@ WO-04 and WO-05 give Day Desk recovery authority and a longer run inside that bu
 the blueprint in the WorkOrder, WO-07 ends the Project when the acceptance issue merges, and
 WO-08 sends the owner only Project-level events. A WorkItem without a `projectId` behaves exactly
 as before.
+
+---
+
+## ADR-0100 — The owner's one yes starts a Project
+
+**Context.** ADR-0099 gave the factory the Project record, but nothing starts one. The owner has
+already approved a plan's issues in one go (`factory_start_plan`, ADR-0024), and the budget of
+passes is the Project's own (WO-03 charges it), so asking the owner to say go again for the
+Project itself would charge the loop's costliest resource — the owner's attention — for a step
+the machine can already see.
+
+**Decision.** `factory_start_project` starts a Project in one tool call: it refuses without the
+owner's words from the chat, quoted as `ownerWords`, stores them on the record as `approval`, and
+builds the record through the WO-01 checks. It opens the plan's issues in order through
+`factory_start_plan`'s own checks (so a failed plan opens nothing and stores nothing), then marks
+every opened WorkItem a member, under its own lease, and names the Project `project_started` in
+the audit. A WorkItem the factory takes in later joins the Project that already lists it on its
+`members`.
+
+**Consequence.** One approval covers the whole plan and the replacements that join later: the
+owner's yes buys the Lead the authority WO-03 to WO-05 give it, and no further yes is owed for
+starting. A re-run of the same start resumes the joins instead of conflicting (the owner's yes
+is often one short word, so the resume reads the whole request, not just the words); a different
+request for the same id conflicts as before. The members keep their own per-item guards (safety
+stops, leases, budgets); the Project approval changes none of them.

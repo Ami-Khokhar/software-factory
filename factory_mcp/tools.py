@@ -11,6 +11,7 @@ from .mcp import Tool, ToolError
 AGENT_TOOLS = frozenset({"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons",
                          "factory_report", "factory_check_worker", "factory_reload_workers",
                          "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
+                         "factory_start_project",
                          "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
                          "factory_answer_question",
                          "factory_use_allowance", "factory_queue_retry", "factory_merge_setup_pr",
@@ -50,8 +51,8 @@ def build(store, foreman, agent=False):
 
     def summary_of(wi):
         row = {key: wi.get(key) for key in ("id", "state", "prNumber", "blockedOn", "waitingOn",
-                                            "pendingRetry", "headSha", "gateRound", "worker",
-                                            "updatedAt")}
+                                            "pendingRetry", "projectId", "headSha", "gateRound",
+                                            "worker", "updatedAt")}
         if wi["state"] in WAITING:
             row["agentMayResolve"] = agent_may_resolve(wi, store.history(wi["id"]))
         elif wi["state"] == "exhausted":
@@ -94,6 +95,16 @@ def build(store, foreman, agent=False):
         if project is None:
             raise ToolError(f"No project {project_id}")
         return {"project": project}
+
+    def start_project(args):
+        required = {"id", "repo", "title", "goal", "blueprint", "doneWhen", "budget", "issues",
+                    "ownerWords", "by"}
+        if set(args) != required:
+            raise ToolError("factory_start_project requires exactly the keys "
+                            + ", ".join(sorted(required)))
+        return foreman.start_project(
+            {key: args[key] for key in required - {"issues", "by", "ownerWords"}},
+            args["issues"], args["by"], args["ownerWords"])
 
     def set_timeout(args):
         if set(args) != {"id", "wallMs", "by"}:
@@ -328,6 +339,53 @@ def build(store, foreman, agent=False):
                                                                                      "minimum": 1}}}}},
                              "by": {"type": "string", "minLength": 1, "description": "who approved the plan"}}},
              "write", lambda args: foreman.start_plan(args["repo"], args["issues"], args["by"])),
+        Tool("factory_start_project",
+             "Start a Project after the owner said yes in the chat: store its goal, blueprint, "
+             "done-when checks and pass budget (at most 60), open its plan's issues in order, and "
+             "make each a member. ownerWords quotes the owner's yes. Refused without it.",
+             {"type": "object",
+              "required": ["id", "repo", "title", "goal", "blueprint", "doneWhen", "budget",
+                           "issues", "ownerWords", "by"],
+              "additionalProperties": False,
+              "properties": {"id": {"type": "string", "minLength": 1,
+                                    "description": "the Project id, like self-maintaining-apis"},
+                             "repo": {"type": "string", "description": "owner/repo"},
+                             "title": {"type": "string", "minLength": 1},
+                             "goal": {"type": "string", "minLength": 1},
+                             "blueprint": {"type": "string", "minLength": 1},
+                             "doneWhen": {"type": "array", "minItems": 1, "maxItems": 5,
+                                          "description": "the Project's done-when checks; the "
+                                                         "acceptance issue runs them (WO-07)",
+                                          "items": {"type": "object", "required": ["claim", "command"],
+                                                    "additionalProperties": False,
+                                                    "properties": {"claim": {"type": "string",
+                                                                             "minLength": 1},
+                                                                   "command": {"type": "string",
+                                                                               "minLength": 1}}}},
+                             "budget": {"type": "object", "required": ["passes", "deadline"],
+                                        "additionalProperties": False,
+                                        "properties": {"passes": {"type": "integer", "minimum": 1,
+                                                                  "maximum": 60},
+                                                       "deadline": {"type": "string", "minLength": 1}}},
+                             "issues": {"type": "array", "minItems": 1, "maxItems": MAX_PLAN_ISSUES,
+                                        "description": "the plan's issues, in the order they run",
+                                        "items": {"type": "object", "required": ["title", "body"],
+                                                  "additionalProperties": False,
+                                                  "properties": {"title": {"type": "string", "minLength": 1},
+                                                                 "body": {"type": "string", "minLength": 1},
+                                                                 "after": {"type": "array",
+                                                                           "description":
+                                                                               "1-based positions of the earlier "
+                                                                               "issues this one waits for; "
+                                                                               "omitted keeps the chain, [] "
+                                                                               "starts at once",
+                                                                           "items": {"type": "integer",
+                                                                                     "minimum": 1}}}}},
+                             "ownerWords": {"type": "string", "minLength": 1,
+                                            "description": "the owner's yes, quoted from the chat"},
+                             "by": {"type": "string", "minLength": 1,
+                                    "description": "who started the Project"}}},
+             "write", start_project),
         Tool("factory_set_dependencies",
              "Change which issues a WorkItem waits for, before any worker has touched it: replaces the "
              "'Depends on #n' lines of its issue with the issue numbers given, and [] lets it start at "

@@ -96,6 +96,12 @@ dispatch-preflight consumption of these records are separate operations.
   initialize it to null. A human resolution cancels a queued intent and its journal row in the
   same write; spending the allowance and starting the WorkOrder for a queued intent belongs to
   the follow-up consumer, not to this phase.
+- **`WorkItem.projectId` names the Project the WorkItem is a member of (ADR-0099, ADR-0100).**
+  Null when the WorkItem belongs to no Project, which is what every WorkItem carried before the
+  Projects, and what new items and migration 11 initialize it to. `factory_start_project` sets
+  it on each plan issue it opens, and a WorkItem the factory takes in later joins the Project
+  that already lists it, written with the `project_joined` audit action under the WorkItem's
+  own lease. WorkItems without a `projectId` behave exactly as before.
 - **`WorkItem.stateVersion` is optimistic concurrency.** Every durable write
   increments it; a transition that writes on a stale version loses.
 - **`human_waiting` is not terminal.** `closed`, `cancelled` and `exhausted`
@@ -408,9 +414,16 @@ must hold before the controller is allowed to write:
 A Project (ADR-0099) is one named goal with a shared budget of worker passes, stored beside the
 WorkItems in the `projects` table as its whole JSON document, with the same optimistic
 `stateVersion`. `schemas/project.schema.json` is the contract; `factory_mcp/projects.py` holds the
-limits and the read tool `factory_project_status` is in `tools.AGENT_TOOLS`. The states other than
-`active`, and the fields `passesUsed`, `members` and `acceptanceItem`, have no writer yet: WO-02
-to WO-04 write them. The store's Project records ship ahead of their first caller (WO-02): the
+limits and the read tool `factory_project_status` is in `tools.AGENT_TOOLS`. The owner's one
+quoted yes (`ownerWords`) starts one, with `factory_start_project`, also in `tools.AGENT_TOOLS`:
+it stores the record, opens the plan's issues in order through `factory_start_plan`'s checks and
+makes each opened WorkItem a member with its `projectId` set (ADR-0100). Re-running the same
+request — the same resolved repo, title, goal, blueprint, doneWhen checks, budget and plan —
+resumes the joins that died, answers the stored record and adds no second `project_started`
+audit row; any other call for a taken id is refused: creating a second with the same id
+conflicts. The states other than
+`active`, and the fields `passesUsed` and `acceptanceItem`, have no writer yet: WO-03 to WO-07
+write them. The store's Project records ship ahead of their first caller (WO-02): the
 work order adds the record before anything starts a Project. The keys:
 
 | Key | What it means |
