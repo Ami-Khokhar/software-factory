@@ -524,7 +524,7 @@ class AcceptanceTest(unittest.TestCase):
         self.assertEqual((stored["state"], stored["pausedReason"]), ("done", None))
         self.assertEqual([row["detail"] for row in self.foreman.store.global_history()
                           if row["action"] == "project_done"],
-                         [{"project": project["id"], "members": project["members"], "passesUsed": 0}])
+                         [{"project": project["id"], "members": project["members"], "passesUsed": 1}])
 
     def test_a_cancelled_acceptance_item_pauses_the_project(self):
         for state in ("cancelled", "exhausted", "missing"):
@@ -591,9 +591,11 @@ class AcceptanceTest(unittest.TestCase):
         competing = []
 
         def write_before_update(sql):
-            if sql.startswith("UPDATE projects SET"):
+            if sql.startswith("UPDATE projects SET") and '"state": "done"' in sql:
                 store._db.set_trace_callback(None)
-                changed = dict(project, goal="a concurrent edit", stateVersion=project["stateVersion"] + 1)
+                current = json.loads(store._db.execute("SELECT doc FROM projects WHERE id = ?",
+                                                       (project["id"],)).fetchone()[0])
+                changed = dict(current, goal="a concurrent edit", stateVersion=current["stateVersion"] + 1)
                 store._db.execute("UPDATE projects SET state_version = ?, doc = ? WHERE id = ?",
                                   (changed["stateVersion"], json.dumps(changed), changed["id"]))
                 competing.append(changed)
@@ -818,12 +820,32 @@ class ProjectBudgetTest(unittest.TestCase):
                          [{"project": project["id"], "by": "owner", "was": self.project["budget"],
                            "now": project["budget"]}])
 
-    def test_a_done_project_cannot_be_extended(self):
+    def test_a_done_project_cannot_be_extended_or_stopped(self):
         project = self.update_project(state="done")
         history = self.store.global_history()
         with self.assertRaisesRegex(ToolError, "Project .* is done.*factory_project_status"):
             self.owner_tools["factory_extend_project"].fn(
                 {"id": project["id"], "passes": 1, "deadline": None, "by": "owner"})
+        with self.assertRaisesRegex(ToolError, "Project .* is done.*factory_project_status"):
+            self.owner_tools["factory_stop_project"].fn(
+                {"id": project["id"], "by": "owner", "note": "wait for review"})
+        self.assertEqual(self.store.project(project["id"]), project)
+        self.assertEqual(self.store.global_history(), history)
+
+    def test_a_members_allowance_refusal_names_the_shared_budget_and_lifetime_cap(self):
+        self.assertEqual(self.dispatch()["state"], "implementing")
+        wi = self.store.put(dict(self.store.get(self.id), state="blocked", blockedOn="verify failed"))
+        project = self.store.project(self.project["id"])
+        self.assertEqual(len(self.store.workorders(self.id)), self.foreman.config.max_passes)
+        self.assertEqual(project["state"], "active")
+        self.assertLess(project["passesUsed"], project["budget"]["passes"])
+        history = self.store.global_history()
+        with self.assertRaises(ToolError) as raised:
+            self.foreman.use_allowance(self.id, "plan", "retry", "verify failed", "day-desk")
+        self.assertEqual(str(raised.exception),
+                         f"{self.id} used its 1 passes of per-item budget; "
+                         "the Project's shared budget and the member's lifetime cap now govern it")
+        self.assertEqual(self.store.get(self.id), wi)
         self.assertEqual(self.store.project(project["id"]), project)
         self.assertEqual(self.store.global_history(), history)
 

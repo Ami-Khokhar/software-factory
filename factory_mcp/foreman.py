@@ -1681,10 +1681,15 @@ class Foreman:
                 raise ToolError("an allowance replacement runs through factory_replace_issue, with "
                                 "this planId as allowancePlanId")
             # Budget preflight (#274): an owner-approved allowance recovers an attempt, never buys
-            # fresh budget; an item that used its passes must go back to the owner, so the refusal
-            # happens before the count could be charged for a state nothing could ever reach.
+            # fresh budget. Refuse before charging it, including for Project members until the
+            # Lead has authority to recover them under the shared budget.
             used = len(self.store.workorders(workitem_id)) - (wi.get("passesBefore") or 0)
             if used >= self.config.max_passes:
+                project = self.store.project(wi["projectId"]) if wi.get("projectId") else None
+                if project and project["state"] == "active":
+                    raise ToolError(f"{workitem_id} used its {used} passes of per-item budget; "
+                                    f"the Project's shared budget and the member's lifetime cap "
+                                    f"now govern it")
                 raise ToolError(f"{workitem_id} used its {used} passes of budget, the allowance buys "
                                 f"none fresh, dispatch would stop it, so the owner decides: "
                                 f"factory retry|close {workitem_id} <note>")
@@ -1841,6 +1846,8 @@ class Foreman:
             project = self.store.project(project_id)
             if project is None:
                 raise ToolError(f"No project {project_id}; read factory_project_status for its id")
+            if project["state"] == "done":
+                raise ToolError(f"Project {project_id} is done; read it with factory_project_status")
             try:
                 stored = self.store.put_project(dict(project, state="stopped", pausedReason=note))
             except Conflict as exc:
