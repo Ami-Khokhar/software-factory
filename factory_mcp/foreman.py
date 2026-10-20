@@ -11,8 +11,8 @@ import time
 import threading
 import uuid
 
-from . import (diagnostics, documents, gate_secrets, jev_rank, lessons, patches, registry, repos,
-               routing, setup_merge, sizing, workitem)
+from . import (diagnostics, documents, gate_secrets, jev_rank, lessons, patches, projects, registry,
+               repos, routing, setup_merge, sizing, workitem)
 from .github import GitHubError
 from .mcp import ToolError
 from .relay import RelayError, RelayLimitError
@@ -118,6 +118,11 @@ class Foreman:
         except Conflict:  # a concurrent tick took it in first
             return self.store.get(wi["id"])
         self.store.log("intake", {"state": wi["state"]}, wi["id"])
+        if wi.get("projectId") is None:  # an issue the Project already lists joins it (WO-02)
+            project_id = self.store.project_of(wi["id"])
+            if project_id:
+                wi = self._write(wi, dict(wi, projectId=project_id), "project_joined",
+                                 project=project_id)
         return wi
 
     def _enabled(self, repo, by):
@@ -1724,6 +1729,68 @@ class Foreman:
                                 f"cause above, or close #{number}")
                 raise ToolError(message) from None
         return {"repo": repo, "issues": opened}
+
+    def start_project(self, fields, issues, by, owner_words):
+        """The owner's one yes starts a Project (ADR-0100): store its record, open the plan's
+        issues in order through start_plan, and make each a member. The owner's words, quoted
+        from the chat, are the approval, so the tool refuses without them. The plan opens before
+        any Project is stored: when a plan check fails, nothing is stored and the issues that
+        opened run as ordinary WorkItems, as they do today."""
+        if not isinstance(owner_words, str) or not owner_words.strip():
+            raise ToolError("starting a project needs the owner's words from the chat, quoted, "
+                            "as ownerWords")
+        fields = dict(fields, approval={"by": by, "words": owner_words, "at": now()})
+        problem = projects.problem(fields)
+        if problem:
+            raise ToolError(f"{problem}. No issue was opened")
+        project_id = fields["id"]
+        if self.store.project(project_id) is not None:
+            raise ToolError(f"project {project_id} exists; choose another id, or read it with "
+                            "factory_project_status")
+        opened = self.start_plan(fields["repo"], issues, by)
+        members = [workitem.workitem_id(fields["repo"], item["issue"]) for item in opened["issues"]]
+        stored = self.store.create_project(dict(projects.new(fields, now()), members=members))
+        for member in members:
+            self._join_project(member, project_id)
+        self.store.log("project_started", {"project": project_id, "by": by, "members": members,
+                                           "passes": fields["budget"]["passes"]})
+        return {"project": stored, "issues": opened["issues"]}
+
+    def _join_project(self, workitem_id, project_id):
+        """Set one WorkItem `projectId` under its own lease, so a concurrent tick cannot take the
+        WorkItem away between the read and the write. A busy lease is retried up to 5 times, one
+        second apart; past that a ToolError names the WorkItem and asks for the call again. The
+        lease is released on every way out."""
+        if not self.store.acquire(workitem_id, self.holder):
+            for _ in range(5):
+                time.sleep(1)
+                if self.store.acquire(workitem_id, self.holder):
+                    break
+            else:
+                raise ToolError(f"{workitem_id} is being ticked and its lease stayed busy through "
+                                "5 retries, so call the tool again")
+        try:
+            wi = self.store.get(workitem_id)
+            return self._write(wi, dict(wi, projectId=project_id), "project_joined",
+                               project=project_id)
+        finally:
+            self.store.release(workitem_id, self.holder)
+
+    def add_project_members(self, project_id, workitem_ids):
+        """Join WorkItems a live Project already lists on its members (WO-04): the ids the Project
+        does not have yet are added with put_project, and each new id whose WorkItem is in the
+        store gets its `projectId` the same way starting a Project sets it. No tool calls this.
+        Returns the stored Project, or the ToolError when there is no such Project."""
+        project = self.store.project(project_id)
+        if project is None:
+            raise ToolError(f"No project {project_id}")
+        fresh = [wid for wid in dict.fromkeys(workitem_ids) if wid not in project["members"]]
+        if fresh:
+            project = self.store.put_project(dict(project, members=project["members"] + fresh))
+        for member in fresh:
+            if self.store.get(member) is not None:
+                self._join_project(member, project_id)
+        return project
 
     def set_dependencies(self, workitem_id, depends_on, by, agent=False):
         """Replace the `Depends on #n` lines of a WorkItem no worker has touched (ADR-0042), so

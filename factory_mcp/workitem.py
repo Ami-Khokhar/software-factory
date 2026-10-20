@@ -187,7 +187,7 @@ def intake(repo, issue):
             "paths": paths_listed(issue.get("body")) or None, "wallMsOverride": None,
             "branch": branch_for(issue["number"]), "prNumber": None,
             "headSha": None, "reviewedSha": None, "gateRound": 0, "attempts": [], "blockers": [],
-            "pendingRetry": None, "state": state, "stateVersion": 0,
+            "pendingRetry": None, "projectId": None, "state": state, "stateVersion": 0,
             "createdAt": stamp, "updatedAt": stamp}
 
 

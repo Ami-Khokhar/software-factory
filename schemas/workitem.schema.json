@@ -129,6 +129,10 @@
         "headSha": { "type": ["string", "null"] }
       }
     },
+    "projectId": {
+      "type": ["string", "null"],
+      "description": "The Project this WorkItem belongs to (a member), or null."
+    },
     "recovery": {
       "type": ["object", "null"],
       "additionalProperties": false,

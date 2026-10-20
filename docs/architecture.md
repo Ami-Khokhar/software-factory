@@ -58,7 +58,9 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
  owner approval of `factory_start_plan` opens all the
   issues of a plan, and they run in order (ADR-0024); `factory_set_dependencies` then frees the
   independent ones before a worker starts them, and re-points one stranded on a dependency that
-  ended (ADR-0042, ADR-0047).
+  ended (ADR-0042, ADR-0047). Day Desk starts a Project with one tool call after the owner's
+  yes, quoted: `factory_start_project` stores its goal, budget and blueprint, opens the plan's
+  issues in order and makes each a member (ADR-0100).
 
 ## What crosses each boundary
 

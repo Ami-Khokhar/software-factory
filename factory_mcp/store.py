@@ -154,8 +154,15 @@ def _migrate_10(wi):
     return dict(wi, pendingRetry=wi.get("pendingRetry"))
 
 
+# Migration 11: every WorkItem names the Project it is a member of, or null for a WorkItem of
+# no Project; null is also what WorkItems stored before the Projects carry (WO-02, ADR-0099).
+def _migrate_11(wi):
+    return dict(wi, projectId=wi.get("projectId"))
+
+
 MIGRATIONS = {1: _migrate_1, 2: _migrate_2, 3: _migrate_3, 4: _migrate_4, 5: _migrate_5,
-              6: _migrate_6, 7: _migrate_7, 8: _migrate_8, 9: _migrate_9, 10: _migrate_10}
+              6: _migrate_6, 7: _migrate_7, 8: _migrate_8, 9: _migrate_9, 10: _migrate_10,
+              11: _migrate_11}
 
 
 def canonical_inputs(inputs):

@@ -69,6 +69,7 @@ class McpServerTest(unittest.TestCase):
                                   "factory_propose_issue", "factory_add_repo", "factory_approve_issue",
                                   "factory_bootstrap_repo", "factory_approve_lesson",
                                   "factory_retire_lesson", "factory_start_plan",
+                                  "factory_start_project",
                                   "factory_set_dependencies", "factory_replace_issue",
                                   "factory_docker_control", "factory_approve_plan_allowance",
                                   "factory_use_allowance", "factory_queue_retry", "factory_authorize_setup_merge",
@@ -105,6 +106,7 @@ class McpServerTest(unittest.TestCase):
         listed = {t["name"] for t in self.rpc("tools/list", token=AGENT)["result"]["tools"]}
         self.assertEqual(listed, {"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons", "factory_report",
                                   "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
+                                  "factory_start_project",
                                   "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
                                   "factory_answer_question",
                                   "factory_use_allowance", "factory_queue_retry", "factory_merge_setup_pr",
