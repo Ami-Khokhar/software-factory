@@ -55,7 +55,7 @@ def problem(fields):
     """The first reason `fields` cannot become a Project, as one sentence that says what to fix,
     or None. `fields` has the keys id, repo, title, goal, blueprint, doneWhen, budget, approval."""
     id_ = fields.get("id")
-    if not isinstance(id_, str) or not PROJECT_ID.match(id_):
+    if not isinstance(id_, str) or not PROJECT_ID.fullmatch(id_):
         return ("id must be 3 to 41 characters of lowercase letters, digits and dashes, "
                 "starting with a letter or digit")
     if not isinstance(fields.get("repo"), str) or not REPO.match(fields["repo"]):

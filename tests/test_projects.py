@@ -64,6 +64,14 @@ class ProjectStoreTest(unittest.TestCase):
                          "Build self-maintaining APIs, better.")
         self.assertEqual(self.store.project("self-maintaining-apis")["stateVersion"], 2)
 
+    def test_projects_created_at_the_same_at_read_back_in_id_order(self):
+        """now() has 1s resolution, so two Projects can share a createdAt; the id breaks the tie
+        and the read is deterministic."""
+        self.store.create_project(projects.new(fields(id="project-b"), AT))
+        self.store.create_project(projects.new(fields(id="project-a"), AT))
+        self.assertEqual([p["id"] for p in self.store.projects()],
+                         ["project-a", "project-b"])
+
     def test_project_of_finds_the_project_that_lists_a_member(self):
         self.store.create_project(dict(projects.new(fields(), AT), members=["acme/demo#1"]))
         member = dict(projects.new(fields(id="split-project"), AT), members=["acme/demo#20"])
@@ -80,6 +88,7 @@ class ProblemTest(unittest.TestCase):
         ("a two-character id", fields(id="ab"), "id must be 3 to 41"),
         ("a forty-three-character id", fields(id="0" * 42), "id must be 3 to 41"),
         ("an id with an upper-case letter", fields(id="Project-x"), "id must be 3 to 41"),
+        ("an id with a trailing newline", fields(id="acme-api\n"), "id must be 3 to 41"),
         ("a repo without an owner", fields(repo="demo"), "repo must be in the form owner/repo"),
         ("a repo without a separator", fields(repo="acme"), "repo must be in the form owner/repo"),
         ("an empty title", fields(title=""), "title must be 1 to 100"),

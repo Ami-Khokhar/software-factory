@@ -467,7 +467,8 @@ class Store:
     def projects(self):
         with self._lock:
             rows = self._db.execute(
-                "SELECT doc FROM projects ORDER BY json_extract(doc, '$.createdAt')").fetchall()
+                "SELECT doc FROM projects "
+                "ORDER BY json_extract(doc, '$.createdAt'), id").fetchall()  # id: now() has 1s resolution
         return [json.loads(row[0]) for row in rows]
 
     def put_project(self, doc):
@@ -484,11 +485,14 @@ class Store:
         return stored
 
     def project_of(self, workitem_id):
-        """The id of the first Project that names `workitem_id` a member, or None."""
-        for doc in self.projects():
-            if workitem_id in (doc.get("members") or []):
-                return doc["id"]
-        return None
+        """The id of the first Project that names `workitem_id` a member, or None. One lookup over
+        the stored members arrays, not a parse of every Project document per call."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT p.id FROM projects p, json_each(json_extract(p.doc, '$.members')) m "
+                "WHERE m.value = ? ORDER BY json_extract(p.doc, '$.createdAt'), p.id LIMIT 1",
+                (workitem_id,)).fetchone()
+        return row[0] if row else None
 
     @contextmanager
     def _transaction(self):

@@ -408,7 +408,10 @@ must hold before the controller is allowed to write:
 A Project (ADR-0099) is one named goal with a shared budget of worker passes, stored beside the
 WorkItems in the `projects` table as its whole JSON document, with the same optimistic
 `stateVersion`. `schemas/project.schema.json` is the contract; `factory_mcp/projects.py` holds the
-limits and the read tool `factory_project_status` is in `tools.AGENT_TOOLS`. The keys:
+limits and the read tool `factory_project_status` is in `tools.AGENT_TOOLS`. The states other than
+`active`, and the fields `passesUsed`, `members` and `acceptanceItem`, have no writer yet: WO-02
+to WO-04 write them. The store's Project records ship ahead of their first caller (WO-02): the
+work order adds the record before anything starts a Project. The keys:
 
 | Key | What it means |
 |---|---|
