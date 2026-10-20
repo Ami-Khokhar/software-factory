@@ -859,6 +859,10 @@ class Foreman:
         text = " ".join(str(question or "").split())[:2000]
         if not text:
             raise ToolError("the question is empty")
+        try:  # before storing: a bad wait must not leave a question nobody answers
+            wait = int(wait_seconds if wait_seconds is not None else 240)
+        except (TypeError, ValueError, OverflowError):
+            raise ToolError("the wait is not a number of seconds") from None
         question_id = hashlib.sha256(f"{order['id']}\n{text}".encode()).hexdigest()[:16]
         current = wi.get("question") or {}
         if current.get("text") and current.get("id") != question_id and not current.get("answer"):
@@ -867,7 +871,7 @@ class Foreman:
         if current.get("id") != question_id and not self._store_question(
                 wi["id"], {"id": question_id, "text": text, "askedAt": now()}):
             return {"gone": True}
-        deadline = time.time() + max(1, min(int(wait_seconds or 240), 600))
+        deadline = time.time() + max(1, min(wait, 600))
         while time.time() < deadline:
             wi = self.store.get(wi["id"])
             if wi is None:
@@ -903,6 +907,8 @@ class Foreman:
             question = wi.get("question") or {}
             if question.get("id") != question_id:
                 raise ToolError(f"{workitem_id} has no question {question_id}: a newer one replaced it")
+            if question.get("answer"):
+                raise ToolError(f"{workitem_id} already answered question {question_id}")
             if wi.get("state") not in ("dispatching", "implementing"):
                 raise ToolError(f"{workitem_id} is not running a pass; the question is stale")
             updated = dict(question, answer=str(answer), by=by, answeredAt=now())

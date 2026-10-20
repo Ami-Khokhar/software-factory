@@ -209,7 +209,8 @@ class RunnerTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
 
     def run_order(self, mode, kind="implement", repo="o/r", head=None, remote_verify=False,
-                  max_lines=600, ceiling=None, omit_ceiling=False, continuation=None, wall_ms=None):
+                  max_lines=600, ceiling=None, omit_ceiling=False, continuation=None, wall_ms=None,
+                  ask=None):
         wi = workitem(id="o/r#7", repo=repo, issueNumber=7, goal="Fix the app", headSha=head,
                       wallMsOverride=wall_ms)
         config = Config(mcp_token="t", repos=frozenset(),
@@ -222,6 +223,8 @@ class RunnerTest(unittest.TestCase):
         else:
             order["constraints"]["maxSourceChangedLinesCeiling"] = (
                 max_lines + 1_000_000 if ceiling is None else ceiling)
+        if ask:
+            order["ask"] = ask
         text = documents.worker_input(order, "factory/7")
         out = io.StringIO()
         cwd = os.getcwd()
@@ -260,6 +263,29 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(order["budget"]["wallMs"], 1_800_000)
         self.assertEqual(self.harness_runs[0]["seconds"], 1_500)
         self.assertEqual(self.verify_runs[-1]["seconds"], 180)
+
+    def test_the_ask_channel_reaches_the_harness_by_environment_only(self):
+        """The runner splits the ask block off the relay input: the harness gets the URL, token and
+        wait in its env, and the prompt it reads carries neither the block nor the token."""
+        token = "0123456789abcdef0123456789abcdef"
+        result, order = self.run_order("fix", ask={
+            "url": "http://host.docker.internal:43125/worker/ask", "token": token})
+        self.assertEqual(result["status"], "completed", result.get("error"))
+        env = self.harness_runs[0]["env"]
+        self.assertEqual(env["FACTORY_ASK_URL"], order["ask"]["url"])
+        self.assertEqual(env["FACTORY_ASK_TOKEN"], token)
+        self.assertGreaterEqual(int(env["FACTORY_ASK_WAIT"]), 30)
+        prompt = self.harness_runs[0]["argv"][-1]
+        self.assertNotIn(token, prompt)
+        self.assertNotIn(documents.ASK_CHANNEL.strip(), prompt)
+
+    def test_an_order_without_an_ask_block_sets_no_ask_environment(self):
+        result, _ = self.run_order("fix")
+        self.assertEqual(result["status"], "completed", result.get("error"))
+        self.assertNotIn("FACTORY_ASK_URL", self.harness_runs[0]["env"])
+
+    def test_the_runner_and_the_controller_agree_on_the_ask_marker(self):
+        self.assertEqual(runner.ASK_CHANNEL, documents.ASK_CHANNEL)
 
     def test_the_verify_gets_the_reserve_and_a_short_pass_bounds_it(self):
         """The verify's own clock is the flat reserve, and a quarter of a short pass."""

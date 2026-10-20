@@ -196,9 +196,11 @@ The states are the enum in `schemas/workitem.schema.json`.
   and no GitHub credential. It commits locally. Host git never runs in a tree the harness wrote,
   so a planted hook or filter cannot run on the host.
 - A pass that cannot decide from the issue may ask Day Desk (ADR-0098). The WorkOrder carries
-  `ask: {url, token}`. The runner passes them to the harness, and the image's `factory-ask` posts
-  one question to `http://host.docker.internal:<FACTORY_PORT>/worker/ask` — the same loopback
-  listener as MCP, which Docker Desktop maps to the host — and blocks for a bounded wait. The
+  `ask: {url, token}`, and the task input carries a one-line ask block before the WorkOrder that the
+  runner splits off before it hands the text to the harness: the values reach the harness as
+  `FACTORY_ASK_*` in its environment, never in the prompt. The image's `factory-ask` posts one question to
+  `http://host.docker.internal:<FACTORY_PORT>/worker/ask` — the same loopback listener as MCP,
+  which Docker Desktop maps to the host — and blocks for a bounded wait. The
   server stores the question on the WorkItem and `factory_answer_question` answers it; the worker
   proceeds with its own reading when nobody answers in time. The token names that one pass, so it
   can ask about nothing else, and it dies with the pass.

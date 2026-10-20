@@ -234,7 +234,7 @@ class Store:
                 continue
             for order in self.workorders(wi["id"]):
                 offered = str((order.get("ask") or {}).get("token") or "")
-                if offered and hmac.compare_digest(offered, token):
+                if offered and hmac.compare_digest(offered.encode("utf-8"), token.encode("utf-8")):
                     return wi, order
         return None
 

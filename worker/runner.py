@@ -119,6 +119,28 @@ def git(cwd, *args, timeout=300):
     return done.stdout.strip()
 
 
+# documents.ASK_CHANNEL in factory_mcp/documents.py. The runner runs in the image without that
+# package, so the literal is repeated; tests/test_worker_runner.py holds the two equal.
+ASK_CHANNEL = "\nASK-CHANNEL (the runner reads this block and does not pass it to the harness):\n"
+
+
+def ask_channel_from(text):
+    """Split the task input into the prompt the harness sees and the pass's ask block (ADR-0098).
+    The block holds the token, so the harness gets it by environment only."""
+    at = text.rfind(ASK_CHANNEL)
+    if at < 0:
+        return text, {}
+    start = at + len(ASK_CHANNEL)
+    end = text.find("\n", start)
+    if end < 0:
+        end = len(text)
+    try:
+        ask = json.loads(text[start:end])
+    except ValueError as exc:
+        raise WorkerError(f"the ask block is not JSON: {exc}") from None
+    return text[:at] + text[end:], ask if isinstance(ask, dict) else {}
+
+
 def workorder_from(text):
     marker = "WorkOrder:\n"
     at = text.rfind(marker)
@@ -342,8 +364,6 @@ class Sandbox:
         cmd = ["docker", "run", "--rm", "--init", "--name", name, "--label", f"factory-worker={self.label}",
                "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "1024",
                "--memory", "6g", "--cpus", "4", "-v", f"{mount}:/work", "-w", "/work"]
-        if sys.platform != "darwin":  # Docker Desktop already maps host.docker.internal
-            cmd += ["--add-host", "host.docker.internal:host-gateway"]
         # All phases modify or inspect the host-owned work copy. The scratch home is mode 1777
         # in the image, so this UID can also create tool state without using the host's HOME.
         cmd += ["--user", f"{os.getuid()}:{os.getgid()}", "-e", f"HOME={CONTAINER_HOME}"]
@@ -595,6 +615,7 @@ def main(argv=None):
         return entry
 
     try:
+        text, ask = ask_channel_from(text)
         order = workorder_from(text)
         result["workOrderId"] = order["id"]
         repo = origin_repo(cwd)
@@ -627,7 +648,6 @@ def main(argv=None):
         sandbox = Sandbox(args.image, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]),
                           credentials, harness_env)
         secrets = {value for value in harness_env.values() if value}
-        ask = order.get("ask") or {}  # the pass's ask channel (ADR-0098); absent on older WorkOrders
         ask_wait = max(30, min(360, seconds - reserve - post - 180))
         ask_env = ({"FACTORY_ASK_URL": str(ask["url"]), "FACTORY_ASK_TOKEN": str(ask["token"]),
                     "FACTORY_ASK_WAIT": str(ask_wait)}

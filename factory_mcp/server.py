@@ -64,6 +64,8 @@ class Handler(BaseHTTPRequestHandler):
                                                    body.get("wait", 240))
         except mcp.ToolError as exc:
             return self._send(409, {"error": str(exc)})
+        except Exception as exc:  # noqa: BLE001 - the worker gets an answer, not a reset socket
+            return self._send(500, {"error": f"{type(exc).__name__}: {exc}"})
         self._send(200, reply)
 
     def do_POST(self):

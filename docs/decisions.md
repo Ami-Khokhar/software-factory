@@ -2390,7 +2390,10 @@ the owner's words, and the owner wanted the worker to ask it directly.
 loopback ask route, which the worker container reaches as `host.docker.internal`. The runner passes
 both to the harness, and the image provides `factory-ask`, which posts one question and blocks for
 a bounded wait (at most 360 seconds, and never into the harness's verify reserve).
-The drive job runs every five minutes, so an answer normally arrives inside that wait. The server
+The drive job runs every five minutes, so an answer normally arrives inside that wait. The route
+is on the host's loopback, so the channel needs Docker Desktop's `host.docker.internal`; on a Linux
+Docker host a container cannot reach that listener, and `factory-ask` prints NO_ANSWER there. This
+record is 0098 because the open branch for #336 already claims ADR-0097.. The server
 accepts the token only while that WorkItem is `dispatching` or `implementing`, stores the question
 on the WorkItem, and returns the answer. Day Desk answers with `factory_answer_question` from the
 issue, the plan, the findings and the owner's words, and never forwards a question as an

@@ -64,6 +64,20 @@ class AskTest(unittest.TestCase):
         self.assertEqual(self.foreman.worker_ask(token, "Which module owns retries?", wait_seconds=1),
                          {"answer": "The relay client, in relay.py.", "by": "day-desk"})
 
+    def test_an_answered_question_is_not_answered_twice(self):
+        order = self.start()
+        self.foreman.worker_ask(order["ask"]["token"], "Which module?", wait_seconds=1)
+        question = self.store.get(ID)["question"]
+        self.foreman.answer_question(ID, question["id"], "relay.py", "day-desk")
+        with self.assertRaisesRegex(ToolError, "already answered"):
+            self.foreman.answer_question(ID, question["id"], "something else", "day-desk")
+
+    def test_a_bad_wait_is_refused_before_a_question_is_stored(self):
+        order = self.start()
+        with self.assertRaisesRegex(ToolError, "not a number"):
+            self.foreman.worker_ask(order["ask"]["token"], "Which module?", wait_seconds="soon")
+        self.assertIsNone(self.store.get(ID).get("question"))
+
     def test_a_second_question_while_one_waits_is_refused(self):
         order = self.start()
         self.foreman.worker_ask(order["ask"]["token"], "First?", wait_seconds=1)
@@ -94,12 +108,18 @@ class AskTest(unittest.TestCase):
         row = tools.build(self.store, self.foreman)["factory_status"].fn({})["workItems"][0]
         self.assertNotIn("question", row)
 
-    def test_the_worker_input_names_the_ask_command(self):
+    def test_the_worker_input_carries_the_ask_block_for_the_runner_only(self):
+        """The block is what the runner splits off; the prompt before it never holds the token."""
         order = self.start()
         text = documents.worker_input(order, self.store.get(ID)["branch"])
         self.assertIn("factory-ask '<your question>'", text)
         self.assertIn("NO_ANSWER", text)
-        self.assertNotIn(order["ask"]["token"], text)  # the token reaches the harness by env only
+        prompt, rest = text.split(documents.ASK_CHANNEL)
+        block, workorder = rest.split("\n", 1)
+        self.assertEqual(json.loads(block), order["ask"])
+        self.assertTrue(workorder.startswith("WorkOrder:\n"))
+        self.assertNotIn(order["ask"]["token"], prompt)
+        self.assertNotIn(order["ask"]["token"], workorder)
 
     def test_the_worker_command_prints_the_answer(self):
         """The image's factory-ask is the worker's side of the channel: it posts the question, waits,
@@ -158,6 +178,12 @@ class AskTest(unittest.TestCase):
             with self.assertRaises(urllib.error.HTTPError) as refused:
                 post({"token": "not-a-token", "question": "Hi", "wait": 1})
             self.assertEqual(refused.exception.code, 409)
+            with self.assertRaises(urllib.error.HTTPError) as non_ascii:
+                post({"token": "tökén", "question": "Hi", "wait": 1})
+            self.assertEqual(non_ascii.exception.code, 409)
+            with self.assertRaises(urllib.error.HTTPError) as bad_wait:
+                post({"token": order["ask"]["token"], "question": "Hi", "wait": "soon"})
+            self.assertEqual(bad_wait.exception.code, 409)
         finally:
             server.shutdown()
             server.server_close()
