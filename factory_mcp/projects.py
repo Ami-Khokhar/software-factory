@@ -118,3 +118,25 @@ def new(fields, at):
         "createdAt": at,
         "updatedAt": at,
     }
+
+
+def acceptance_issue(project_fields, count):
+    """The last issue of a Project: run its own checks and commit the evidence (ADR-0105)."""
+    path = f"docs/acceptance/{project_fields['id']}.md"
+    body = (
+        "Run the Project's end-to-end checks on the default branch and record the result.\n\n"
+        "For each check below: run the command from the repository root. Write the command, "
+        f"its exit code and the last 40 lines of its output to {path}. When a command fails, "
+        "find the cause in the product code, fix it with a test that fails without the fix, "
+        "and run the command again.\n\n"
+        "Do not change a check to make it pass. Do not mock what the command runs.\n\n"
+        "Paths: *\n\n"
+        "## Acceptance\n"
+    )
+    for check in project_fields["doneWhen"]:
+        body += (f"- {check['claim']} — done when: `{check['command']}` exits 0 "
+                 f"and {path} shows its output\n")
+    body += ("- The other checks of the repository still pass — done when: "
+             "the repository's verify command passes\n")
+    return {"title": f"Acceptance: {project_fields['title']}",
+            "after": list(range(1, count + 1)), "body": body}

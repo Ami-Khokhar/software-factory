@@ -151,6 +151,21 @@ A tick comes from the background loop or from `factory_tick`.
    and says that merge or closure does not establish runtime acceptance (ADR-0035, ADR-0043,
    ADR-0046, ADR-0081, ADR-0093).
 
+## Projects
+
+A Project has states `active`, `paused`, `done` and `stopped` (ADR-0105). Starting one appends
+an acceptance issue after every product issue, leaving room for it within the plan limit. Its
+body runs each `doneWhen` command on the default branch, records the command, exit code and last
+40 output lines in `docs/acceptance/<id>.md`, and requires product fixes with regression tests
+when a check fails. The checks stay unchanged, real and subject to the gate's review.
+
+At the end of a full tick, `_advance_projects` reads each active Project. A `closed` acceptance
+WorkItem makes it `done` and clears `pausedReason`, even if the deadline has since passed. A
+missing, `cancelled` or `exhausted` acceptance item pauses it with a reason. Otherwise a passed
+deadline pauses it. Version conflicts wait for the next tick, and each other error is logged
+without stopping the other Projects. Single-WorkItem ticks and non-active Projects do not advance.
+These transitions log `project_done` or `project_paused` and do not change WorkItem ticking.
+
 ## State machine
 
 The states are the enum in `schemas/workitem.schema.json`.

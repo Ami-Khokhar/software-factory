@@ -1,6 +1,7 @@
 """The Foreman: under a per-WorkItem lease, reconcile with GitHub, then act at most once."""
 import calendar
 import dataclasses
+from datetime import datetime
 import fnmatch
 import hashlib
 import json
@@ -426,7 +427,38 @@ class Foreman:
                     self.store.log("tick_error", {"error": f"{type(exc).__name__}: {exc}"}, wi["id"])
                     continue
                 ticked.append({"id": wi["id"], "from": before, "to": after["state"]})
+        self._advance_projects()
         return {"rebuilt": rebuilt, "ticked": ticked}
+
+    def _advance_projects(self):
+        """End active Projects from acceptance and deadline facts after a full tick (ADR-0105)."""
+        for project in self.store.projects():
+            if project["state"] != "active":
+                continue
+            try:
+                acceptance = (self.store.get(project["acceptanceItem"])
+                              if project["acceptanceItem"] else None)
+                deadline = project["budget"]["deadline"]
+                if acceptance and acceptance["state"] == "closed":
+                    state, reason = "done", None
+                elif acceptance is None or acceptance["state"] in ("cancelled", "exhausted"):
+                    state, reason = "paused", "the acceptance issue ended without a merge"
+                elif datetime.fromisoformat(now().replace("Z", "+00:00")) > datetime.fromisoformat(
+                        deadline.replace("Z", "+00:00")):
+                    state, reason = "paused", f"the deadline {deadline} passed"
+                else:
+                    continue
+                self.store.put_project(dict(project, state=state, pausedReason=reason))
+                detail = {"project": project["id"], "members": project["members"],
+                          "passesUsed": project["passesUsed"]}
+                if reason:
+                    detail["reason"] = reason
+                self.store.log("project_done" if state == "done" else "project_paused", detail)
+            except Conflict:
+                continue
+            except Exception as exc:  # one bad Project must not starve the rest
+                self.store.log("tick_error", {"project": project["id"],
+                                              "error": f"{type(exc).__name__}: {exc}"})
 
     def tick_one(self, workitem_id):
         """Returns (state before, WorkItem after)."""
@@ -1750,6 +1782,12 @@ class Foreman:
         problem = projects.problem(fields)
         if problem:
             raise ToolError(f"{problem}. No issue was opened")
+        if not isinstance(issues, list) or not issues:
+            raise ToolError("a project plan needs at least one issue; add the product work before acceptance")
+        issues = issues + [projects.acceptance_issue(fields, len(issues))]
+        if len(issues) > MAX_PLAN_ISSUES:
+            raise ToolError(f"a project plan has at most {MAX_PLAN_ISSUES - 1} issues, because "
+                            "the acceptance issue is added; split the goal into two projects")
         project_id = fields["id"]
         stored = self.store.project(project_id)
         if stored is None:
@@ -1780,6 +1818,7 @@ class Foreman:
         members = [workitem.workitem_id(repo, item["issue"]) for item in opened["issues"]]
         stored = self.store.create_project(dict(projects.new(fields, now()), repo=repo,
                                                 members=members))
+        stored = self.store.put_project(dict(stored, acceptanceItem=members[-1]))
         for member in members:
             self._join_project(member, project_id)
         self.store.log("project_started", {"project": project_id, "by": by, "members": members,
@@ -1791,6 +1830,8 @@ class Foreman:
         its plan's issues are already stored, so no issue opens again. Each listed WorkItem that
         is in the store but has no `projectId` yet is joined, and the start is named only when no
         line says it already started, so a replay after a completed start writes nothing."""
+        if project["acceptanceItem"] is None:
+            project = self.store.put_project(dict(project, acceptanceItem=project["members"][-1]))
         for member in project["members"]:
             wi = self.store.get(member)
             if wi is not None and wi.get("projectId") != project["id"]:

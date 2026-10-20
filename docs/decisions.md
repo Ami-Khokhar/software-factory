@@ -2506,3 +2506,27 @@ these rules. Non-members omit the key and get exactly the same task text as befo
 **Consequence.** Members' task text carries up to 20000 characters of blueprint plus the Project
 id, goal and rule lines. Workers can start building from the Lead's design. The optional key
 keeps older WorkOrders valid and needs no stored WorkItem migration.
+
+## ADR-0105 — A Project is done when its acceptance issue merges
+
+**Context.** ADR-0068 distinguishes merged code from a complete product. A Project's individual
+issues can merge while its end-to-end behavior still fails. ADR-0100 starts the approved plan,
+but the goal needs its own reviewed evidence before it can be called done.
+
+**Decision.** Starting a Project appends one acceptance issue depending on every earlier issue,
+reserving its place inside the plan limit. Its body requires running every `doneWhen` command
+from the repository root on the default branch, recording the command, exit code and last 40
+output lines in `docs/acceptance/<id>.md`. Failed commands require product fixes with regression
+tests and another run. Checks cannot be changed to pass or mocked. `Paths: *` permits product
+fixes and the evidence file, while the existing protected-path guards still apply. The Project's
+`acceptanceItem` names the last opened WorkItem. An identical start resumes without opening issues.
+At the end of a full tick, `_advance_projects` changes an active Project to `done` when acceptance
+is `closed`, clearing `pausedReason`. A missing acceptance item or one ended `cancelled` or
+`exhausted` pauses the Project with "the acceptance issue ended without a merge". Otherwise a
+passed deadline pauses it with "the deadline <deadline> passed". Closure takes precedence over
+the deadline. Writes use `put_project`, conflicts wait for another tick, and errors are logged
+per Project. Non-active Projects and single-WorkItem ticks do not advance Projects.
+
+**Consequence.** Done means the product's own end-to-end command passed and the gate reviewed
+the evidence. The factory records `project_done` with the members and passes used, or
+`project_paused` with its reason. WorkItem transitions and the gate's merge authority stay the same.
