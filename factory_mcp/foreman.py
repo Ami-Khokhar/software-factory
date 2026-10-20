@@ -2,9 +2,11 @@
 import calendar
 import dataclasses
 import fnmatch
+import hashlib
 import json
 import os
 import re
+import secrets
 import time
 import threading
 import uuid
@@ -826,9 +828,10 @@ class Foreman:
         order = documents.workorder(wi, kind, attempt, self.config, base, findings,
                                     self._lessons(wi, findings),
                                     continuation.get("sha") if continuation else None)
+        order["ask"] = {"url": self.config.ask_url, "token": secrets.token_hex(16)}  # ADR-0098
         self.store.save_workorder(order)
         wi = self._write(wi, dict(wi, state="dispatching", activeWorkOrderId=order["id"], worker=worker,
-                                  recovery=recovery),
+                                  recovery=recovery, question=None),
                          "dispatch", workOrder=order["id"], worker=worker)
         return self.submit(wi, order)
 
@@ -843,6 +846,72 @@ class Foreman:
                                  cwd=self.config.checkout(wi["repo"]))
         return self._write(wi, dict(wi, state="implementing", providerTaskId=task["id"]),
                            "submitted", task=task["id"])
+
+    def worker_ask(self, token, question, wait_seconds=240):
+        """A running pass asks Day Desk a question (ADR-0098). Stores it on the WorkItem and waits,
+        polling the store, for factory_answer_question to answer it from another request. Returns
+        {"answer": ...}, {"pending": True} when nobody answered in time, or {"gone": True} when the
+        pass ended first. The token is the whole capability: one live WorkOrder."""
+        found = self.store.order_by_ask_token(token)
+        if found is None:
+            raise ToolError("this pass is not running, so it has no ask channel")
+        wi, order = found
+        text = " ".join(str(question or "").split())[:2000]
+        if not text:
+            raise ToolError("the question is empty")
+        question_id = hashlib.sha256(f"{order['id']}\n{text}".encode()).hexdigest()[:16]
+        current = wi.get("question") or {}
+        if current.get("text") and current.get("id") != question_id and not current.get("answer"):
+            raise ToolError("a question from this pass is already waiting for an answer; wait for it, "
+                            "or decide from the issue")
+        if current.get("id") != question_id and not self._store_question(
+                wi["id"], {"id": question_id, "text": text, "askedAt": now()}):
+            return {"gone": True}
+        deadline = time.time() + max(1, min(int(wait_seconds or 240), 600))
+        while time.time() < deadline:
+            wi = self.store.get(wi["id"])
+            if wi is None:
+                return {"gone": True}
+            current = wi.get("question") or {}
+            if current.get("id") == question_id and current.get("answer"):
+                return {"answer": current["answer"], "by": current.get("by")}
+            if wi.get("state") not in ("dispatching", "implementing"):
+                return {"gone": True}
+            time.sleep(0.5)
+        return {"pending": True}
+
+    def _store_question(self, workitem_id, question):
+        """Write the question, retrying the optimistic write the poller may have raced."""
+        for _ in range(5):
+            wi = self.store.get(workitem_id)
+            if wi is None or wi.get("state") not in ("dispatching", "implementing"):
+                return None
+            try:
+                return self._write(wi, dict(wi, question=question), "worker_question",
+                                   question=question["id"])
+            except Conflict:
+                continue
+        return None
+
+    def answer_question(self, workitem_id, question_id, answer, by):
+        """Day Desk answers the running pass's question (ADR-0098). The answer wakes the worker's
+        blocked ask and stays on the WorkItem as the record of what the pass was told."""
+        for _ in range(5):
+            wi = self.store.get(workitem_id)
+            if wi is None:
+                raise ToolError(f"No WorkItem {workitem_id}")
+            question = wi.get("question") or {}
+            if question.get("id") != question_id:
+                raise ToolError(f"{workitem_id} has no question {question_id}: a newer one replaced it")
+            if wi.get("state") not in ("dispatching", "implementing"):
+                raise ToolError(f"{workitem_id} is not running a pass; the question is stale")
+            updated = dict(question, answer=str(answer), by=by, answeredAt=now())
+            try:
+                return self._write(wi, dict(wi, question=updated), "question_answered",
+                                   question=question_id, by=by)
+            except Conflict:
+                continue
+        raise ToolError(f"{workitem_id} changed while the answer was written; try again")
 
     def poll(self, wi):
         order = self._order(wi)

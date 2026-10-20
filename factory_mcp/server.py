@@ -42,7 +42,33 @@ class Handler(BaseHTTPRequestHandler):
 
     do_DELETE = do_GET
 
+    def _worker_ask(self):
+        """A running worker pass asks Day Desk a question (ADR-0098). The pass's own token is the
+        whole credential: it names one live WorkOrder and can do nothing else. The route is on the
+        same loopback listener, which a worker container reaches as host.docker.internal."""
+        try:
+            length = int(self.headers.get("content-length") or 0)
+        except ValueError:
+            return self._send(400, {"error": "bad_content_length"})
+        if length > 8192:
+            self.close_connection = True
+            return self._send(413, {"error": "body_too_large"})
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except ValueError:
+            return self._send(400, {"error": "bad_json"})
+        if not isinstance(body, dict):
+            return self._send(400, {"error": "bad_json"})
+        try:
+            reply = self.server.foreman.worker_ask(body.get("token"), body.get("question"),
+                                                   body.get("wait", 240))
+        except mcp.ToolError as exc:
+            return self._send(409, {"error": str(exc)})
+        self._send(200, reply)
+
     def do_POST(self):
+        if self.path.split("?")[0] == "/worker/ask":
+            return self._worker_ask()
         if self.path.split("?")[0] != "/mcp":
             return self._send(404, {"error": "not_found"})
         # MCP clients send no Origin; a browser always does. Refusing it closes DNS rebinding,

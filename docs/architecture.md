@@ -195,6 +195,13 @@ The states are the enum in `schemas/workitem.schema.json`.
 - The harness runs in the `factory-worker` container with that copy and a copy of its model key,
   and no GitHub credential. It commits locally. Host git never runs in a tree the harness wrote,
   so a planted hook or filter cannot run on the host.
+- A pass that cannot decide from the issue may ask Day Desk (ADR-0098). The WorkOrder carries
+  `ask: {url, token}`. The runner passes them to the harness, and the image's `factory-ask` posts
+  one question to `http://host.docker.internal:<FACTORY_PORT>/worker/ask` — the same loopback
+  listener as MCP, which Docker Desktop maps to the host — and blocks for a bounded wait. The
+  server stores the question on the WorkItem and `factory_answer_question` answers it; the worker
+  proceeds with its own reading when nobody answers in time. The token names that one pass, so it
+  can ask about nothing else, and it dies with the pass.
 - The runner turns the commits into a unified patch, measures the whole pull request — the branch's
   diff against its merge base with the default branch, so a fix is counted with the implementation it
   follows — and checks an oversized one before the gate's `verify` command from the base commit runs

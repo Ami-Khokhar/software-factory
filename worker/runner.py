@@ -342,6 +342,8 @@ class Sandbox:
         cmd = ["docker", "run", "--rm", "--init", "--name", name, "--label", f"factory-worker={self.label}",
                "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "1024",
                "--memory", "6g", "--cpus", "4", "-v", f"{mount}:/work", "-w", "/work"]
+        if sys.platform != "darwin":  # Docker Desktop already maps host.docker.internal
+            cmd += ["--add-host", "host.docker.internal:host-gateway"]
         # All phases modify or inspect the host-owned work copy. The scratch home is mode 1777
         # in the image, so this UID can also create tool state without using the host's HOME.
         cmd += ["--user", f"{os.getuid()}:{os.getgid()}", "-e", f"HOME={CONTAINER_HOME}"]
@@ -625,6 +627,13 @@ def main(argv=None):
         sandbox = Sandbox(args.image, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]),
                           credentials, harness_env)
         secrets = {value for value in harness_env.values() if value}
+        ask = order.get("ask") or {}  # the pass's ask channel (ADR-0098); absent on older WorkOrders
+        ask_wait = max(30, min(300, seconds - reserve - post - 180))
+        ask_env = ({"FACTORY_ASK_URL": str(ask["url"]), "FACTORY_ASK_TOKEN": str(ask["token"]),
+                    "FACTORY_ASK_WAIT": str(ask_wait)}
+                   if ask.get("url") and ask.get("token") else None)
+        if ask_env:
+            secrets.add(ask_env["FACTORY_ASK_TOKEN"])  # never echo it in the relay log
         # A copied credential's whole content is a secret, in both the raw and collapsed form:
         # the tail is whitespace-collapsed before any replace, so a multi-line credential (a
         # pretty-printed auth JSON, a PEM key) matches only through its collapsed form.
@@ -633,7 +642,8 @@ def main(argv=None):
                 with open(os.path.join(directory, name)) as handle:
                     secrets.update(credential_secrets(handle.read()))
         harness_start = time.monotonic()
-        code, out, err = sandbox.run([*harness, text], seconds - reserve - post, work, harness=True)
+        code, out, err = sandbox.run([*harness, text], seconds - reserve - post, work, harness=True,
+                                     env=ask_env)
         echoed = out + err
         record("harness execution", harness_start, code, echoed)
         # for the relay log; the Result line comes last. Redacted by the same rules as the tail.

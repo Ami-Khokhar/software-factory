@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""Ask Day Desk a question from a running factory pass (ADR-0098).
+
+worker/runner.py sets FACTORY_ASK_URL, FACTORY_ASK_TOKEN and FACTORY_ASK_WAIT. The token names this
+one WorkOrder and nothing else. The wait is bounded: on a timeout or a channel error this prints
+NO_ANSWER and exits 0, so the pass goes on with its own reading instead of failing.
+"""
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+
+def main():
+    question = " ".join(sys.argv[1:]).strip()
+    url = os.environ.get("FACTORY_ASK_URL", "")
+    token = os.environ.get("FACTORY_ASK_TOKEN", "")
+    if not question:
+        print("factory-ask: give a question, for example: factory-ask 'Which module owns retries?'",
+              file=sys.stderr)
+        return 2
+    if not url or not token:
+        print("NO_ANSWER: this pass has no ask channel; decide from the issue and say what you assumed")
+        return 0
+    try:
+        wait = max(1, min(int(os.environ.get("FACTORY_ASK_WAIT", "240")), 600))
+    except ValueError:
+        wait = 240
+    body = json.dumps({"token": token, "question": question[:2000], "wait": wait}).encode("utf-8")
+    request = urllib.request.Request(url, body, {"content-type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=wait + 30) as response:
+            reply = json.loads(response.read() or b"{}")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read()[:300].decode("utf-8", "replace")
+        print(f"NO_ANSWER: the ask channel refused the question ({exc.code} {detail}); decide from the "
+              "issue and say what you assumed")
+        return 0
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        print(f"NO_ANSWER: the ask channel failed ({exc}); decide from the issue and say what you assumed")
+        return 0
+    answer = (reply or {}).get("answer")
+    if answer:
+        print(answer)
+    else:
+        print("NO_ANSWER: Day Desk did not answer in time; decide from the issue and say what you assumed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

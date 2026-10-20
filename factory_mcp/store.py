@@ -5,6 +5,7 @@ must name the version it read, and it stores version + 1. `PRAGMA user_version` 
 a store has had.
 """
 import hashlib
+import hmac
 import json
 import sqlite3
 import threading
@@ -221,6 +222,21 @@ class Store:
         with self._lock:
             rows = self._db.execute("SELECT doc FROM workitems ORDER BY id").fetchall()
         return [json.loads(row[0]) for row in rows]
+
+    def order_by_ask_token(self, token):
+        """The WorkItem and live WorkOrder this ask token belongs to, or None (ADR-0098). The token
+        is the pass's whole capability: it can ask about that pass and read its answer, nothing else."""
+        token = str(token or "")
+        if not token:
+            return None
+        for wi in self.all():
+            if wi.get("state") not in ("dispatching", "implementing"):
+                continue
+            for order in self.workorders(wi["id"]):
+                offered = str((order.get("ask") or {}).get("token") or "")
+                if offered and hmac.compare_digest(offered, token):
+                    return wi, order
+        return None
 
     def put(self, doc):
         """Write `doc` if its stateVersion is current (0 for a new WorkItem). Returns the stored doc."""
