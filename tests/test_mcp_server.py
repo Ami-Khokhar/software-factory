@@ -65,6 +65,7 @@ class McpServerTest(unittest.TestCase):
         self.assertEqual(reads, {"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons",
                                  "factory_report", "factory_docker_status"})
         self.assertEqual(writes, {"factory_intake", "factory_tick", "factory_resolve_human",
+                                  "factory_answer_question",
                                   "factory_propose_issue", "factory_add_repo", "factory_approve_issue",
                                   "factory_bootstrap_repo", "factory_approve_lesson",
                                   "factory_retire_lesson", "factory_start_plan",
@@ -105,6 +106,7 @@ class McpServerTest(unittest.TestCase):
         self.assertEqual(listed, {"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons", "factory_report",
                                   "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
                                   "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
+                                  "factory_answer_question",
                                   "factory_use_allowance", "factory_queue_retry", "factory_merge_setup_pr",
                                   "factory_docker_status", "factory_docker_control",
                                   "factory_set_worker", "factory_register_worker", "factory_set_timeout",

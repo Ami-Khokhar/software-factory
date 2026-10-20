@@ -77,7 +77,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | File | What it does |
 |---|---|
 | `factory_mcp/__init__.py`, `__main__.py` | The package; `python3 -m factory_mcp` starts the server |
-| `factory_mcp/server.py` | Streamable HTTP for MCP on loopback: `POST /mcp`, the bearer token, the background tick loop |
+| `factory_mcp/server.py` | Streamable HTTP on loopback: `POST /mcp` with the bearer token, `POST /worker/ask` with a pass's own token (ADR-0098), the background tick loop |
 | `factory_mcp/mcp.py` | The MCP protocol: one JSON-RPC message in, one response out, no I/O |
 | `factory_mcp/tools.py` | The tools, and whether each one reads or writes |
 | `factory_mcp/foreman.py` | The Foreman: intake, rebuild, tick, dispatch, poll a task, open a PR, and the person's acts (resolve, approve an issue, start a plan, add a repo, bootstrap a repo, approve or retire a lesson) |
@@ -196,6 +196,15 @@ incident or the owner's (ADR-0030, ADR-0097).
 - The harness runs in the `factory-worker` container with that copy and a copy of its model key,
   and no GitHub credential. It commits locally. Host git never runs in a tree the harness wrote,
   so a planted hook or filter cannot run on the host.
+- A pass that cannot decide from the issue may ask Day Desk (ADR-0098). The WorkOrder carries
+  `ask: {url, token}`, and the task input carries a one-line ask block before the WorkOrder that the
+  runner splits off before it hands the text to the harness: the values reach the harness as
+  `FACTORY_ASK_*` in its environment, never in the prompt. The image's `factory-ask` posts one question to
+  `http://host.docker.internal:<FACTORY_PORT>/worker/ask` — the same loopback listener as MCP,
+  which Docker Desktop maps to the host — and blocks for a bounded wait. The
+  server stores the question on the WorkItem and `factory_answer_question` answers it; the worker
+  proceeds with its own reading when nobody answers in time. The token names that one pass, so it
+  can ask about nothing else, and it dies with the pass.
 - The runner turns the commits into a unified patch, measures the whole pull request — the branch's
   diff against its merge base with the default branch, so a fix is counted with the implementation it
   follows — and checks an oversized one before the gate's `verify` command from the base commit runs

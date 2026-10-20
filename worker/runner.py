@@ -119,6 +119,28 @@ def git(cwd, *args, timeout=300):
     return done.stdout.strip()
 
 
+# documents.ASK_CHANNEL in factory_mcp/documents.py. The runner runs in the image without that
+# package, so the literal is repeated; tests/test_worker_runner.py holds the two equal.
+ASK_CHANNEL = "\nASK-CHANNEL (the runner reads this block and does not pass it to the harness):\n"
+
+
+def ask_channel_from(text):
+    """Split the task input into the prompt the harness sees and the pass's ask block (ADR-0098).
+    The block holds the token, so the harness gets it by environment only."""
+    at = text.rfind(ASK_CHANNEL)
+    if at < 0:
+        return text, {}
+    start = at + len(ASK_CHANNEL)
+    end = text.find("\n", start)
+    if end < 0:
+        end = len(text)
+    try:
+        ask = json.loads(text[start:end])
+    except ValueError as exc:
+        raise WorkerError(f"the ask block is not JSON: {exc}") from None
+    return text[:at] + text[end:], ask if isinstance(ask, dict) else {}
+
+
 def workorder_from(text):
     marker = "WorkOrder:\n"
     at = text.rfind(marker)
@@ -593,6 +615,7 @@ def main(argv=None):
         return entry
 
     try:
+        text, ask = ask_channel_from(text)
         order = workorder_from(text)
         result["workOrderId"] = order["id"]
         repo = origin_repo(cwd)
@@ -625,6 +648,12 @@ def main(argv=None):
         sandbox = Sandbox(args.image, re.sub(r"[^A-Za-z0-9_.-]", "_", order["id"]),
                           credentials, harness_env)
         secrets = {value for value in harness_env.values() if value}
+        ask_wait = max(30, min(360, seconds - reserve - post - 180))
+        ask_env = ({"FACTORY_ASK_URL": str(ask["url"]), "FACTORY_ASK_TOKEN": str(ask["token"]),
+                    "FACTORY_ASK_WAIT": str(ask_wait)}
+                   if ask.get("url") and ask.get("token") else None)
+        if ask_env:
+            secrets.add(ask_env["FACTORY_ASK_TOKEN"])  # never echo it in the relay log
         # A copied credential's whole content is a secret, in both the raw and collapsed form:
         # the tail is whitespace-collapsed before any replace, so a multi-line credential (a
         # pretty-printed auth JSON, a PEM key) matches only through its collapsed form.
@@ -633,7 +662,8 @@ def main(argv=None):
                 with open(os.path.join(directory, name)) as handle:
                     secrets.update(credential_secrets(handle.read()))
         harness_start = time.monotonic()
-        code, out, err = sandbox.run([*harness, text], seconds - reserve - post, work, harness=True)
+        code, out, err = sandbox.run([*harness, text], seconds - reserve - post, work, harness=True,
+                                     env=ask_env)
         echoed = out + err
         record("harness execution", harness_start, code, echoed)
         # for the relay log; the Result line comes last. Redacted by the same rules as the tail.

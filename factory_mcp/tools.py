@@ -12,6 +12,7 @@ AGENT_TOOLS = frozenset({"factory_runtime_status", "factory_status", "factory_re
                          "factory_report", "factory_check_worker", "factory_reload_workers",
                          "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
                          "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
+                         "factory_answer_question",
                          "factory_use_allowance", "factory_queue_retry", "factory_merge_setup_pr",
                          "factory_docker_status", "factory_docker_control",
                          "factory_set_worker", "factory_register_worker", "factory_set_timeout"})
@@ -54,6 +55,10 @@ def build(store, foreman, agent=False):
             row["agentMayResolve"] = agent_may_resolve(wi, store.history(wi["id"]))
         elif wi["state"] == "exhausted":
             row["blockedOn"] = Foreman._reason(wi)
+        question = wi.get("question") or {}
+        if (wi["state"] in ("dispatching", "implementing") and question.get("text")
+                and not question.get("answer")):
+            row["question"] = question
         return row
 
     def status(args):
@@ -253,6 +258,23 @@ def build(store, foreman, agent=False):
              "write", lambda args: {"workItem": foreman.resolve_human(
                  args["id"], args["resolution"], args["note"], args["by"], agent=agent,
                  owner_asked=args.get("ownerAsked", False))}),
+        Tool("factory_answer_question",
+             "Answer the question a running worker pass asked (ADR-0098). The worker is waiting on "
+             "the answer; it reaches the pass and stays on the WorkItem. Answer from the issue, the "
+             "plan and the owner's words. When the question is a real boundary (a scope change, a "
+             "credential, a new pass budget), do not decide it: answer that the worker must leave it "
+             "and report.",
+             {"type": "object", "required": ["id", "questionId", "answer", "by"],
+              "additionalProperties": False,
+              "properties": {"id": {"type": "string"},
+                             "questionId": {"type": "string", "minLength": 1,
+                                            "description": "the question's id, from factory_status"},
+                             "answer": {"type": "string", "minLength": 1,
+                                        "description": "what the worker should do, in its terms"},
+                             "by": {"type": "string", "minLength": 1,
+                                    "description": "who answered: day-desk"}}},
+             "write", lambda args: {"workItem": foreman.answer_question(
+                 args["id"], args["questionId"], args["answer"], args["by"])}),
         Tool("factory_propose_issue",
              "Planner only: open an issue labelled factory:proposed. The body needs an "
              "'## Acceptance' list of '- <claim> — done when: <check>' bullets. A person adds "

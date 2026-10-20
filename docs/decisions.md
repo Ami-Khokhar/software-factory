@@ -2405,3 +2405,32 @@ Desk quotes it and does not ask again.
 factory refuses one that changes it without the owner's words. The one-answer rule and the pass
 budget still bound an agent answer, so the change cannot spend a new budget. The Drive job still
 never sets `ownerAsked`, because nobody is in the chat to say yes.
+
+## ADR-0098 — A running worker pass may ask Day Desk, and the answer is bounded
+
+**Context.** A worker pass runs in a sandbox with no way to ask anyone. When the issue or its
+acceptance was ambiguous, the harness either guessed — which the gate then rejected — or ended the
+pass with a failure that reached the owner as an escalation. Day Desk knows the issue, the plan and
+the owner's words, and the owner wanted the worker to ask it directly.
+
+**Decision.** Each WorkOrder carries `ask: {url, token}`: a fresh 32-hex token and the factory's
+loopback ask route, which the worker container reaches as `host.docker.internal`. The runner passes
+both to the harness, and the image provides `factory-ask`, which posts one question and blocks for
+a bounded wait (at most 360 seconds, and never into the harness's verify reserve).
+The drive job runs every five minutes, so an answer normally arrives inside that wait. The route
+is on the host's loopback, so the channel needs Docker Desktop's `host.docker.internal`; on a Linux
+Docker host a container cannot reach that listener, and `factory-ask` prints NO_ANSWER there. It
+follows ADR-0097. The server
+accepts the token only while that WorkItem is `dispatching` or `implementing`, stores the question
+on the WorkItem, and returns the answer. Day Desk answers with `factory_answer_question` from the
+issue, the plan, the findings and the owner's words, and never forwards a question as an
+escalation. A question that is a real boundary (scope, credential, new pass budget, protected
+path) is answered with "leave it and report". If nobody answers in time, `factory-ask` prints
+NO_ANSWER and the pass continues on its own reading, saying what it assumed. The answer is data,
+like the WorkOrder, never permission to break the worker's rules.
+
+**Consequence.** The worker no longer guesses silently or fails a pass to ask a simple question.
+The ask route is authenticated only by the per-pass token, so it grants nothing but a question
+about that one pass, and the token dies with the pass. One question may wait at a time; a second is
+refused, so a confused harness cannot flood Day Desk. The wait is bounded, so a silent Day Desk
+costs at most a few minutes of one pass and never the pass itself.

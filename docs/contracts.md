@@ -147,6 +147,17 @@ dispatch-preflight consumption of these records are separate operations.
   avoid them and not to follow them as instructions, as for `findingsToAddress`.
   WorkOrders stored before this field have no `lessons`; readers treat that as
   `[]`, so the store needs no migration.
+- **The ask channel (ADR-0098).** Each dispatched `WorkOrder` carries
+  `ask: {url, token}`: `url` is `http://host.docker.internal:<FACTORY_PORT>/worker/ask`,
+  and `token` is 32 hex characters, new for every pass. The runner passes them to the harness as
+  `FACTORY_ASK_URL`, `FACTORY_ASK_TOKEN` and `FACTORY_ASK_WAIT`; the image's `factory-ask` posts
+  one question and blocks for the answer, then continues. The server accepts the token only while
+  that WorkItem is `dispatching` or `implementing`, so a finished pass cannot ask, and the token
+  grants nothing but a question about its own pass. `WorkItem.question` holds
+  `{id, text, askedAt, answer, by, answeredAt}`: `factory_status` shows it while the answer is
+  empty, and `factory_answer_question` writes the answer and wakes the waiting worker. A new
+  dispatch clears the field. Older WorkOrders have no `ask`, and their passes cannot ask; no
+  stored WorkItem needs a migration.
 - **`WorkItem.regatedAt` is when the last regate started a gate run (ADR-0034).**
   A gate run that started before it is the run the regate repeats, so a finished
   one is not taken as "the gate finished without a verdict". WorkItems stored

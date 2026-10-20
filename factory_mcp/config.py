@@ -56,6 +56,12 @@ class Config:
         """The worker checkout for `repo`, sent to the relay as the task cwd, or None."""
         return str(Path(self.checkout_root, *repo.split("/"))) if self.checkout_root else None
 
+    @property
+    def ask_url(self):
+        """Where a worker container reaches the ask route (ADR-0098). Docker Desktop maps the name
+        to the host's loopback, where factory-mcp listens, so the route stays off the network."""
+        return f"http://host.docker.internal:{self.port}/worker/ask"
+
     def trusts(self, repo, author):
         """Issue text reaches a worker only when a trusted person wrote it (ADR-0007). GitHub logins
         ignore case."""

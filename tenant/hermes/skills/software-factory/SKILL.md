@@ -259,9 +259,27 @@ reached the pass budget and the issue reads like more than one pass holds: plan 
 the same goal and replace the WorkItem with them, as the replacement rules above say. A split
 that keeps the original's acceptance bullets is your call; report it.
 
+## A worker's question
+
+A running worker pass may ask you a question through its ask channel: `factory_status` shows it as
+`question` on the WorkItem, with its `id`, `text` and `askedAt`. The worker is blocked on it, for a
+bounded wait, and then goes on with its own reading.
+
+1. Read the WorkItem with factory_status: the issue, its acceptance, the plan, the findings and the
+   owner's words. Answer from them, concretely and in the worker's terms: which module or file,
+   which reading of the acceptance, what to leave out.
+2. Call factory_answer_question with the WorkItem id, the question's `id`, the answer and
+   `day-desk` as `by`. A question is not an escalation: answer it, do not hand it to the owner.
+3. When the question is a real boundary — a scope change, a credential, a new pass budget, a
+   protected path — answer that the worker must leave that part and report it. That boundary is the
+   owner's, not the question's. Never put a secret in an answer.
+4. Do not answer the same question twice; the tool refuses an answered or stale one. An answer that
+   arrived after the pass ended stays on the WorkItem for the next pass.
+
 ## Drive the factory
 
-The driving job runs this section when the escalations you may answer change. For each line of
+The driving job runs this section when the escalations you may answer change. It answers a pending
+`question` on a running WorkItem first, with "A worker's question". For each line of
 factory_status's workItems with `agentMayResolve` true:
 
 1. Call factory_status with its id and read `reason`, `needFromYou`, `tried` and `pendingRetry`, and how many of
