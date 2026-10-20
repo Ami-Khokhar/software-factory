@@ -175,9 +175,9 @@ factory_resolve_human retry so it waits on the new plan. The factory refuses a W
 worker pass, a dependency that ended, and a cycle: give the reason word for word. Tell the owner
 which issues now run side by side.
 
-When one issue of the plan is beyond recovery, replace it. A split — replacements that together
-carry the original's '## Acceptance' bullets, each replacement carrying at least one — is the same
-work in smaller pieces and is your call: call factory_replace_issue with the WorkItem id, the
+When one issue of the plan is beyond recovery, replace it. A split — two or more replacements that
+together carry the original's '## Acceptance' bullets, each replacement carrying at least one — is
+the same work in smaller pieces and is your call: call factory_replace_issue with the WorkItem id, the
 replacements, your reason as `note`, `day-desk` as `by`, and a `requestId` you invent for this
 replacement and keep for every repeat of the call, retries included. Tell the owner, in chat, what
 you split: the original's bullets as they stand, the acceptance of each replacement, and every

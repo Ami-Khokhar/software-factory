@@ -105,6 +105,19 @@ class ReplaceIssueTest(unittest.TestCase):
         replaced = [h for h in self.foreman.store.history(ORIGINAL) if h["action"] == "replaced"]
         self.assertNotIn("ownerAsked", replaced[0]["detail"])
 
+    def test_one_identical_replacement_is_not_a_split(self):
+        """A single replacement that carries the original's acceptance is the same work re-issued:
+        the new WorkItem starts with a fresh pass budget, so it stays the owner's decision."""
+        self.github.issues[(REPO, int(ORIGINAL.split("#")[1]))]["body"] = (
+            "## Acceptance\n- first thing — done when: test_one passes\n")
+        self.wait()
+        item = {"title": "Again", "body": "Paths: src/one.py\n\n## Acceptance\n"
+                                          "- first thing — done when: test_one passes\n"}
+        with self.assertRaisesRegex(ToolError, "is the owner's decision"):
+            self.foreman.replace_issue(ORIGINAL, [item], "day-desk", "too big for one pass",
+                                       "again-req", agent=True)
+        self.assertEqual(self.github.writes, [])
+
     def test_ownerAsked_is_not_the_owners_own_flag(self):
         self.wait()
         with self.assertRaisesRegex(ToolError, "ownerAsked is Day Desk's flag"):

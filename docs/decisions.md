@@ -2392,8 +2392,8 @@ refused any split Day Desk did not have `ownerAsked` for, and the escalation com
 
 **Decision.** Day Desk decides, and then says what it decided. It may answer any escalation the
 guards accept (one answer per incident, inside the passes the WorkItem has left), split an issue
-when the replacements together carry the original's `## Acceptance` bullets with every replacement
-carrying at least one, set a longer run from the evidence, free a dependency, and choose a worker
+into two or more replacements that together carry the original's `## Acceptance` bullets with every
+replacement carrying at least one, set a longer run from the evidence, free a dependency, and choose a worker
 among FACTORY_WORKERS. The owner decides a new pass budget or allowance, a merge, a change to
 `.github/` or `AGENTS.md`, a replacement that changes the acceptance, a credential or secret, a
 new worker in FACTORY_WORKERS, and closing work that could still succeed. A factory comment names

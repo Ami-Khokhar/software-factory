@@ -1821,15 +1821,17 @@ class Foreman:
 
     def _split_keeps_acceptance(self, wi, replacements):
         """Whether the replacements together carry the original issue's acceptance bullets, with
-        every replacement carrying at least one. That is the same work in smaller pieces, which Day
-        Desk may decide; a replacement that changes the bullets changes what the work is, and stays
-        the owner's decision (ADR-0097)."""
+        every replacement carrying at least one and at least two replacements in all. That is the
+        same work in smaller pieces, which Day Desk may decide; a replacement that changes the
+        bullets changes what the work is, and one identical replacement is not smaller work at all:
+        it opens a fresh WorkItem with a fresh pass budget, so both stay the owner's decision
+        (ADR-0097)."""
         def key(rows):
             return sorted((row["claim"], row["doneWhen"]) for row in rows)
 
         original = key(workitem.parse_acceptance(
             self.github.issue(wi["repo"], wi["issueNumber"]).get("body"))[0])
-        if not original:
+        if not original or len(replacements) < 2:
             return False
         together = []
         for entry in replacements:
