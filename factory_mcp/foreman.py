@@ -1497,6 +1497,24 @@ class Foreman:
                                      "Fix the cause named in attempts, then call factory_resolve_human.")
         return self._write(wi, new, "attempt_failed", **detail)
 
+    def _lead_may_act(self, wi, resolution):
+        """Whether the Lead may recover this member inside its active Project (ADR-0102)."""
+        project_id = wi.get("projectId")
+        project = self.store.project(project_id) if project_id is not None else None
+        if project is None:
+            return False, "not a project member"
+        if project["state"] != "active":
+            return False, f"project {project_id} is {project['state']}"
+        stop = self._safety_stop(wi)
+        if stop:
+            return False, f"safety stop: {stop}"
+        cause = self._env_paused(wi)
+        if cause:
+            return False, f"environment fault: {cause}"
+        if resolution == "retry" and len(self.store.workorders(wi["id"])) >= projects.MAX_MEMBER_PASSES:
+            return False, "member used 8 passes"
+        return True, None
+
     def resolve_human(self, workitem_id, resolution, note, by, agent=False, owner_asked=False):
         """A person's answer to human_waiting, blocked or exhausted (ADR-0006): retry, regate or close.
         Day Desk, driving (`agent`), answers each incident once — the escalation and its material facts;
@@ -1505,7 +1523,9 @@ class Foreman:
         (ADR-0035), so Day Desk may not retry a WorkItem that used its budget on its own. When the owner
         asked in chat (`owner_asked`, ADR-0043, extended by ADR-0046), it is the owner's decision, not
         Day Desk's: it answers a WorkItem Day Desk already answered, for any of the three resolutions,
-        and a retry buys a fresh budget."""
+        and a retry buys a fresh budget. Inside an active Project the Lead answers as often as the
+        shared budget allows, except safety stops, environment faults and the member pass cap
+        (ADR-0102)."""
         if owner_asked and not agent:
             raise ToolError("ownerAsked is Day Desk's flag for a decision the owner asked for in chat; the "
                             "owner's own call does not need it")
@@ -1515,12 +1535,18 @@ class Foreman:
             wi = self.store.get(workitem_id)
             if wi is None or wi["state"] not in ("human_waiting", "blocked", "exhausted"):
                 raise ToolError(f"{workitem_id} is not waiting on a person")
+            lead_ok, lead_reason = self._lead_may_act(wi, resolution) if agent and not owner_asked else (False, None)
+            if wi.get("projectId") and lead_reason and lead_reason.startswith(("safety stop:", "environment fault:")):
+                raise ToolError(f"{workitem_id}: {lead_reason}; the owner decides: "
+                                f"factory retry|regate|close {workitem_id} <note>")
             passes = len(self.store.workorders(workitem_id))
             spent = passes - (wi.get("passesBefore") or 0) >= self.config.max_passes
-            if agent and not owner_asked and (wi["state"] == "exhausted" or resolution == "retry" and spent):
+            if agent and not owner_asked and (
+                    wi["state"] == "exhausted" and (not lead_ok or "passes on one member" in (wi.get("terminalReason") or ""))
+                    or not lead_ok and resolution == "retry" and spent):
                 raise ToolError(f"{workitem_id} used its budget of passes, so the owner decides whether to spend "
                                 f"more: factory retry|close {workitem_id} <note>")
-            if agent and not owner_asked and not agent_may_resolve(wi, self.store.history(workitem_id)):
+            if agent and not owner_asked and not lead_ok and not agent_may_resolve(wi, self.store.history(workitem_id)):
                 if wi.get("incident") is not None:
                     raise ToolError(f"Day Desk already answered {workitem_id}'s current escalation; the tool "
                                     f"re-arms it only when its blocking facts change, so the owner decides now: "
@@ -1539,13 +1565,14 @@ class Foreman:
                 new = dict(wi, state="cancelled", terminalReason=f"closed by {by}: {note}")
             else:
                 raise ToolError("resolution must be retry, regate (needs a PR) or close")
-            if agent and not owner_asked and wi.get("incident") is not None:
+            if agent and not owner_asked and not lead_ok and wi.get("incident") is not None:
                 # Day Desk's answer is spent on this incident; the next one it may answer is a new record
                 new = dict(new, incident=dict(wi["incident"], agentAnswered=True))
             return self._write(wi, dict(new, blockedOn=None, attempts=[], recovery=None, pendingRetry=None,
                                         infraRetries=0), "human_resolved",
                                resolution=resolution, note=note, by=by, **rerun, **({"agent": True} if agent else {}),
-                               **({"ownerAsked": True} if owner_asked else {}))
+                               **({"ownerAsked": True} if owner_asked else {}),
+                               **({"project": wi["projectId"]} if wi.get("projectId") else {}))
         finally:
             self.store.release(workitem_id, self.holder)
 
@@ -2205,7 +2232,9 @@ class Foreman:
                       owner_asked=False, allowance_plan_id=None):
         """Replace a WorkItem waiting on recovery with ordered replacement issues (ADR-0059). A
         split that carries the original's acceptance bullets across the replacements runs without
-        the owner and is Day Desk's call; any other replacement is the owner's decision: Day Desk
+        the owner and is Day Desk's call. For a member of an active Project, Day Desk approves each
+        replacement itself with factory_approve_issue when the split keeps the acceptance; the
+        replacements stay factory:proposed until then. Any other replacement is the owner's decision: Day Desk
         calls it only when the owner asked for it in chat (`owner_asked`, ADR-0035 / ADR-0043), with
         the owner's approval words as the note; the owner's
         own call carries its approval as the note and leaves ownerAsked unset. The caller passes a
@@ -2439,6 +2468,8 @@ class Foreman:
             names = ", ".join(f"#{number}" for number in replacements)
             # what the cancelled WorkItem tried stays on it: the replacement is the recovery
             # record's continuation, not a wipe of its history
+            if wi.get("projectId"):
+                self.add_project_members(wi["projectId"], [workitem.workitem_id(repo, n) for n in numbers])
             new = self._write(wi, dict(wi, state="cancelled", terminalReason=f"replaced by {names}",
                                        blockedOn=None, waitingOn=None), "replaced",
                               replacements=replacements, note=note, requestId=request_id,

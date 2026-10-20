@@ -57,6 +57,8 @@ def build(store, foreman, agent=False):
             row["agentMayResolve"] = agent_may_resolve(wi, store.history(wi["id"]))
         elif wi["state"] == "exhausted":
             row["blockedOn"] = Foreman._reason(wi)
+        if wi.get("projectId") and wi["state"] in (*WAITING, "exhausted"):
+            row["agentMayResolve"], row["leadBlockedBy"] = foreman._lead_may_act(wi, "retry")
         question = wi.get("question") or {}
         if (wi["state"] in ("dispatching", "implementing") and question.get("text")
                 and not question.get("answer")):

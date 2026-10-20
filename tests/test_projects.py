@@ -1090,3 +1090,156 @@ class ProjectLongerRunTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LeadAuthorityTest(unittest.TestCase):
+    def setUp(self):
+        self.store = Store(":memory:")
+        self.addCleanup(self.store.close)
+        self.github = FakeGitHub()
+        self.foreman = Foreman(self.store, self.github,
+                               Config(mcp_token="t", repos=frozenset({REPO})), FakeRelay())
+        self.project = self.store.create_project(projects.new(fields(repo=REPO), AT))
+        self.id = f"{REPO}#7"
+        self.github.add_issue(REPO, 7)
+        self.foreman.intake(REPO, 7)
+        self.foreman.add_project_members(self.project["id"], [self.id])
+        self.wait()
+        self.agent = tools.build(self.store, self.foreman, agent=True)
+
+    def wait(self, **over):
+        return self.store.put(dict(self.store.get(self.id), state="blocked", blockedOn="verify failed",
+                                   **over))
+
+    def resolve(self, resolution="retry"):
+        return self.agent["factory_resolve_human"].fn(
+            {"id": self.id, "resolution": resolution, "note": "run the tests before you commit", "by": "day-desk"})["workItem"]
+
+    def status(self):
+        return next(row for row in self.agent["factory_status"].fn({})["workItems"] if row["id"] == self.id)
+
+    def passes(self, count):
+        for n in range(count):
+            self.store.save_workorder({"id": f"prior/{n}", "workItemId": self.id})
+
+    def test_day_desk_retries_a_member_it_already_answered(self):
+        self.wait(incident={"id": 1, "agentAnswered": False})
+        self.assertEqual(self.resolve()["state"], "ready")
+        self.assertFalse(self.store.get(self.id)["incident"]["agentAnswered"])
+        self.wait(incident={"id": 1, "agentAnswered": True})
+        self.assertEqual(self.resolve()["state"], "ready")
+        detail = self.store.history(self.id)[-1]["detail"]
+        self.assertEqual((detail["project"], detail["agent"]), (self.project["id"], True))
+        self.assertEqual(self.store.project(self.project["id"])["passesUsed"], 0)
+
+    def test_day_desk_retries_a_member_more_than_four_passes_in(self):
+        self.passes(5)
+        for state, reason in (("blocked", None), ("exhausted", "project spent its passes")):
+            with self.subTest(state=state):
+                self.store.put(dict(self.store.get(self.id), state=state, terminalReason=reason))
+                self.assertEqual(self.resolve()["state"], "ready")
+                self.assertIsNone(self.store.get(self.id)["passesBefore"])
+        self.store.put(dict(self.store.get(self.id), state="exhausted",
+                            terminalReason="8 passes on one member; the Lead splits it or the owner decides"))
+        with self.assertRaisesRegex(ToolError, "used its budget of passes"):
+            self.resolve()
+
+    def test_a_member_with_a_human_verdict_still_goes_to_the_owner(self):
+        self.passes(8)
+        self.store.log("attempt_failed", {"cause": "checkout or setup"}, self.id)
+        self.store.put(dict(self.store.get(self.id), blockedOn="pr-gatekeeper decided HUMAN"))
+        before, history = self.store.get(self.id), self.store.global_history()
+        for resolution in ("retry", "regate", "close"):
+            with self.subTest(resolution=resolution), self.assertRaisesRegex(
+                    ToolError, f"safety stop: pr-gatekeeper decided human; the owner decides: factory retry\|regate\|close {self.id} <note>"):
+                self.resolve(resolution)
+        self.assertEqual(self.store.get(self.id), before)
+        self.assertEqual(self.store.global_history(), history)
+        self.assertEqual(self.status()["leadBlockedBy"], "safety stop: pr-gatekeeper decided human")
+        self.assertEqual(self.foreman.resolve_human(self.id, "retry", "owner reviewed", "owner")["state"], "ready")
+
+    def test_a_member_with_an_environment_fault_still_goes_to_the_owner(self):
+        self.passes(8)
+        self.store.log("attempt_failed", {"cause": "checkout or setup"}, self.id)
+        before, history = self.store.get(self.id), self.store.global_history()
+        with self.assertRaisesRegex(ToolError, "environment fault: checkout or setup; the owner decides:"):
+            self.resolve()
+        self.assertEqual(self.store.get(self.id), before)
+        self.assertEqual(self.store.global_history(), history)
+        self.assertEqual(self.status()["leadBlockedBy"], "environment fault: checkout or setup")
+        self.assertEqual(self.foreman.resolve_human(self.id, "retry", "owner: repaired", "day-desk",
+                                                   agent=True, owner_asked=True)["state"], "ready")
+
+    def test_a_member_of_a_paused_project_is_refused(self):
+        self.passes(8)
+        self.store.put(dict(self.store.get(self.id), blockedOn="pr-gatekeeper decided HUMAN"))
+        self.store.log("attempt_failed", {"cause": "checkout or setup"}, self.id)
+        self.store.put_project(dict(self.store.project(self.project["id"]), state="paused"))
+        before, history = self.store.get(self.id), self.store.global_history()
+        with self.assertRaisesRegex(ToolError, "used its budget of passes"):
+            self.resolve()
+        self.assertEqual(self.store.get(self.id), before)
+        self.assertEqual(self.store.global_history(), history)
+        self.assertFalse(self.status()["agentMayResolve"])
+        self.assertEqual(self.status()["leadBlockedBy"], f"project {self.project['id']} is paused")
+
+    def test_a_member_at_eight_passes_cannot_be_retried_only_split(self):
+        self.passes(8)
+        with self.assertRaisesRegex(ToolError, "used its budget of passes"):
+            self.resolve()
+        self.assertFalse(self.status()["agentMayResolve"])
+        self.assertEqual(self.status()["leadBlockedBy"], "member used 8 passes")
+        self.split_member()
+
+    def split_member(self):
+        bullets = ["- first thing — done when: test_one passes", "- second thing — done when: test_two passes"]
+        self.github.issues[(REPO, 7)]["body"] = "## Acceptance\n" + "\n".join(bullets)
+        replacements = [{"title": f"Part {n}", "body": f"Paths: src/*\n\n## Acceptance\n{bullet}\n"}
+                        for n, bullet in enumerate(bullets)]
+        result = self.agent["factory_replace_issue"].fn(
+            {"id": self.id, "replacements": replacements, "note": "split into smaller passes",
+             "by": "day-desk", "requestId": "split/member"})
+        self.assertEqual(result["workItem"]["state"], "cancelled")
+        members = self.store.project(self.project["id"])["members"]
+        self.assertEqual(members, [self.id, f"{REPO}#201", f"{REPO}#202"])
+        for number in (201, 202):
+            self.assertEqual([label["name"] for label in self.github.issues[(REPO, number)]["labels"]],
+                             ["factory:proposed"])
+            self.assertIsNone(self.store.get(f"{REPO}#{number}"))
+            self.agent["factory_approve_issue"].fn({"repo": REPO, "issue": number, "by": "day-desk"})
+            self.assertEqual(self.store.get(f"{REPO}#{number}")["projectId"], self.project["id"])
+        self.assertEqual(workitem.depends_on(self.github.issues[(REPO, 202)]["body"]), [201])
+
+    def test_split_replacements_join_the_project(self):
+        self.split_member()
+
+    def test_status_says_the_lead_may_act_on_a_member(self):
+        self.store.log("human_resolved", {"agent": True}, self.id)
+        for state in ("blocked", "human_waiting", "exhausted"):
+            with self.subTest(state=state):
+                self.store.put(dict(self.store.get(self.id), state=state))
+                row = self.status()
+                self.assertTrue(row["agentMayResolve"])
+                self.assertIsNone(row["leadBlockedBy"])
+        self.store.put_project(dict(self.store.project(self.project["id"]), state="stopped"))
+        self.assertFalse(self.status()["agentMayResolve"])
+        self.assertEqual(self.status()["leadBlockedBy"], f"project {self.project['id']} is stopped")
+        self.store.put(dict(self.store.get(self.id), projectId="missing"))
+        self.assertEqual(self.status()["leadBlockedBy"], "not a project member")
+
+    def test_a_non_member_keeps_the_one_answer_rule(self):
+        self.store.put(dict(self.store.get(self.id), projectId=None))
+        self.assertTrue(self.status()["agentMayResolve"])
+        self.assertEqual(self.resolve()["state"], "ready")
+        self.assertNotIn("project", self.store.history(self.id)[-1]["detail"])
+        self.wait()
+        self.assertFalse(self.status()["agentMayResolve"])
+        self.assertNotIn("leadBlockedBy", self.status())
+        with self.assertRaisesRegex(ToolError, f"Day Desk already resolved {self.id} once, so the owner decides now"):
+            self.resolve("close")
+        self.assertEqual(self.store.get(self.id)["state"], "blocked")
+        self.assertEqual(self.foreman.resolve_human(self.id, "retry", "owner approved", "owner")["state"], "ready")
+
+
+if __name__ == "__main__":
+    unittest.main()
