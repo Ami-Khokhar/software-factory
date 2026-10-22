@@ -2763,3 +2763,21 @@ Project member branch (MAX_MEMBER_PASSES and the Project budget) is unchanged.
 
 **Consequence.** A non-member may run at most one pass beyond FACTORY_MAX_PASSES per gate round, and the
 gate's round limit bounds the total. The owner is not asked to approve the fix the gate itself ordered.
+
+## ADR-0113 — A regate's verdict counts even on the same head and round
+
+**Context.** self-maintaining-apis#2: Day Desk regated its PR at 2026-10-18 14:39Z, and the gate
+re-ran on the same head and posted CHANGES round 1 on d003a8a9 at 14:46Z. `current_verdict` saw a
+verdict on the accepted head at the accepted round and returned None, so the WorkItem stayed in
+`reviewing` until `gate_silent` handed it to a person at 16:39Z, two hours after the answer was
+already there.
+
+**Decision.** In `current_verdict`, a verdict on the accepted head and round is taken once more
+when the WorkItem has a `regatedAt` and the verdict's `publishedAt` is a string greater than it
+(both are "%Y-%m-%dT%H:%M:%SZ", so string comparison orders them). When `reconcile` takes a
+verdict it sets `regatedAt` to None, so the same verdict is "already accepted" on the next tick.
+
+**Consequence.** A regate's re-answer lands without a second ask, even when the head and the round
+did not change; a verdict published before the regate is still ignored. The stale-run rule
+(ADR-0034) is untouched: it only matters when no verdict is taken. A WorkItem stored before this
+change keeps its `regatedAt`, and nothing in the store migrates.

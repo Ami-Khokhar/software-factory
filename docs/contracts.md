@@ -175,7 +175,9 @@ dispatch-preflight consumption of these records are separate operations.
   stored WorkItem needs a migration.
 - **`WorkItem.regatedAt` is when the last regate started a gate run (ADR-0034).**
   A gate run that started before it is the run the regate repeats, so a finished
-  one is not taken as "the gate finished without a verdict". WorkItems stored
+  one is not taken as "the gate finished without a verdict". A verdict on the
+  accepted head and round published after it counts (ADR-0113), and taking that
+  verdict clears the field. WorkItems stored
   before this field have none; readers treat that as null.
 - **`WorkItem.passesBefore` is how many worker passes were used before the last
   person's retry (ADR-0035).** For non-members and members of done Projects,
