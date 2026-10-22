@@ -225,7 +225,9 @@ token) and `FACTORY_ASK_WAIT`; the route is the same loopback listener as MCP, s
 exposed. It needs Docker Desktop, whose `host.docker.internal` reaches the host loopback: on a
 Linux Docker host a container cannot reach that listener, so `factory-ask` prints NO_ANSWER and the
 pass carries on without an answer. A deploy that changes `worker/Dockerfile` rebuilds and retags the image, which is how a
-pass gets the command.
+pass gets the command. `factory-ask` lives in the worker image, and a change to `worker/factory-ask`
+alone does not change `worker/Dockerfile`, so `factory update` does not rebuild the image; rebuild
+it with `docker build -t factory-worker:latest worker/` after such a change.
 An agent registered before #98 must add its `--credential` and
 `--env` flags: without them the runner mounts no login and the harness fails on its first call.
 Register each worker in `~/.config/agent-relay/agents.json`

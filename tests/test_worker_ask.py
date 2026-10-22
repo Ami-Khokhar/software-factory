@@ -170,6 +170,19 @@ class AskTest(unittest.TestCase):
                 self.assertTrue(done.stdout.startswith("factory-ask: give a question"), done.stdout)
                 self.assertNotIn("NO_ANSWER", done.stdout + done.stderr)
 
+    def test_a_question_starting_with_a_dash_is_not_usage_but_reaches_the_channel(self):
+        """Only an argv of exactly -h or --help is usage; a real question may begin with a dash
+        (for example '-1 is the retry count...'), and it goes to the channel like any question."""
+        env = {**os.environ, "FACTORY_ASK_URL": "http://127.0.0.1:9/worker/ask",
+               "FACTORY_ASK_TOKEN": "x" * 32, "FACTORY_ASK_WAIT": "1"}
+        command = Path(__file__).resolve().parent.parent / "worker" / "factory-ask"
+        done = subprocess.run([sys.executable, str(command),
+                               "-1 is the retry count in the log, which module owns it?"],
+                              capture_output=True, text=True, env=env, timeout=10)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertTrue(done.stdout.startswith("NO_ANSWER:"), done.stdout)
+        self.assertNotIn("factory-ask: give a question", done.stdout + done.stderr)
+
     def test_the_http_route_carries_the_question_and_the_answer(self):
         order = self.start()
         server = make_server(self.config, self.store, self.github, self.relay)

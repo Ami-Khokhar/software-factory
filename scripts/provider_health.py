@@ -109,7 +109,8 @@ def probe(sandbox, argv, seconds, scratch, expect):
     """One synthetic request through the restricted sandbox. Returns (event dict, status)."""
     started = time.monotonic()
     try:
-        code, out, err = sandbox.run([*argv, PROBE], seconds, scratch, harness=True)
+        code, out, err = sandbox.run([*runner.harness_command(argv), PROBE], seconds, scratch,
+                                    harness=True)
     except runner.WorkerError as exc:
         # Docker could not start the sandbox for the harness phase: unavailable, honestly reported.
         status = "unavailable"

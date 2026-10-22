@@ -20,7 +20,7 @@ def main():
         print("factory-ask: give a question, for example: factory-ask 'Which module owns retries?'",
               file=sys.stderr)
         return 2
-    if question.startswith("-"):  # -h, --help: the pass asks how to call this, not Day Desk
+    if sys.argv[1:] in (["-h"], ["--help"]):  # the pass asks how to call this, not Day Desk
         print("factory-ask: give a question, for example: factory-ask 'Which module owns retries?'")
         return 0
     if not url or not token:

@@ -2733,7 +2733,8 @@ answer on it.
 
 **Decision.** The runner inserts `--auto` right after `run` when the harness argv is an OpenCode run
 that does not already carry it; no other harness is touched. `factory-ask` prints its usage and
-exits 0 when the joined question starts with `-` (`-h`, `--help`), without contacting the channel.
+exits 0 when the argv is exactly `-h` or `--help`, without contacting the channel. A real question
+that merely begins with a dash still goes to the channel; only the exact flags are answered locally.
 
 **Consequence.** OpenCode workers stop refusing their own tool calls, at parity with the Pi workers,
 which have no permission prompt at all. The container is still the sandbox (ADR-0017): the harness
