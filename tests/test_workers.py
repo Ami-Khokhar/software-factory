@@ -180,8 +180,18 @@ class WorkerTest(unittest.TestCase):
         self.github.contents[(REPO, ".github/pr-gatekeeper.json")] = '{"reviewer_model": "deepseek-v4.1-flash"}'
         wi = foreman.tick(ID)["workItem"]
         self.assertEqual((wi["state"], wi["blockedOn"]),
-                         ("human_waiting", "every allowed worker is in the reviewer family deepseek"))
+                         ("human_waiting", "every allowed worker is in the reviewer family deepseek (the "
+                          "issue's Worker: line also names pi-gone-factory, which is not in "
+                          "FACTORY_WORKERS)"))
         self.assertEqual(self.relay.tasks, {})
+
+    def test_a_stale_pin_with_no_worker_eligible_names_the_dropped_pin(self):
+        foreman = self.foreman(body=f"Worker: pi-gone-factory\n\n{ISSUE_BODY}",
+                               workers=(("pi-deepseek-factory", "local"),))
+        self.github.contents[(REPO, ".github/pr-gatekeeper.json")] = '{"reviewer_model": "deepseek-v4.1-flash"}'
+        foreman.tick(ID)
+        detail = next(h["detail"] for h in foreman.store.history(ID) if h["action"] == "no_worker")
+        self.assertEqual(detail["workers"], ["pi-gone-factory"])
 
     def test_a_pass_never_goes_to_the_gate_reviewers_family(self):
         """ADR-0085: the gate reviews deepseek-v4.1-flash, so the first pass skips pi-deepseek-factory."""
