@@ -2743,11 +2743,15 @@ push. A tool OpenCode's config explicitly denies stays denied.
 
 ## ADR-0112 — A PR at the gate keeps one fix pass per round
 
+Amends ADR-0035: the factory still stops on its own, but may run one gate-ordered fix pass beyond
+FACTORY_MAX_PASSES per gate round.
+
 **Context.** Ami-Khokhar/self-maintaining-apis#5 (not a Project member) spent its 4 passes on failed
 attempts, the 4th opened PR #22, and the gate returned CHANGES with a blocking finding. The dispatch of
 the fix pass then wrote `exhausted` ("4 worker passes used; FACTORY_MAX_PASSES is 4"), so the owner had
-to approve a retry for work the gate had just asked for. The gate already bounds fix rounds itself: it
-hands a PR to a person after 3 CHANGES rounds.
+to approve a retry for work the gate had just asked for. The factory already escalates a problem
+repeated in two gate rounds to a person (ROUNDS_PER_PROBLEM in factory_mcp/workitem.py), and the gate
+itself stops at the repo's `max_rounds` in `.github/pr-gatekeeper.json`.
 
 **Decision.** In the non-member pass-budget check, a dispatch of a fix WorkOrder skips the
 FACTORY_MAX_PASSES exhaustion when no fix WorkOrder exists yet for the WorkItem's current gate round.
