@@ -2718,3 +2718,19 @@ the owner only when routing finds no worker. `factory_set_worker` still refuses 
 **Consequence.** A stale pin no longer costs the owner an answer, and the agent it names is still never
 reached. The owner sees the reroute in the audit log. A pin the owner meant on purpose and has not yet
 added to FACTORY_WORKERS runs on another allowed worker instead of waiting.
+
+## ADR-0112 — A PR at the gate keeps one fix pass per round
+
+**Context.** Ami-Khokhar/self-maintaining-apis#5 (not a Project member) spent its 4 passes on failed
+attempts, the 4th opened PR #22, and the gate returned CHANGES with a blocking finding. The dispatch of
+the fix pass then wrote `exhausted` ("4 worker passes used; FACTORY_MAX_PASSES is 4"), so the owner had
+to approve a retry for work the gate had just asked for. The gate already bounds fix rounds itself: it
+hands a PR to a person after 3 CHANGES rounds.
+
+**Decision.** In the non-member pass-budget check, a dispatch of a fix WorkOrder skips the
+FACTORY_MAX_PASSES exhaustion when no fix WorkOrder exists yet for the WorkItem's current gate round.
+That one pass is free; a second fix attempt in the same round counts against the budget as before. The
+Project member branch (MAX_MEMBER_PASSES and the Project budget) is unchanged.
+
+**Consequence.** A non-member may run at most one pass beyond FACTORY_MAX_PASSES per gate round, and the
+gate's round limit bounds the total. The owner is not asked to approve the fix the gate itself ordered.

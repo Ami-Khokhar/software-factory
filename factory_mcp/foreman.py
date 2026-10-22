@@ -863,7 +863,11 @@ class Foreman:
                     "exhausted", project=project_id)
         else:
             used = len(orders) - (wi.get("passesBefore") or 0)  # a person's retry buys a fresh budget
-            if used >= self.config.max_passes:
+            # ADR-0112: a PR that reaches the gate keeps one fix pass per round past the budget — the
+            # gate already caps fix rounds itself, so its first CHANGES verdict must not end the item.
+            first_gate_fix = kind == "fix" and not any(
+                o["kind"] == "fix" and o["round"] == wi.get("gateRound", 0) for o in orders)
+            if used >= self.config.max_passes and not first_gate_fix:
                 self._finish_recovery(wi, False)  # the budget stopped the attempt the recovery chose
                 return self._write(wi, dict(wi, state="exhausted", recovery=None, terminalReason=(
                     f"{used} worker passes used; FACTORY_MAX_PASSES is {self.config.max_passes}")),
