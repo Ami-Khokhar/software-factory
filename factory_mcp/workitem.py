@@ -243,12 +243,17 @@ def verdict_for_head(facts):
 
 
 def current_verdict(wi, facts):
-    """The latest verdict for the PR's head if newer than the one already accepted."""
+    """The latest verdict for the PR's head if newer than the one already accepted.
+
+    A regate may ask the gate to answer a head it already answered: a verdict on the accepted head
+    and round counts once more when it was published after the regate (ADR-0113)."""
     latest = verdict_for_head(facts)
     if latest is None or latest["round"] < wi.get("gateRound", 0):
         return None  # stale: reviewed an older commit, or an older round
     if latest["headSha"] == wi.get("reviewedSha") and latest["round"] == wi.get("gateRound"):
-        return None  # already accepted
+        regated = wi.get("regatedAt")
+        if not (regated and (latest.get("publishedAt") or "") > regated):
+            return None  # already accepted
     return latest
 
 
@@ -300,6 +305,7 @@ def reconcile(wi, facts):
     if verdict:
         index = next(i for i in range(len(facts["verdicts"]) - 1, -1, -1)
                      if facts["verdicts"][i] is verdict)
+        wi["regatedAt"] = None  # taken once: the next reconcile sees it as already accepted
         wi.update(gateRound=verdict["round"], reviewedSha=verdict["headSha"],
                   state=OUTCOME_STATE[verdict["outcome"]],
                   blockers=blockers(facts["verdicts"][:index + 1], latest=verdict))

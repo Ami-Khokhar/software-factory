@@ -216,6 +216,35 @@ class ResolveHumanTest(unittest.TestCase):
         self.foreman.resolve_human(ID, "regate", "Reopen it later", "amteshwar")
         self.assertEqual(self.github.pulls[0]["body"], body)
 
+    def test_a_regate_takes_a_verdict_of_the_same_round_and_head_published_after_it(self):
+        self.gate_says_human()  # HUMAN round 1 on c1, accepted at 02:00
+        with mock.patch("factory_mcp.foreman.now", lambda: "2026-09-24T05:00:00Z"):
+            self.foreman.resolve_human(ID, "regate", "The reviewer verdict was invalid", "day-desk")
+        self.github.add_verdict(REPO, 100, "CHANGES", 1, "c1", created_at="2026-09-24T06:00:00Z",
+                                findings=[{"path": "src/app.py", "problem": "wrong branch",
+                                           "severity": "blocking", "fix": "merge the fix", "test": ""}])
+        wi = self.tick()
+        # the tick reconciles to changes_requested and then dispatches the fix the verdict asks for
+        self.assertEqual((wi["state"], wi["regatedAt"]), ("implementing", None))
+
+    def test_a_taken_verdict_does_not_move_the_workitem_back(self):
+        self.gate_says_human()
+        with mock.patch("factory_mcp.foreman.now", lambda: "2026-09-24T05:00:00Z"):
+            self.foreman.resolve_human(ID, "regate", "The reviewer verdict was invalid", "day-desk")
+        self.github.add_verdict(REPO, 100, "HUMAN", 1, "c1", created_at="2026-09-24T06:00:00Z")
+        wi = self.tick()
+        self.assertEqual((wi["state"], wi["regatedAt"]), ("human_waiting", None))
+        self.foreman.resolve_human(ID, "retry", "Keep the old path as a fallback", "amteshwar")
+        wi = self.tick()  # the same verdict must not drag it back to human_waiting
+        self.assertNotEqual(wi["state"], "human_waiting")
+
+    def test_a_same_round_verdict_published_before_the_regate_is_still_ignored(self):
+        self.gate_says_human()
+        with mock.patch("factory_mcp.foreman.now", lambda: "2026-09-24T05:00:00Z"):
+            self.foreman.resolve_human(ID, "regate", "The reviewer verdict was invalid", "day-desk")
+        self.github.add_verdict(REPO, 100, "CHANGES", 1, "c1")  # published at 02:00, before 05:00
+        self.assertEqual(self.tick()["state"], "reviewing")
+
     def test_a_decision_waits_while_a_tick_holds_the_lease(self):
         self.block()
         self.foreman.store.acquire(ID, "another-tick")

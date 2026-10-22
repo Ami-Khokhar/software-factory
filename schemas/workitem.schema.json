@@ -79,7 +79,7 @@
     "regatedAt": {
       "type": ["string", "null"],
       "format": "date-time",
-      "description": "When the last regate started a gate run (ADR-0034). A gate run that started before it does not answer that regate."
+      "description": "When the last regate started a gate run (ADR-0034). A gate run that started before it does not answer that regate. A verdict on the accepted head and round published after it counts, and taking that verdict clears the field (ADR-0113)."
     },
     "blockers": {
       "type": "array",

@@ -54,10 +54,10 @@ class FakeGitHub:
                            "head": {"ref": branch, "sha": sha, "repo": {"full_name": repo}},
                            "base": {"ref": "main", "sha": "base0"}})
 
-    def add_verdict(self, repo, pr, outcome, round_, head_sha, findings=()):
+    def add_verdict(self, repo, pr, outcome, round_, head_sha, findings=(), created_at="2026-09-24T02:00:00Z"):
         self.issue_comments.setdefault((repo, pr), []).append(
             {"body": marker_comment(outcome, round_, head_sha, findings),
-             "created_at": "2026-09-24T02:00:00Z", "user": {"login": "github-actions[bot]"}})
+             "created_at": created_at, "user": {"login": "github-actions[bot]"}})
 
     def add_run(self, repo, sha, status="completed", conclusion="success", started_at="2026-09-24T01:30:00Z"):
         self.runs[(repo, sha)] = [{"name": "pr-gatekeeper", "status": status, "conclusion": conclusion,
