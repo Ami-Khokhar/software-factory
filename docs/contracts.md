@@ -220,8 +220,10 @@ dispatch-preflight consumption of these records are separate operations.
   from the issue on each tick, like `Depends on #n`, and are not stored in the
   WorkItem. `WorkItem.worker` still records the agent of the current pass. A name
   outside `FACTORY_WORKERS` is dropped and routing uses the allowed names, or
-  every allowed worker when none remains, with an `unknown_worker_rerouted` audit
-  row (ADR-0110).
+  every allowed worker when none remains; when a worker runs, the
+  `unknown_worker_rerouted` audit row records it, and when none can run, the
+  `no_worker` row carries the dropped names as `workers` and `blockedOn` names
+  them (ADR-0110).
 - **`Result.diagnostics` is a bounded, optional timing report (consumer first).**
   A harness that sends one gets its timings logged; a Result without it — every
   Result today, and any Result the schema change predates — stays valid. The

@@ -889,8 +889,14 @@ class Foreman:
                           if (place == "local" or not local_only) and (not named or agent in named)]
             # A dropped Worker: pin names itself in the reason and in the audit row, so the person
             # sees why no worker fit even though the issue asked for one (ADR-0110).
-            dropped = (" (the issue's Worker: line also names " + ", ".join(unknown)
-                       + ", which is not in FACTORY_WORKERS)") if unknown else ""
+            dropped = ""
+            if unknown:
+                plural = len(unknown) > 1
+                dropped = (" (the issue's Worker: "
+                           + ("lines also name " if plural else "line also names ")
+                           + ", ".join(unknown)
+                           + (", which are not in FACTORY_WORKERS)" if plural
+                              else ", which is not in FACTORY_WORKERS)"))
             audit = dict(workers=unknown) if unknown else {}
             if candidates and all(routing.family(agent) in excluded for agent in candidates):
                 return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=(

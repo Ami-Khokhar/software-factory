@@ -189,9 +189,33 @@ class WorkerTest(unittest.TestCase):
         foreman = self.foreman(body=f"Worker: pi-gone-factory\n\n{ISSUE_BODY}",
                                workers=(("pi-deepseek-factory", "local"),))
         self.github.contents[(REPO, ".github/pr-gatekeeper.json")] = '{"reviewer_model": "deepseek-v4.1-flash"}'
-        foreman.tick(ID)
+        wi = foreman.tick(ID)["workItem"]
+        self.assertEqual(wi["state"], "human_waiting")
+        self.assertIn("pi-gone-factory", wi["blockedOn"])
         detail = next(h["detail"] for h in foreman.store.history(ID) if h["action"] == "no_worker")
         self.assertEqual(detail["workers"], ["pi-gone-factory"])
+
+    def test_a_stale_pin_on_a_local_only_repo_names_it_in_the_wait(self):
+        foreman = self.foreman(body=f"Worker: pi-gone-factory\n\n{ISSUE_BODY}",
+                               local_only_repos=frozenset({REPO}))
+        wi = foreman.tick(ID)["workItem"]
+        self.assertEqual(wi["state"], "human_waiting")
+        self.assertIn("pi-gone-factory", wi["blockedOn"])
+        detail = next(h["detail"] for h in foreman.store.history(ID) if h["action"] == "no_worker")
+        self.assertEqual(detail["workers"], ["pi-gone-factory"])
+
+    def test_two_stale_pins_with_no_worker_eligible_name_both_in_the_plural(self):
+        foreman = self.foreman(body=f"Worker: pi-gone-factory\nWorker: pi-absent-factory\n\n{ISSUE_BODY}",
+                               workers=(("pi-deepseek-factory", "local"),))
+        self.github.contents[(REPO, ".github/pr-gatekeeper.json")] = '{"reviewer_model": "deepseek-v4.1-flash"}'
+        wi = foreman.tick(ID)["workItem"]
+        self.assertEqual(wi["state"], "human_waiting")
+        self.assertEqual(wi["blockedOn"],
+                         "every allowed worker is in the reviewer family deepseek (the "
+                         "issue's Worker: lines also name pi-gone-factory, pi-absent-factory, "
+                         "which are not in FACTORY_WORKERS)")
+        detail = next(h["detail"] for h in foreman.store.history(ID) if h["action"] == "no_worker")
+        self.assertEqual(detail["workers"], ["pi-gone-factory", "pi-absent-factory"])
 
     def test_a_pass_never_goes_to_the_gate_reviewers_family(self):
         """ADR-0085: the gate reviews deepseek-v4.1-flash, so the first pass skips pi-deepseek-factory."""
