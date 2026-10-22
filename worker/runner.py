@@ -573,6 +573,18 @@ def credential_copies(specs, scratch):
     return copies
 
 
+def harness_command(argv):
+    """The harness argv as it runs in the container. The relay runs `opencode run` non-interactively,
+    so every permission OpenCode would ask for is auto-rejected ("The user rejected permission to
+    use this specific tool call") and the pass ends with no change. The container is the sandbox
+    (ADR-0017) and the Pi workers have no permission prompt at all, so `--auto` gives OpenCode the
+    same freedom inside it; a tool OpenCode's config explicitly denies stays denied (ADR-0111)."""
+    if (len(argv) > 1 and os.path.basename(argv[0]) == "opencode" and argv[1] == "run"
+            and "--auto" not in argv):
+        return [*argv[:2], "--auto", *argv[2:]]
+    return argv
+
+
 def env_pairs(specs):
     pairs = {}
     for spec in specs:
@@ -662,7 +674,8 @@ def main(argv=None):
                 with open(os.path.join(directory, name)) as handle:
                     secrets.update(credential_secrets(handle.read()))
         harness_start = time.monotonic()
-        code, out, err = sandbox.run([*harness, text], seconds - reserve - post, work, harness=True,
+        code, out, err = sandbox.run([*harness_command(harness), text], seconds - reserve - post, work,
+                                     harness=True,
                                      env=ask_env)
         echoed = out + err
         record("harness execution", harness_start, code, echoed)

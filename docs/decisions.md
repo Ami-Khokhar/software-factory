@@ -2719,6 +2719,25 @@ the owner only when routing finds no worker. `factory_set_worker` still refuses 
 reached. The owner sees the reroute in the audit log. A pin the owner meant on purpose and has not yet
 added to FACTORY_WORKERS runs on another allowed worker instead of waiting.
 
+## ADR-0111 — An OpenCode worker auto-approves inside its sandbox, and factory-ask answers --help itself
+
+**Context.** In the 2026-10-22 factory audit, 4 worker passes of `opencode-mimo-factory` ended "the
+harness made no change" because OpenCode printed "Error: The user rejected permission to use this
+specific tool call." The relay runs `opencode run` non-interactively, so any permission OpenCode
+would ask for is auto-rejected. OpenCode 1.18.32 in the worker image supports `opencode run --auto`
+(auto-approve permissions that are not explicitly denied). The same day at 22:08 IST, a worker ran
+`factory-ask --help`; the command joined argv into the question "--help" and Day Desk spent an
+answer on it.
+
+**Decision.** The runner inserts `--auto` right after `run` when the harness argv is an OpenCode run
+that does not already carry it; no other harness is touched. `factory-ask` prints its usage and
+exits 0 when the joined question starts with `-` (`-h`, `--help`), without contacting the channel.
+
+**Consequence.** OpenCode workers stop refusing their own tool calls, at parity with the Pi workers,
+which have no permission prompt at all. The container is still the sandbox (ADR-0017): the harness
+sees only the WorkOrder's copy and a model credential, and holds no GitHub credential, so it cannot
+push. A tool OpenCode's config explicitly denies stays denied.
+
 ## ADR-0112 — A PR at the gate keeps one fix pass per round
 
 **Context.** Ami-Khokhar/self-maintaining-apis#5 (not a Project member) spent its 4 passes on failed

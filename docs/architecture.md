@@ -227,7 +227,8 @@ for a decision `factory_resolve_human` makes, Day Desk's once per incident or th
   which Docker Desktop maps to the host — and blocks for a bounded wait. The
   server stores the question on the WorkItem and `factory_answer_question` answers it; the worker
   proceeds with its own reading when nobody answers in time. The token names that one pass, so it
-  can ask about nothing else, and it dies with the pass.
+  can ask about nothing else, and it dies with the pass. `factory-ask` answers `-h` and `--help`
+  itself with its usage, without contacting the channel (ADR-0111).
 - The runner turns the commits into a unified patch, measures the whole pull request — the branch's
   diff against its merge base with the default branch, so a fix is counted with the implementation it
   follows — and checks an oversized one before the gate's `verify` command from the base commit runs

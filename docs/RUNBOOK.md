@@ -218,7 +218,8 @@ an old image keeps producing legacy Results, and a rebuilt one produces diagnost
 consumer reads. Roll out one change at a time, consumers before their producers, and pilot each
 producer change on one owner-approved live issue before a broader rollout.
 The image also carries `factory-ask` (ADR-0098): a running pass posts one question to Day Desk and
-waits briefly for the answer. The runner sets `FACTORY_ASK_URL`
+waits briefly for the answer. `factory-ask -h` and `factory-ask --help` print the usage themselves
+and never reach the channel (ADR-0111). The runner sets `FACTORY_ASK_URL`
 (`http://host.docker.internal:<FACTORY_PORT>/worker/ask`), `FACTORY_ASK_TOKEN` (that pass's own
 token) and `FACTORY_ASK_WAIT`; the route is the same loopback listener as MCP, so nothing new is
 exposed. It needs Docker Desktop, whose `host.docker.internal` reaches the host loopback: on a
@@ -300,6 +301,9 @@ template to `~/.config/agent-relay/agents.json` once, by hand as above (replace 
   "image": "factory-worker:latest"
 }
 ```
+
+The runner inserts `--auto` after `run` in an OpenCode command itself (ADR-0111): the pass runs
+non-interactively, so without it every permission OpenCode would ask for is auto-rejected.
 
 Further OpenCode free-model pins then register through `factory_register_worker` with
 `template: "opencode-mimo-factory"` (below): only the model changes, and only within the `opencode`

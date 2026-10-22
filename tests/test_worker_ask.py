@@ -156,6 +156,20 @@ class AskTest(unittest.TestCase):
         self.assertEqual(done.returncode, 0)
         self.assertTrue(done.stdout.startswith("NO_ANSWER:"), done.stdout)
 
+    def test_the_worker_command_answers_help_itself_without_the_channel(self):
+        """`factory-ask --help` is the pass asking how to call the command, not a question for Day
+        Desk: it prints the usage, exits 0 and never contacts the channel (ADR-0111)."""
+        for flag in ("--help", "-h"):
+            with self.subTest(flag=flag):
+                env = {**os.environ, "FACTORY_ASK_URL": "http://127.0.0.1:9/worker/ask",
+                       "FACTORY_ASK_TOKEN": "x" * 32, "FACTORY_ASK_WAIT": "1"}
+                command = Path(__file__).resolve().parent.parent / "worker" / "factory-ask"
+                done = subprocess.run([sys.executable, str(command), flag], capture_output=True,
+                                      text=True, env=env, timeout=10)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertTrue(done.stdout.startswith("factory-ask: give a question"), done.stdout)
+                self.assertNotIn("NO_ANSWER", done.stdout + done.stderr)
+
     def test_the_http_route_carries_the_question_and_the_answer(self):
         order = self.start()
         server = make_server(self.config, self.store, self.github, self.relay)
