@@ -899,6 +899,15 @@ class ProjectBudgetTest(unittest.TestCase):
         self.assertIn("1 worker passes used", wi["terminalReason"])
         self.assertEqual(self.store.project(self.project["id"])["passesUsed"], 0)
 
+    def test_a_member_at_the_cap_exhausts_on_a_fix_dispatch_too(self):
+        """ADR-0112's free fix pass is non-member only: a member at the member cap still exhausts,
+        even when the dispatch is a fix no round has seen yet."""
+        for n in range(projects.MAX_MEMBER_PASSES):
+            self.store.save_workorder({"id": f"prior/{n}", "workItemId": self.id})
+        wi = self.foreman.dispatch(self.store.get(self.id), "fix")
+        self.assertEqual(wi["state"], "exhausted")
+        self.assertIn(f"the member pass cap is {projects.MAX_MEMBER_PASSES}", wi["terminalReason"])
+
     def test_done_or_missing_projects_use_the_non_member_budget(self):
         for state in ("done", "missing"):
             with self.subTest(state=state):

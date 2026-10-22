@@ -195,7 +195,7 @@ The states are the enum in `schemas/workitem.schema.json`.
 | `merged` | factory-mcp closes the issue | `closed` |
 | any live state | the PR closed without a merge | `human_waiting` |
 | any live state | the issue closed without a merged PR | `cancelled` |
-| `ready`, `changes_requested` (a non-member, or a member of a done Project) | `FACTORY_MAX_PASSES` WorkOrders were dispatched since the last person's retry | `exhausted` |
+| `ready`, `changes_requested` (a non-member, or a member of a done Project) | `FACTORY_MAX_PASSES` WorkOrders were dispatched since the last person's retry, and the gate's round has already used its free fix pass (ADR-0112) | `exhausted` |
 | `ready`, `changes_requested` (a member) | the Project's budget is spent | `exhausted`, and the Project is `paused` |
 | `ready`, `changes_requested` (a member) | the Project is `paused` or `stopped` | unchanged, with no dispatch or audit write |
 | `ready`, `changes_requested` (a member) | 8 WorkOrders were dispatched over the member's lifetime | `exhausted`; the Lead splits it or the owner decides |

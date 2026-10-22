@@ -81,6 +81,27 @@ class GateLoopTest(unittest.TestCase):
         self.assertEqual(self.github.issues[(REPO, 7)]["state"], "closed")
         self.assertEqual(self.foreman.store.history(ID)[-1]["action"], "issue_closed")
 
+    def test_a_pr_at_the_gate_keeps_one_fix_pass_past_the_budget(self):
+        """ADR-0112: the gate's first CHANGES verdict dispatches a fix even when the non-member's
+        FACTORY_MAX_PASSES passes are spent — the gate itself caps fix rounds."""
+        self.foreman.config = Config(mcp_token="t", repos=frozenset({REPO}), max_passes=1)
+        self.gate("CHANGES", 1, "c1", MISSING_TEST)
+        wi = self.tick()
+        self.assertEqual(wi["state"], "implementing")
+        order = self.foreman.store.workorders(ID)[-1]
+        self.assertEqual((order["kind"], order["round"]), ("fix", 1))
+
+    def test_a_second_fix_in_the_same_round_is_back_on_the_budget(self):
+        """ADR-0112: only the round's first fix pass rides free; the next one hits FACTORY_MAX_PASSES."""
+        self.foreman.config = Config(mcp_token="t", repos=frozenset({REPO}), max_passes=1)
+        self.gate("CHANGES", 1, "c1", MISSING_TEST)
+        wi = self.tick()  # the free fix pass goes out
+        self.relay.finish(wi["providerTaskId"], status="failed", error="crashed")
+        self.assertEqual(self.tick()["state"], "changes_requested")
+        wi = self.tick()
+        self.assertEqual(wi["state"], "exhausted")
+        self.assertIn("2 worker passes used", wi["terminalReason"])
+
     def test_a_timed_out_fix_continues_from_its_exact_checkpoint(self):
         self.gate("CHANGES", 1, "c1", MISSING_TEST)
         wi = self.tick()
