@@ -806,9 +806,12 @@ hermes -p day-desk cron create "every 10m" --no-agent --script factory-update.sh
 
 `factory drive-queue` lists each escalation Day Desk may answer as
 `o/r#13 is blocked (waiting 30m): verify exited 1`. The wait rounds down to 30-minute
-steps and stops at 360 minutes. It also lists a stuck acceptance item of an active Project as
+steps for six hours, then rises in 120-minute steps and stops at 2880 minutes (48 hours,
+ADR-0109). It lists `o/r#13 asks question <questionId>` for a worker question nobody has
+answered. It also lists a stuck acceptance item of an active Project as
 `project demo: acceptance o/r#14 is changes_requested` (also `blocked` or `human_waiting`).
-This wakes Day Desk again every 30 minutes while an item remains stuck, up to six hours.
+This wakes Day Desk every 30 minutes for six hours, then every 2 hours up to 48 hours, while an
+item remains stuck, and once for each worker question.
 `factory-drive` runs the model only when this queue text changes, and tells you
 what it chose for each: through the plan allowance when one covers the WorkItem, reading the
 queued `pendingRetry` request back before it answers, else through its own factory_resolve_human answer. `factory-watch` tells you of an escalation Day Desk may not answer, or one
