@@ -2694,3 +2694,21 @@ text with `factory_status`.
 **Consequence.** A stuck item wakes Day Desk about 21 more times over 48 hours, so each stuck item
 costs at most about 21 extra model runs. A worker question wakes Day Desk once. After 48 hours the
 queue text is stable again and the owner's notices still apply.
+
+## ADR-0110 — A stale Worker: pin falls back to an allowed worker
+
+**Context.** An issue's `Worker:` line named an agent outside FACTORY_WORKERS, and the dispatch put the
+WorkItem in `human_waiting`. After the owner moved to the free model, self-maintaining-apis#4 and #5 still
+named `pi-deepseek-factory` while `opencode-mimo-factory` was the only allowed worker. Each went to the owner
+(2026-10-19 19:53 IST and 2026-10-20 19:11 IST, the second held about 14 hours) for a question the owner
+had already answered.
+
+**Decision.** The dispatch drops the named agents that are not in FACTORY_WORKERS and routes among the
+named agents that remain, or among all allowed workers when none remains. The usual rules still apply:
+failed workers, the timeout preference, the gate reviewer's family and local-only repos. It writes one
+`unknown_worker_rerouted` audit row with the dropped names and the chosen worker. The WorkItem waits for
+the owner only when routing finds no worker. `factory_set_worker` still refuses an agent outside FACTORY_WORKERS.
+
+**Consequence.** A stale pin no longer costs the owner an answer, and the agent it names is still never
+reached. The owner sees the reroute in the audit log. A pin the owner meant on purpose and has not yet
+added to FACTORY_WORKERS runs on another allowed worker instead of waiting.

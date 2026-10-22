@@ -159,11 +159,28 @@ class WorkerTest(unittest.TestCase):
         wi = foreman.tick(ID)["workItem"]  # the next pass: the second named worker, not codex
         self.assertEqual(self.relay.tasks[wi["providerTaskId"]]["agentId"], "pi-glm")
 
-    def test_an_issue_that_names_an_agent_not_in_factory_workers_goes_to_a_person(self):
+    def test_an_issue_that_names_an_agent_not_in_factory_workers_goes_to_an_allowed_worker(self):
+        """ADR-0110: a stale pin falls back to FACTORY_WORKERS and leaves an audit row, not a question."""
         foreman = self.foreman(body=f"Worker: codex-unsandboxed\n\n{ISSUE_BODY}", workers=WORKERS)
         wi = foreman.tick(ID)["workItem"]
-        self.assertEqual(wi["state"], "human_waiting")
-        self.assertIn("names codex-unsandboxed, which is not in FACTORY_WORKERS (codex, pi-glm)", wi["blockedOn"])
+        self.assertEqual(wi["state"], "implementing")
+        self.assertEqual(self.relay.tasks[wi["providerTaskId"]]["agentId"], "codex")
+        rows = [h["detail"] for h in foreman.store.history(ID) if h["action"] == "unknown_worker_rerouted"]
+        self.assertEqual(rows, [{"unknown": ["codex-unsandboxed"], "worker": "codex"}])
+
+    def test_a_stale_pin_beside_an_allowed_named_worker_keeps_to_the_named_worker(self):
+        foreman = self.foreman(body=f"Worker: codex-unsandboxed\nWorker: pi-glm\n\n{ISSUE_BODY}",
+                               workers=WORKERS)
+        wi = foreman.tick(ID)["workItem"]
+        self.assertEqual(self.relay.tasks[wi["providerTaskId"]]["agentId"], "pi-glm")
+
+    def test_a_stale_pin_with_no_eligible_allowed_worker_waits_for_a_person(self):
+        foreman = self.foreman(body=f"Worker: pi-gone-factory\n\n{ISSUE_BODY}",
+                               workers=(("pi-deepseek-factory", "local"),))
+        self.github.contents[(REPO, ".github/pr-gatekeeper.json")] = '{"reviewer_model": "deepseek-v4.1-flash"}'
+        wi = foreman.tick(ID)["workItem"]
+        self.assertEqual((wi["state"], wi["blockedOn"]),
+                         ("human_waiting", "every allowed worker is in the reviewer family deepseek"))
         self.assertEqual(self.relay.tasks, {})
 
     def test_a_pass_never_goes_to_the_gate_reviewers_family(self):

@@ -159,15 +159,14 @@ class RegisterWorkerTest(unittest.TestCase):
 
     def test_a_registered_worker_is_not_dispatchable_until_promoted(self):
         """The safety property (ADR-0077): registering does not add the agent to FACTORY_WORKERS,
-        so an issue that names it still goes to a person, not to the new worker."""
+        so an issue that names it never reaches the new worker; it falls back to an allowed one (ADR-0110)."""
         self.foreman.register_worker("pi-qwen-factory", "qwen-3-max", "day-desk")
         self.assertEqual([w for w, _ in self.foreman.config.workers],
                          ["pi-deepseek-factory", "pi-glm-factory", "opencode-glm-factory"])
         self.github.edit_issue(REPO, 7, f"Worker: pi-qwen-factory\n\n{ISSUE_BODY}")
         wi = self.foreman.tick(ID)["workItem"]
-        self.assertEqual(wi["state"], "human_waiting")
-        self.assertIn("names pi-qwen-factory, which is not in FACTORY_WORKERS", wi["blockedOn"])
-        self.assertEqual(self.relay.tasks, {})  # nothing was dispatched
+        self.assertEqual(wi["state"], "implementing")
+        self.assertEqual([t["agentId"] for t in self.relay.tasks.values()], ["pi-deepseek-factory"])
 
     def test_register_keeps_the_registry_files_permissions(self):
         """mkstemp creates 0600; the registry is replaced atomically, so the mode must be carried
@@ -285,16 +284,15 @@ class OpenCodeRegisterTest(unittest.TestCase):
 
     def test_a_registered_opencode_worker_is_not_dispatchable_until_promoted(self):
         """Registering is not promoting, for an OpenCode worker too (ADR-0077): FACTORY_WORKERS
-        and the pilot stay the owner's, so nothing is dispatched to the new worker."""
+        and the pilot stay the owner's, so nothing is dispatched to the new worker (ADR-0110)."""
         self.foreman.register_worker("opencode-flash-factory", "opencode/mimo-v2.6-flash-free",
                                      "day-desk", template=OPENCODE_TEMPLATE_ID)
         self.assertEqual([w for w, _ in self.foreman.config.workers],
                          ["pi-deepseek-factory", "pi-glm-factory", "opencode-glm-factory"])
         self.github.edit_issue(REPO, 7, f"Worker: opencode-flash-factory\n\n{ISSUE_BODY}")
         wi = self.foreman.tick(ID)["workItem"]
-        self.assertEqual(wi["state"], "human_waiting")
-        self.assertIn("names opencode-flash-factory, which is not in FACTORY_WORKERS", wi["blockedOn"])
-        self.assertEqual(self.relay.tasks, {})  # nothing was dispatched
+        self.assertEqual(wi["state"], "implementing")
+        self.assertEqual([t["agentId"] for t in self.relay.tasks.values()], ["pi-deepseek-factory"])
 
 
 if __name__ == "__main__":

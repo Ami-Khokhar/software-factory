@@ -869,12 +869,11 @@ class Foreman:
                     f"{used} worker passes used; FACTORY_MAX_PASSES is {self.config.max_passes}")),
                     "exhausted")
         allowed = [agent for agent, _ in self.config.workers]
+        # A stale pin must not cost the owner an answer (ADR-0110): drop the names outside
+        # FACTORY_WORKERS (the relay also holds agents with no sandbox, which an issue must never
+        # reach) and route among the rest, or among every allowed worker when none is left.
         unknown = [agent for agent in named if agent not in allowed]
-        if unknown:  # the relay also holds agents with no sandbox; an issue must not reach them
-            return self._write(wi, dict(wi, state="human_waiting", blockedOn=(
-                f"the issue's Worker: line names {', '.join(unknown)}, which is not in FACTORY_WORKERS "
-                f"({', '.join(allowed)}). Name one of those, or add the agent to FACTORY_WORKERS, then retry")),
-                "unknown_worker", workers=unknown)
+        named = [agent for agent in named if agent in allowed]
         failed = {h["detail"].get("worker") for h in self.store.history(wi["id"])
                   if h["action"] == "attempt_failed"}
         # After a timeout-class failure the next attempt prefers another model family (ADR-0081): the
@@ -895,6 +894,8 @@ class Foreman:
                     + ", ".join(sorted(excluded)))), "no_worker")
             return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=(
                 f"{wi['repo']} is local-only and FACTORY_WORKERS has no local worker")), "no_worker")
+        if unknown:
+            self.store.log("unknown_worker_rerouted", {"unknown": unknown, "worker": worker}, wi["id"])
         if wi.get("wallMsOverride") is not None:
             try:
                 self._check_timeout(wi["wallMsOverride"])
