@@ -260,6 +260,7 @@ class GateLoopTest(unittest.TestCase):
 
     def test_fix_attempts_that_ran_out_of_time_are_not_told_to_split_the_issue(self):
         """A fix answers the gate on an open PR, which closing the issue for a split would drop."""
+        self.foreman.set_timeout(ID, 3600000, "owner")  # already at the longest run: no ADR-0108 run
         self.gate("CHANGES", 1, "c1", MISSING_TEST)
         wi = self.tick()
         self.relay.finish(wi["providerTaskId"], status="timed_out", error="timed out")

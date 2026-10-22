@@ -140,6 +140,7 @@ class SalvageTest(ForemanCase):
         self.assertEqual(order["findingsToAddress"][0]["problem"], PARTIAL_WORK)
 
     def test_a_third_timeout_does_not_move_the_wip_again(self):
+        self.foreman.set_timeout(ID, 3600000, "owner")  # already at the longest run: no ADR-0108 run
         self.keep_partial()  # salvage 1: wip moves to c1 (moves 1)
         self.keep_partial()  # its rescue times out too: salvage 2 (moves 2)
         wi = self.keep_partial()  # that rescue times out again: no third salvage push
@@ -225,6 +226,7 @@ class WorkerFailoverTest(ForemanCase):
 
     def test_two_timeouts_do_not_block_while_an_untried_worker_remains(self):
         """B: the block waits for the failover the policy already covers, once per budget."""
+        self.foreman.set_timeout(ID, 3600000, "owner")  # already at the longest run: no ADR-0108 run
         self.relay_timeout()  # pi-glm-factory
         wi = self.relay_timeout()  # pi-deepseek-factory: two strikes, two families
         self.assertEqual(wi["state"], "ready")  # not blocked: opencode-glm-factory was never tried
@@ -251,6 +253,7 @@ class WorkerFailoverTest(ForemanCase):
     def test_the_deferral_never_lands_on_a_worker_from_the_gate_reviewers_family(self):
         """ADR-0085: the deferral still prefers outside the timed-out family (ADR-0081), but the
         gate reviewer's family is a hard wall: with no other family left, the block stands."""
+        self.foreman.set_timeout(ID, 3600000, "owner")  # already at the longest run: no ADR-0108 run
         self.github.contents[(REPO, ".github/pr-gatekeeper.json")] = '{"reviewer_model": "deepseek-v4.1-flash"}'
         self.relay_timeout()  # pi-glm-factory; the swap falls back to the same family, never deepseek
         wi = self.relay_timeout()  # opencode-glm-factory: two strikes, and no untried worker outside deepseek
@@ -259,6 +262,7 @@ class WorkerFailoverTest(ForemanCase):
 
     def test_two_timeouts_block_when_no_untried_worker_remains(self):
         """The block stands when routing's only choice is a worker that already failed here."""
+        self.foreman.set_timeout(ID, 3600000, "owner")  # already at the longest run: no ADR-0108 run
         self.foreman.config = Config(mcp_token="t", repos=frozenset({REPO}), workers=POOL[:2])
         self.relay_timeout()  # pi-glm-factory
         wi = self.relay_timeout()  # opencode-glm-factory: fresh, but the same family
@@ -365,6 +369,7 @@ class IncidentTest(ForemanCase):
         return self.foreman.resolve_human(ID, *args, **kw)
 
     def test_a_material_change_re_arms_the_incident_once_and_an_unchanged_one_never_does(self):
+        self.foreman.set_timeout(ID, 3600000, "owner")  # already at the longest run: no ADR-0108 run
         wi = self.two_plain_failures()
         self.assertEqual((wi["state"], wi["incident"]["id"], wi["incident"]["causes"],
                           wi["incident"]["agentAnswered"]), ("blocked", 1, ["unknown"], False))

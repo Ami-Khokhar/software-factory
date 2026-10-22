@@ -2549,6 +2549,8 @@ left to the owner. Other recovery tools keep their existing checks.
 
 ## ADR-0103 — A timed-out member gets one longer run before it blocks
 
+**Superseded by ADR-0108** for its member-only scope.
+
 **Context.** #302, #307 and #13 each blocked after 20–25 minutes of coding. Worker failover
 (ADR-0081) and salvaged partial work (ADR-0086) do not extend the time available to finish.
 ADR-0089 already bounds a per-item timeout override at 60 minutes.
@@ -2658,6 +2660,21 @@ Safety stops, environment faults and the member's 8-pass cap still bound recover
 **Consequence.** The owner talks only about the goal and the result.
 Day Desk recovers routine member failures inside the approved budget without another approval.
 Non-members keep their existing one-answer and allowance rules.
+
+## ADR-0108 — Every WorkItem gets one longer run before a timeout block
+
+**Context.** Ami-Khokhar/self-maintaining-apis#5 is not a Project member (the live store had 0
+Projects). It blocked on 2026-10-21 09:55 IST after two 30-minute harness timeouts and waited about
+36 hours for the owner. #13 finished only after the owner asked for a 60-minute run by hand, and then
+produced its PR in about an hour. ADR-0103 gave the automatic longer run to active Project members only.
+
+**Decision.** This supersedes ADR-0103's member-only scope. A WorkItem with no Project, or a member of
+an active Project, gets the ADR-0103 longer run on a timeout-class second failure. A member of a Project
+in `paused`, `stopped`, `done` or a missing state does not. Every other ADR-0103 guard stays: timeout-class
+only, once per lifetime, effective wall time below 3600000 ms, and a relay that accepts the budget.
+
+**Consequence.** A timeout on a plain WorkItem no longer ends at the owner after two short runs. Its next
+timeout failure blocks as before. A member of a non-active Project stays as it was.
 
 ## ADR-0109 — Day Desk keeps waking on a stuck item, and wakes on a worker question
 
