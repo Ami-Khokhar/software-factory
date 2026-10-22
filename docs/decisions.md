@@ -2669,8 +2669,9 @@ Projects). It blocked on 2026-10-21 09:55 IST after two 30-minute harness timeou
 produced its PR in about an hour. ADR-0103 gave the automatic longer run to active Project members only.
 
 **Decision.** This supersedes ADR-0103's member-only scope. A WorkItem with no Project, or a member of
-an active Project, gets the ADR-0103 longer run on a timeout-class second failure. A member of a Project
-in `paused`, `stopped`, `done` or a missing state does not. Every other ADR-0103 guard stays: timeout-class
+an active Project, gets the ADR-0103 longer run on a timeout-class second failure. A member of a `done`
+Project counts as a WorkItem with no Project, as it does for the pass budget at dispatch. A member of a
+`paused`, `stopped` or missing Project does not get it. Every other ADR-0103 guard stays: timeout-class
 only, once per lifetime, effective wall time below 3600000 ms, and a relay that accepts the budget.
 
 **Consequence.** A timeout on a plain WorkItem no longer ends at the owner after two short runs. Its next

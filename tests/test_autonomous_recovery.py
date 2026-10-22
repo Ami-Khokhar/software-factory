@@ -21,7 +21,7 @@ from tests.test_plan import FIRST, REPO, SECOND, plan
 ID = "o/r#7"
 POOL = (("pi-glm-factory", "local"), ("opencode-glm-factory", "local"), ("pi-deepseek-factory", "local"))
 ROOT = Path(__file__).resolve().parent.parent
-TIMED_OUT = "task timed_out: Agent exceeded 1800000 ms"
+TIMED_OUT = "task timed_out: Agent exceeded its wall time"
 PARTIAL_WORK = ("A worker ran out of time. Its unfinished work is the commit you start from. "
                 "Check each acceptance bullet against the code, not against any report. "
                 "Keep what is right, fix or remove the rest, and finish.")
@@ -70,7 +70,7 @@ class ForemanCase(unittest.TestCase):
     def relay_timeout(self):
         """One worker pass the relay killed at its wall, and the tick that reads it."""
         wi, task = self.dispatch()
-        self.relay.finish(task["id"], status="timed_out", error="Agent exceeded 1800000 ms")
+        self.relay.finish(task["id"], status="timed_out", error="Agent exceeded its wall time")
         return self.tick()
 
     def recoveries(self, action=None):
@@ -241,7 +241,7 @@ class WorkerFailoverTest(ForemanCase):
         self.assertEqual(wi["worker"], "opencode-glm-factory")
         self.assertEqual(wi["recovery"]["action"], "block_deferred")  # its record is the one kept
         self.assertEqual(len(self.recoveries()), 2)  # no duplicate decision for the same attempt
-        self.relay.finish(task["id"], status="timed_out", error="Agent exceeded 1800000 ms")
+        self.relay.finish(task["id"], status="timed_out", error="Agent exceeded its wall time")
         wi = self.tick()
         self.assertEqual(wi["state"], "blocked")  # once per budget: the deferred attempt failed
         self.assertEqual(len(wi["attempts"]), 3)

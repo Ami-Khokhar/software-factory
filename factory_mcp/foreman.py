@@ -1462,11 +1462,12 @@ class Foreman:
 
     def _longer_run(self, wi, reason, diagnosis):
         """Give a WorkItem one longer run before a timeout block (ADR-0103, ADR-0108). A member of a
-        Project that is not active gets none. `wi` is the failed attempt's prepared record, with its
-        attempts and next order state."""
+        paused, stopped or missing Project gets none; a done Project's member counts as a non-member,
+        as it does at dispatch. `wi` is the failed attempt's prepared record, with its attempts and
+        next order state."""
         if wi.get("projectId"):
             project = self.store.project(wi["projectId"])
-            if not project or project["state"] != "active":
+            if not project or project["state"] not in ("active", "done"):
                 return None
         if not (diagnosis.get("cause") == "harness timeout" or OUT_OF_TIME.search(reason or "")):
             return None
