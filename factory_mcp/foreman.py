@@ -887,12 +887,24 @@ class Foreman:
             local_only = self.config.local_only(wi["repo"])
             candidates = [agent for agent, place in self.config.workers
                           if (place == "local" or not local_only) and (not named or agent in named)]
+            # A dropped Worker: pin names itself in the reason and in the audit row, so the person
+            # sees why no worker fit even though the issue asked for one (ADR-0110).
+            dropped = ""
+            if unknown:
+                plural = len(unknown) > 1
+                dropped = (" (the issue's Worker: "
+                           + ("lines also name " if plural else "line also names ")
+                           + ", ".join(unknown)
+                           + (", which are not in FACTORY_WORKERS)" if plural
+                              else ", which is not in FACTORY_WORKERS)"))
+            audit = dict(workers=unknown) if unknown else {}
             if candidates and all(routing.family(agent) in excluded for agent in candidates):
                 return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=(
                     "every allowed worker is in the reviewer family "
-                    + ", ".join(sorted(excluded)))), "no_worker")
+                    + ", ".join(sorted(excluded)) + dropped)), "no_worker", **audit)
             return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=(
-                f"{wi['repo']} is local-only and FACTORY_WORKERS has no local worker")), "no_worker")
+                f"{wi['repo']} is local-only and FACTORY_WORKERS has no local worker" + dropped)),
+                "no_worker", **audit)
         if wi.get("wallMsOverride") is not None:
             try:
                 self._check_timeout(wi["wallMsOverride"])

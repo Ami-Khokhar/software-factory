@@ -2717,7 +2717,9 @@ the owner only when routing finds no worker. `factory_set_worker` still refuses 
 
 **Consequence.** A stale pin no longer costs the owner an answer, and the agent it names is still never
 reached. The owner sees the reroute in the audit log. A pin the owner meant on purpose and has not yet
-added to FACTORY_WORKERS runs on another allowed worker instead of waiting.
+added to FACTORY_WORKERS runs on another allowed worker instead of waiting. A WorkItem already stored
+in `human_waiting` with the old "not in FACTORY_WORKERS" reason stays there until a retry, which then
+routes as above.
 
 ## ADR-0111 — An OpenCode worker auto-approves inside its sandbox, and factory-ask answers --help itself
 
