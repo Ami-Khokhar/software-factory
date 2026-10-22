@@ -338,6 +338,63 @@ class RunnerTest(unittest.TestCase):
             {"target": "/tmp/factory-home/.codex", "mode": 0o700,
              "files": {"codex.json": ('{"OPENAI_API_KEY": "sk"}', 0o600)}}])
 
+    def fake_harness_binary(self, name):
+        """A fake harness binary on the test PATH: it records its argv and exits without a change."""
+        script = Path(self.tmp.name) / "bin" / name
+        script.write_text('#!/bin/sh\nprintf \'%s\\0\' "$0" "$@" > "$FACTORY_TEST_ARGV_LOG"\nexit 0\n')
+        script.chmod(0o755)
+
+    def run_harness_argv(self, *head):
+        """run_order with the harness command named directly, for a harness other than the script."""
+        wi = workitem(id="o/r#7", repo="o/r", issueNumber=7, goal="Fix the app")
+        config = Config(mcp_token="t", repos=frozenset())
+        order = documents.workorder(wi, "implement", 0, config, self.base)
+        text = documents.worker_input(order, "factory/7")
+        out = io.StringIO()
+        cwd = os.getcwd()
+        os.chdir(self.checkout)
+        try:
+            with redirect_stdout(out):
+                runner.main([*self.flags, "--", *head, text])
+        finally:
+            os.chdir(cwd)
+        return json.loads(out.getvalue().strip().splitlines()[-1])
+
+    def recorded_argv(self, log):
+        argv = [part.decode() for part in log.read_bytes().split(b"\0") if part]
+        # The fake binary's shebang makes $0 its full path; compare the name the relay would give.
+        return [Path(argv[0]).name, *argv[1:]]
+
+    def test_an_opencode_run_gets_auto_once(self):
+        """The relay runs `opencode run` non-interactively, so every permission OpenCode would ask
+        for is auto-rejected and the pass ends with no change; the runner adds `--auto` (ADR-0111)."""
+        log = Path(self.tmp.name) / "opencode-argv"
+        self.fake_harness_binary("opencode")
+        os.environ["FACTORY_TEST_ARGV_LOG"] = str(log)
+        self.addCleanup(os.environ.pop, "FACTORY_TEST_ARGV_LOG", None)
+        self.run_harness_argv("opencode", "run", "--model", "opencode/mimo-v2.6-flash-free")
+        argv = self.recorded_argv(log)
+        self.assertEqual(argv[:3], ["opencode", "run", "--auto"])
+        self.assertEqual(argv.count("--auto"), 1)
+
+    def test_an_opencode_run_that_already_has_auto_is_unchanged(self):
+        log = Path(self.tmp.name) / "opencode-argv"
+        self.fake_harness_binary("opencode")
+        os.environ["FACTORY_TEST_ARGV_LOG"] = str(log)
+        self.addCleanup(os.environ.pop, "FACTORY_TEST_ARGV_LOG", None)
+        self.run_harness_argv("opencode", "run", "--auto", "--model", "opencode/mimo-v2.6-flash-free")
+        self.assertEqual(self.recorded_argv(log)[:-1],
+                         ["opencode", "run", "--auto", "--model", "opencode/mimo-v2.6-flash-free"])
+
+    def test_a_pi_harness_gets_no_auto(self):
+        log = Path(self.tmp.name) / "pi-argv"
+        self.fake_harness_binary("pi")
+        os.environ["FACTORY_TEST_ARGV_LOG"] = str(log)
+        self.addCleanup(os.environ.pop, "FACTORY_TEST_ARGV_LOG", None)
+        self.run_harness_argv("pi", "--print", "--provider", "opencode-go", "--model", "glm-5.3-flash")
+        self.assertEqual(self.recorded_argv(log)[:-1],
+                         ["pi", "--print", "--provider", "opencode-go", "--model", "glm-5.3-flash"])
+
     def test_a_missing_credential_fails_the_pass_with_its_path_before_any_container(self):
         missing = Path(self.tmp.name) / "nowhere.json"
         self.flags = ["--credential", f"{missing}:/home/node/.pi/agent"]
