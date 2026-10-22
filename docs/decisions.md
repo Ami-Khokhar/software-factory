@@ -589,6 +589,8 @@ there: Codex needs an API-key login.
 
 ## ADR-0029 — An issue chooses its worker with `Worker:` lines
 
+**Superseded by ADR-0110** for a name outside `FACTORY_WORKERS`: it is dropped, not sent to a person.
+
 **Context.** The owner wants to choose the worker for a piece of work, as agent-relay allows, and
 not only through the order of `FACTORY_WORKERS`. agent-relay also registers agents that run on the
 host with no sandbox, so an issue's text must not be able to reach any relay agent.
@@ -1812,8 +1814,8 @@ allowlist and credential boundary:
 
 - `factory_set_worker(id, workers, by)` replaces a WorkItem's issue `Worker:` lines with the agent
   ids given, in order; `[]` clears them so `FACTORY_WORKERS` order decides. Only agents in
-  `FACTORY_WORKERS` may be named — an unknown id is refused before the edit, because it would be
-  refused at dispatch and the relay holds unsandboxed agents an issue must never reach. It is
+  `FACTORY_WORKERS` may be named — an unknown id is refused before the edit, because the relay
+  holds unsandboxed agents an issue must never reach (ADR-0110 amends the earlier dispatch reason). It is
   refused while a worker is live and on a terminal WorkItem; unlike dependencies it may change
   between attempts, which is how a retry is steered to another model. The order lives in the issue
   body, so this edits the issue and the next tick reads it.
@@ -2697,6 +2699,9 @@ queue text is stable again and the owner's notices still apply.
 
 ## ADR-0110 — A stale Worker: pin falls back to an allowed worker
 
+Supersedes ADR-0029 for a `Worker:` name outside FACTORY_WORKERS, and amends ADR-0077's reason for the
+factory_set_worker refusal.
+
 **Context.** An issue's `Worker:` line named an agent outside FACTORY_WORKERS, and the dispatch put the
 WorkItem in `human_waiting`. After the owner moved to the free model, self-maintaining-apis#4 and #5 still
 named `pi-deepseek-factory` while `opencode-mimo-factory` was the only allowed worker. Each went to the owner
@@ -2704,7 +2709,8 @@ named `pi-deepseek-factory` while `opencode-mimo-factory` was the only allowed w
 had already answered.
 
 **Decision.** The dispatch drops the named agents that are not in FACTORY_WORKERS and routes among the
-named agents that remain, or among all allowed workers when none remains. The usual rules still apply:
+named agents that remain, or among all allowed workers when none remains. The deferred failover
+attempt (ADR-0081) filters the names the same way. The usual rules still apply:
 failed workers, the timeout preference, the gate reviewer's family and local-only repos. It writes one
 `unknown_worker_rerouted` audit row with the dropped names and the chosen worker. The WorkItem waits for
 the owner only when routing finds no worker. `factory_set_worker` still refuses an agent outside FACTORY_WORKERS.

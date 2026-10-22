@@ -65,7 +65,8 @@ last steps, and what it needs from you.
   the worker; close the issue and open a new one instead.
 - To choose the worker, add a `Worker: <relay agent id>` line (or `factory new ... -w <id>`).
   Several lines give an order, and a failed attempt moves only to the next one named. The agent
-  must be in `FACTORY_WORKERS`; another name sends the issue to you. Without the line, the factory
+  must be in `FACTORY_WORKERS`; a name outside it is dropped and an allowed worker runs the issue
+  (audit row `unknown_worker_rerouted`, ADR-0110). It waits for you only when no allowed worker can run it. Without the line, the factory
   uses `FACTORY_WORKERS` in order (ADR-0029).
 - Only you (`FACTORY_TRUSTED_AUTHORS`) can open issues the factory acts on. Issues from other
   people are skipped, even with the label.

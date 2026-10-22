@@ -328,8 +328,8 @@ class WorkerTest(unittest.TestCase):
         self.assertEqual(self.relay.tasks[wi["providerTaskId"]]["agentId"], "opencode-glm")
 
     def test_set_worker_refuses_an_agent_not_in_factory_workers_before_editing(self):
-        """An unknown id would be refused at dispatch, so it is refused here too, before the edit:
-        the relay holds unsandboxed agents an issue must never reach."""
+        """An unknown id is refused before the edit: the relay holds unsandboxed agents an issue must
+        never reach."""
         foreman = self.foreman(workers=THREE)
         before = self.github.issue(REPO, 7)["body"]
         with self.assertRaisesRegex(ToolError, "not in FACTORY_WORKERS"):

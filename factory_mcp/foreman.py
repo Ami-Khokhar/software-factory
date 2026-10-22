@@ -868,12 +868,7 @@ class Foreman:
                 return self._write(wi, dict(wi, state="exhausted", recovery=None, terminalReason=(
                     f"{used} worker passes used; FACTORY_MAX_PASSES is {self.config.max_passes}")),
                     "exhausted")
-        allowed = [agent for agent, _ in self.config.workers]
-        # A stale pin must not cost the owner an answer (ADR-0110): drop the names outside
-        # FACTORY_WORKERS (the relay also holds agents with no sandbox, which an issue must never
-        # reach) and route among the rest, or among every allowed worker when none is left.
-        unknown = [agent for agent in named if agent not in allowed]
-        named = [agent for agent in named if agent in allowed]
+        named, unknown = self._allowed_named(named)
         failed = {h["detail"].get("worker") for h in self.store.history(wi["id"])
                   if h["action"] == "attempt_failed"}
         # After a timeout-class failure the next attempt prefers another model family (ADR-0081): the
@@ -894,8 +889,6 @@ class Foreman:
                     + ", ".join(sorted(excluded)))), "no_worker")
             return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=(
                 f"{wi['repo']} is local-only and FACTORY_WORKERS has no local worker")), "no_worker")
-        if unknown:
-            self.store.log("unknown_worker_rerouted", {"unknown": unknown, "worker": worker}, wi["id"])
         if wi.get("wallMsOverride") is not None:
             try:
                 self._check_timeout(wi["wallMsOverride"])
@@ -903,6 +896,8 @@ class Foreman:
                 self._finish_recovery(wi, False)
                 return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=str(exc)),
                                    "timeout_unavailable")
+        if unknown:  # logged only once the pass will go to `worker`
+            self.store.log("unknown_worker_rerouted", {"unknown": unknown, "worker": worker}, wi["id"])
         recovery = self._recovery_decision(wi, avoid, from_worker, category, worker)
         attempt = sum(1 for o in orders if o["round"] == wi.get("gateRound", 0) and o["kind"] == kind)
         base = self.github.branch_head(wi["repo"], self._default_branch(wi["repo"]))
@@ -1437,7 +1432,8 @@ class Foreman:
         failed.add(wi.get("worker"))  # this very attempt just failed, whatever the audit has logged
         failed.discard(None)
         worker = routing.route(self.config.workers, self.config.local_only(wi["repo"]), failed,
-                               workitem.workers_named(issue.get("body")), avoid_families=families,
+                               self._allowed_named(workitem.workers_named(issue.get("body")))[0],
+                               avoid_families=families,
                                exclude_families=self._reviewer_families(wi["repo"]))
         if worker is None or worker in failed:
             return None  # nobody untried the policy would choose: the block stands
@@ -2134,11 +2130,20 @@ class Foreman:
         finally:
             self.store.release(workitem_id, self.holder)
 
+    def _allowed_named(self, named):
+        """Split an issue's `Worker:` names into those in FACTORY_WORKERS and the rest (ADR-0110).
+        A stale pin must not cost the owner an answer, so routing uses only the allowed names, or every
+        allowed worker when none is left; the relay also holds agents with no sandbox, which an issue
+        must never reach."""
+        allowed = {agent for agent, _ in self.config.workers}
+        return ([agent for agent in named if agent in allowed],
+                [agent for agent in named if agent not in allowed])
+
     def set_worker(self, workitem_id, workers, by, agent=False):
         """Choose which of the allowlisted workers run a WorkItem (ADR-0029): replaces its issue's
         `Worker:` lines. The choice lives in the issue body, so this edits the issue; the next tick
-        reads it, as it reads any edit. Only agents in FACTORY_WORKERS may be named — a name outside
-        it would be refused at dispatch, so it is refused here too, before the edit. Refused while a
+        reads it, as it reads any edit. Only agents in FACTORY_WORKERS may be named, before the edit:
+        the relay also holds agents with no sandbox, which an issue must never reach. Refused while a
         worker is live or on a terminal WorkItem; unlike dependencies, the worker may change between
         attempts, which is how an owner or Day Desk steers a retry to another model."""
         if not isinstance(by, str) or not by.strip():
