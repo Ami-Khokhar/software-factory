@@ -1461,11 +1461,14 @@ class Foreman:
         return False
 
     def _longer_run(self, wi, reason, diagnosis):
-        """Give an active Project member one longer run before a timeout block (ADR-0103).
-        `wi` is the failed attempt's prepared record, with its attempts and next order state."""
-        project = self.store.project(wi["projectId"]) if wi.get("projectId") else None
-        if not project or project["state"] != "active":
-            return None
+        """Give a WorkItem one longer run before a timeout block (ADR-0103, ADR-0108). A member of a
+        paused, stopped or missing Project gets none; a done Project's member counts as a non-member,
+        as it does at dispatch. `wi` is the failed attempt's prepared record, with its attempts and
+        next order state."""
+        if wi.get("projectId"):
+            project = self.store.project(wi["projectId"])
+            if not project or project["state"] not in ("active", "done"):
+                return None
         if not (diagnosis.get("cause") == "harness timeout" or OUT_OF_TIME.search(reason or "")):
             return None
         if any(h["action"] == "auto_longer_run" for h in self.store.history(wi["id"])):
@@ -1481,8 +1484,8 @@ class Foreman:
     def fail(self, wi, order, reason, diagnosis=None):
         """Record the attempt; two failed attempts block the WorkItem with the evidence, unless the
         failure ran out of the clock and routing still has a worker this WorkItem never tried: that
-        recovery attempt is granted before the block (ADR-0081, _defer_block). An active Project
-        member then gets one longer run for a timeout (ADR-0103, _longer_run). The diagnosis
+        recovery attempt is granted before the block (ADR-0081, _defer_block). A WorkItem then gets one
+        longer run for a timeout (ADR-0103, ADR-0108, _longer_run). The diagnosis
         (diagnostics.diagnose) rides with the reason: an evidence-backed cause with its sanitized
         bounded context, nothing when a cause stays unknown. A diagnosis that names the environment
         (diagnostics.environment_fault) pauses the WorkItem on the first attempt instead: a second

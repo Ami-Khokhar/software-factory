@@ -157,6 +157,7 @@ class DiagnosticsTest(unittest.TestCase):
         self.assertNotIn("failing test", wi["attempts"][0])
 
     def test_a_timeout_with_no_supporting_diagnostics_stays_unknown(self):
+        self.foreman.set_timeout(ID, 3600000, "owner")  # already at the longest run: no ADR-0108 run
         wi = self.fail_with(diagnostics=None)
         detail = self.attempt_log()["detail"]
         self.assertNotIn("cause", detail)
@@ -223,6 +224,7 @@ class DiagnosticsTest(unittest.TestCase):
         """The dispatch path through the real state machine: a verify failure followed by an empty
         timeout blocks the WorkItem and clears `attempts` on the person's retry, but the next
         WorkOrder still carries the failing test beside the latest timeout, chronologically."""
+        self.foreman.set_timeout(ID, 3600000, "owner")  # already at the longest run: no ADR-0108 run
         diagnostics_body = {"elapsedMs": 9000, "phases": [
             {"phase": "harness execution", "elapsedMs": 1000, "exitCode": 0},
             {"phase": "verification", "elapsedMs": 8000, "exitCode": 1, "tail":
@@ -257,6 +259,7 @@ class DiagnosticsTest(unittest.TestCase):
 
     def test_two_timeouts_no_longer_say_the_issue_is_too_big(self):
         """RED before #190: the old guidance read every timeout as scope only just because."""
+        self.foreman.set_timeout(ID, 3600000, "owner")  # already at the longest run: no ADR-0108 run
         self.fail_with(error="the harness timed out")
         wi, task = self.dispatch()
         self.foreman.relay.finish(task["id"], status="timed_out", error="timed out")

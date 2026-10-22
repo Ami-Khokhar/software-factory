@@ -266,6 +266,7 @@ class ActionsTest(unittest.TestCase):
         """#190: the runner's harness timeout, then the relay's task timeout. A pass that ran out of
         time is not by itself an issue too big for one pass; the cause is unknown, so the blocked
         guidance asks what it asks of any two failures."""
+        self.foreman.set_timeout(ID, 3600000, "owner")  # already at the longest run: no ADR-0108 run
         wi, task = self.dispatched()
         self.relay.finish(task["id"], output=json.dumps({
             "schemaVersion": "factory.result/v1", "workOrderId": wi["activeWorkOrderId"], "status": "failed",

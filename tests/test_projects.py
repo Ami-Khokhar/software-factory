@@ -1066,19 +1066,24 @@ class ProjectLongerRunTest(unittest.TestCase):
         self.assertEqual(len(wi["attempts"]), 2)
         self.assertEqual(self.longer_runs(), [])
 
-    def test_a_non_member_that_times_out_twice_still_blocks(self):
+    def test_a_non_member_that_times_out_twice_gets_a_longer_run_then_blocks(self):
         self.store.put(dict(self.store.get(self.id), projectId=None))
         self.timeout()
         wi = self.timeout()
-        self.assertEqual((wi["state"], len(wi["attempts"])), ("blocked", 2))
-        self.assertEqual((wi["incident"]["action"], wi["incident"]["causes"]),
-                         ("attempt_failed", ["unknown"]))
-        self.assertIsNone(wi["wallMsOverride"])
-        self.assertEqual(self.longer_runs(), [])
+        self.assertEqual((wi["state"], wi["wallMsOverride"], len(wi["attempts"])), ("ready", 3600000, 2))
+        self.assertIsNone(wi["blockedOn"])
+        event, = self.longer_runs()
+        self.assertEqual((event["detail"]["was"], event["detail"]["now"]), (None, 3600000))
+        wi = self.foreman.tick(self.id)["workItem"]
+        self.assertEqual(self.relay.tasks[wi["providerTaskId"]]["timeoutMs"], 3600000)
+        self.relay.finish(wi["providerTaskId"], status="timed_out", error="Agent exceeded wall time")
+        wi = self.foreman.tick(self.id)["workItem"]
+        self.assertEqual((wi["state"], len(wi["attempts"])), ("blocked", 3))
+        self.assertEqual(len(self.longer_runs()), 1)
         self.assertEqual(self.store.project(self.project["id"])["passesUsed"], 0)
 
-    def test_only_an_active_project_qualifies_for_a_longer_run(self):
-        for state in ("paused", "stopped", "done", "missing"):
+    def test_a_member_of_a_project_that_is_not_active_gets_no_longer_run(self):
+        for state in ("paused", "stopped", "missing"):
             with self.subTest(state=state):
                 self.setUp()
                 wi = self.timeout()
@@ -1089,6 +1094,13 @@ class ProjectLongerRunTest(unittest.TestCase):
                 wi = self.foreman.fail(wi, self.store.workorders(self.id)[-1], "the harness timed out")
                 self.assertEqual((wi["state"], wi["wallMsOverride"]), ("blocked", None))
                 self.assertEqual(self.longer_runs(), [])
+
+    def test_a_member_of_a_done_project_gets_a_longer_run_like_a_non_member(self):
+        wi = self.timeout()
+        self.store.put_project(dict(self.store.project(self.project["id"]), state="done"))
+        wi = self.foreman.fail(wi, self.store.workorders(self.id)[-1], "the harness timed out")
+        self.assertEqual((wi["state"], wi["wallMsOverride"]), ("ready", 3600000))
+        self.assertEqual(len(self.longer_runs()), 1)
 
     def test_a_fix_timeout_keeps_its_state_attempts_and_diagnosis(self):
         self.relay.max_timeout_ms = 3600000

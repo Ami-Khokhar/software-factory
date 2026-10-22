@@ -21,7 +21,7 @@ from tests.test_plan import FIRST, REPO, SECOND, plan
 ID = "o/r#7"
 POOL = (("pi-glm-factory", "local"), ("opencode-glm-factory", "local"), ("pi-deepseek-factory", "local"))
 ROOT = Path(__file__).resolve().parent.parent
-TIMED_OUT = "task timed_out: Agent exceeded 1800000 ms"
+TIMED_OUT = "task timed_out: Agent exceeded its wall time"
 PARTIAL_WORK = ("A worker ran out of time. Its unfinished work is the commit you start from. "
                 "Check each acceptance bullet against the code, not against any report. "
                 "Keep what is right, fix or remove the rest, and finish.")
@@ -70,7 +70,7 @@ class ForemanCase(unittest.TestCase):
     def relay_timeout(self):
         """One worker pass the relay killed at its wall, and the tick that reads it."""
         wi, task = self.dispatch()
-        self.relay.finish(task["id"], status="timed_out", error="Agent exceeded 1800000 ms")
+        self.relay.finish(task["id"], status="timed_out", error="Agent exceeded its wall time")
         return self.tick()
 
     def recoveries(self, action=None):
@@ -140,6 +140,7 @@ class SalvageTest(ForemanCase):
         self.assertEqual(order["findingsToAddress"][0]["problem"], PARTIAL_WORK)
 
     def test_a_third_timeout_does_not_move_the_wip_again(self):
+        self.foreman.set_timeout(ID, 3600000, "owner")  # already at the longest run: no ADR-0108 run
         self.keep_partial()  # salvage 1: wip moves to c1 (moves 1)
         self.keep_partial()  # its rescue times out too: salvage 2 (moves 2)
         wi = self.keep_partial()  # that rescue times out again: no third salvage push
@@ -225,6 +226,7 @@ class WorkerFailoverTest(ForemanCase):
 
     def test_two_timeouts_do_not_block_while_an_untried_worker_remains(self):
         """B: the block waits for the failover the policy already covers, once per budget."""
+        self.foreman.set_timeout(ID, 3600000, "owner")  # already at the longest run: no ADR-0108 run
         self.relay_timeout()  # pi-glm-factory
         wi = self.relay_timeout()  # pi-deepseek-factory: two strikes, two families
         self.assertEqual(wi["state"], "ready")  # not blocked: opencode-glm-factory was never tried
@@ -239,7 +241,7 @@ class WorkerFailoverTest(ForemanCase):
         self.assertEqual(wi["worker"], "opencode-glm-factory")
         self.assertEqual(wi["recovery"]["action"], "block_deferred")  # its record is the one kept
         self.assertEqual(len(self.recoveries()), 2)  # no duplicate decision for the same attempt
-        self.relay.finish(task["id"], status="timed_out", error="Agent exceeded 1800000 ms")
+        self.relay.finish(task["id"], status="timed_out", error="Agent exceeded its wall time")
         wi = self.tick()
         self.assertEqual(wi["state"], "blocked")  # once per budget: the deferred attempt failed
         self.assertEqual(len(wi["attempts"]), 3)
@@ -251,6 +253,7 @@ class WorkerFailoverTest(ForemanCase):
     def test_the_deferral_never_lands_on_a_worker_from_the_gate_reviewers_family(self):
         """ADR-0085: the deferral still prefers outside the timed-out family (ADR-0081), but the
         gate reviewer's family is a hard wall: with no other family left, the block stands."""
+        self.foreman.set_timeout(ID, 3600000, "owner")  # already at the longest run: no ADR-0108 run
         self.github.contents[(REPO, ".github/pr-gatekeeper.json")] = '{"reviewer_model": "deepseek-v4.1-flash"}'
         self.relay_timeout()  # pi-glm-factory; the swap falls back to the same family, never deepseek
         wi = self.relay_timeout()  # opencode-glm-factory: two strikes, and no untried worker outside deepseek
@@ -259,6 +262,7 @@ class WorkerFailoverTest(ForemanCase):
 
     def test_two_timeouts_block_when_no_untried_worker_remains(self):
         """The block stands when routing's only choice is a worker that already failed here."""
+        self.foreman.set_timeout(ID, 3600000, "owner")  # already at the longest run: no ADR-0108 run
         self.foreman.config = Config(mcp_token="t", repos=frozenset({REPO}), workers=POOL[:2])
         self.relay_timeout()  # pi-glm-factory
         wi = self.relay_timeout()  # opencode-glm-factory: fresh, but the same family
@@ -365,6 +369,7 @@ class IncidentTest(ForemanCase):
         return self.foreman.resolve_human(ID, *args, **kw)
 
     def test_a_material_change_re_arms_the_incident_once_and_an_unchanged_one_never_does(self):
+        self.foreman.set_timeout(ID, 3600000, "owner")  # already at the longest run: no ADR-0108 run
         wi = self.two_plain_failures()
         self.assertEqual((wi["state"], wi["incident"]["id"], wi["incident"]["causes"],
                           wi["incident"]["agentAnswered"]), ("blocked", 1, ["unknown"], False))
