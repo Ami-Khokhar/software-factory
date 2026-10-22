@@ -2675,7 +2675,7 @@ Project counts as a WorkItem with no Project, as it does for the pass budget at 
 only, once per lifetime, effective wall time below 3600000 ms, and a relay that accepts the budget.
 
 **Consequence.** A timeout on a plain WorkItem no longer ends at the owner after two short runs. Its next
-timeout failure blocks as before. A member of a non-active Project stays as it was.
+timeout failure blocks as before. A member of a `paused`, `stopped` or missing Project stays as it was.
 
 ## ADR-0109 — Day Desk keeps waking on a stuck item, and wakes on a worker question
 

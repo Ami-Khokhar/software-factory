@@ -199,9 +199,10 @@ standard in the repo's AGENTS.md ask:
 - When the owner names a worker, put a `Worker: <relay agent id>` line in each issue body it
   is for, before `## Acceptance`; several lines give an order. Use only an agent the owner named.
   If the agent is not in FACTORY_WORKERS, the issue waits for the owner with that reason.
-- The factory already gives a WorkItem one 60-minute run after its second timeout-class failure
-  when the relay allows it (ADR-0108). Ask the owner for a longer run only after that run has also
-  timed out; setting one from the evidence yourself is still yours to decide.
+- The factory gives a WorkItem one 60-minute run after its second timeout-class failure when the
+  relay allows it and its Project, if any, is active or done (ADR-0108). If that run also times out,
+  the item blocks: split it or retry it under the rules below. Setting a longer run from the evidence
+  before that is still yours to decide.
 - When the evidence shows a WorkItem needs a longer run than the default allows — a verify that
   runs long, a pass that timed out with work in progress — call factory_set_timeout with its `id`,
   `day-desk` as `by`, and an integer `wallMs`. `null` clears the override. Bounds are at least the
