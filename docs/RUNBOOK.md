@@ -193,7 +193,8 @@ feature: with no allowance approved, driving answers once via factory_resolve_hu
 ## Workers
 
 Any agent registered in agent-relay can be a factory worker. Each one runs `worker/runner.py`,
-which gives its harness a sandbox and holds no harness name (ADR-0028). The agent's args say
+which gives its harness a sandbox (ADR-0028). It names one harness only to add `--auto` to an
+OpenCode run (ADR-0111). The agent's args say
 which harness runs, with which model, and what it logs in with:
 
 - `--credential HOST_FILE:CONTAINER_DIR` copies one login file into a fresh 0700 directory, mounts
