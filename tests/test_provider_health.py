@@ -111,6 +111,16 @@ class ProbeTest(unittest.TestCase):
         self.assertEqual(status, "unavailable")
         self.assertEqual(event["exitCode"], runner.NO_DOCKER)
 
+    def test_an_opencode_argv_reaches_the_sandbox_with_auto(self):
+        # The probe must run the harness exactly as a real pass does: the runner's own
+        # harness_command adds --auto to an `opencode run` (ADR-0111), not the raw argv.
+        sandbox = self._sandbox_returning(0, "ok\n", "")
+        event, status = provider_health.probe(sandbox, ["opencode", "run", "--model", "m"],
+                                              10, "scratch", "ok")
+        self.assertEqual(status, "ok")
+        self.assertEqual(sandbox.run.call_args.args[0],
+                         ["opencode", "run", "--auto", "--model", "m", provider_health.PROBE])
+
 
 class PilotTest(unittest.TestCase):
     def test_unavailable_preflight_exits_with_its_code_and_never_probe(self):

@@ -9,7 +9,8 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # The harnesses a relay agent may run here (#98). Each agent's args name its command, credentials
-# and env; worker/runner.py knows none of them.
+# and env; worker/runner.py knows none of them. The one exception: it inserts `--auto` into an
+# `opencode run` argv itself, so an OpenCode pass auto-approves inside this sandbox (ADR-0111).
 ARG PI_VERSION=0.87.1
 ARG CODEX_VERSION=0.159.0
 ARG OPENCODE_VERSION=1.18.32

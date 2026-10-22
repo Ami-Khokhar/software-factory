@@ -7,7 +7,9 @@ agent-relay starts this with the agent's args and the task input as the last arg
               -- <harness argv...> <task input>
 
 Any harness can run here: the relay agent names its command, the credential files it logs in with
-and the env it needs, and the runner knows none of them by name (#98).
+and the env it needs, and the runner knows none of them by name (#98). The one exception: it
+inserts `--auto` into an `opencode run` argv itself, so an OpenCode pass auto-approves inside the
+sandbox like the Pi workers, which have no permission prompt (ADR-0111).
 
 The relay task's cwd is the persistent checkout of the WorkOrder's repo. It is never mounted into a
 container: each pass gets a fresh copy of it, and only the copy is mounted. The harness runs in a
