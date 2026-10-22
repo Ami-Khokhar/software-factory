@@ -2736,6 +2736,9 @@ that does not already carry it; no other harness is touched. `factory-ask` print
 exits 0 when the argv is exactly `-h` or `--help`, without contacting the channel. A real question
 that merely begins with a dash still goes to the channel; only the exact flags are answered locally.
 
+*Edited by #378 (2026-10-23), before the factory ran it:* the first text answered any question that
+starts with `-` locally. Only the exact flags are answered now, so a real question is never dropped.
+
 **Consequence.** OpenCode workers stop refusing their own tool calls, at parity with the Pi workers,
 which have no permission prompt at all. The container is still the sandbox (ADR-0017): the harness
 sees only the WorkOrder's copy and a model credential, and holds no GitHub credential, so it cannot

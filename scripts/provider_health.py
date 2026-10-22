@@ -109,6 +109,7 @@ def probe(sandbox, argv, seconds, scratch, expect):
     """One synthetic request through the restricted sandbox. Returns (event dict, status)."""
     started = time.monotonic()
     try:
+        # the argv a real pass runs (ADR-0111), so a green probe cannot pass a harness the pass fails
         code, out, err = sandbox.run([*runner.harness_command(argv), PROBE], seconds, scratch,
                                     harness=True)
     except runner.WorkerError as exc:
