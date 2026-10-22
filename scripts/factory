@@ -197,6 +197,14 @@ def cmd_watch(_):
                                                              for p in projects if p["state"] == "paused"}}))
 
 
+def wait_bucket(minutes):
+    """The wait shown in a drive-queue line (ADR-0109): 30-minute steps for 6 hours, then
+    120-minute steps up to 48 hours, so the line keeps changing and Hermes keeps waking."""
+    if minutes <= 360:
+        return max(0, int(minutes // 30) * 30)
+    return min(2880, 360 + -(-int(minutes - 360) // 120) * 120)
+
+
 def cmd_drive_queue(_):
     """For the monitor_script of Day Desk's driving job (ADR-0030): the escalations Day Desk may
     still answer, one per line. Hermes runs the agent only when this output changes."""
@@ -207,9 +215,12 @@ def cmd_drive_queue(_):
             waiting = ""
             if wi.get("updatedAt"):
                 updated = datetime.strptime(wi["updatedAt"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-                bucket = min(360, max(0, int((now - updated).total_seconds() // 1800) * 30))
+                bucket = wait_bucket((now - updated).total_seconds() / 60)
                 waiting = f" (waiting {bucket}m)"
             print(f"{wi['id']} is {wi['state']}{waiting}: {wi.get('blockedOn')}")
+        question = wi.get("question") or {}
+        if question.get("id") and not question.get("answer"):
+            print(f"{wi['id']} asks question {question['id']}")
     by_id = {wi["id"]: wi for wi in workitems}
     for project in call("factory_project_status").get("projects", []):
         acceptance = by_id.get(project.get("acceptanceItem"), {})

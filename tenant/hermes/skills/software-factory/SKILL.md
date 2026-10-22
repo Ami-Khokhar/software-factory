@@ -355,7 +355,8 @@ bounded wait, and then goes on with its own reading.
 
 ## Drive the factory
 
-The monitor can also print "project <id>: acceptance <item> is changes_requested|blocked|human_waiting".
+The monitor can also print "<id> asks question <questionId>": read the question with factory_status
+and answer it. It can also print "project <id>: acceptance <item> is changes_requested|blocked|human_waiting".
 Read that item with `factory_status` and the item id.
 Act only through the existing tools.
 For a member of an active Project, use "Recover a member".

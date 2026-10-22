@@ -2658,3 +2658,21 @@ Safety stops, environment faults and the member's 8-pass cap still bound recover
 **Consequence.** The owner talks only about the goal and the result.
 Day Desk recovers routine member failures inside the approved budget without another approval.
 Non-members keep their existing one-answer and allowance rules.
+
+## ADR-0109 — Day Desk keeps waking on a stuck item, and wakes on a worker question
+
+**Context.** ADR-0106 capped the queue wait at 360 minutes, so after 6 hours the queue text froze and
+Hermes never ran the driver again. self-maintaining-apis#5 blocked 2026-10-21 09:55 IST, the
+driver's last wake was 16:00 IST, and nothing happened for about 36 hours until the owner asked.
+A worker question (ADR-0098) never appeared in the queue, so 5 questions went unanswered while
+workers waited.
+
+**Decision.** This refines ADR-0106. The queue wait rises in 30-minute steps for 6 hours, then in
+120-minute steps, and is capped at 2880 minutes (48 hours). Legacy rows without `updatedAt` keep
+their old line. For each WorkItem whose `factory_status` row has an unanswered `question`, the
+queue prints `<id> asks question <questionId>`. It prints no question text. Day Desk reads the
+text with `factory_status`.
+
+**Consequence.** A stuck item wakes Day Desk about 21 more times over 48 hours, so each stuck item
+costs at most about 21 extra model runs. A worker question wakes Day Desk once. After 48 hours the
+queue text is stable again and the owner's notices still apply.

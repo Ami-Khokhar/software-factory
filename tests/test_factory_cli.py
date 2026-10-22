@@ -767,14 +767,27 @@ class WatchTest(unittest.TestCase):
                                  [f"o/r#7 is blocked (waiting {bucket}m): verify exited 1"])
                 clock.now.assert_called_once_with(cli.timezone.utc)
 
-    def test_drive_queue_stops_counting_at_six_hours(self):
-        row = {"id": "o/r#7", "state": "blocked", "agentMayResolve": True,
-               "blockedOn": "verify exited 1", "updatedAt": "2026-10-20T00:00:00Z"}
-        for hours in (6, 7, 48):
-            with self.subTest(hours=hours), mock.patch.object(cli, "datetime", wraps=cli.datetime) as clock:
-                clock.now.return_value = cli.datetime(2026, 10, 20, tzinfo=cli.timezone.utc) + cli.timedelta(hours=hours)
-                self.assertEqual(self.project_run([], row, command=cli.cmd_drive_queue),
-                                 ["o/r#7 is blocked (waiting 360m): verify exited 1"])
+    def drive_line_after(self, hours, **changes):
+        row = dict({"id": "o/r#7", "state": "blocked", "agentMayResolve": True,
+                    "blockedOn": "verify exited 1", "updatedAt": "2026-10-20T00:00:00Z"}, **changes)
+        with mock.patch.object(cli, "datetime", wraps=cli.datetime) as clock:
+            clock.now.return_value = cli.datetime(2026, 10, 20, tzinfo=cli.timezone.utc) + cli.timedelta(hours=hours)
+            return self.project_run([], row, command=cli.cmd_drive_queue)
+
+    def test_drive_queue_keeps_changing_after_six_hours_until_forty_eight(self):
+        lines = {hours: self.drive_line_after(hours) for hours in (6, 7, 9, 48, 50)}
+        self.assertEqual(lines[6], ["o/r#7 is blocked (waiting 360m): verify exited 1"])
+        self.assertNotEqual(lines[6], lines[7])
+        self.assertNotEqual(lines[7], lines[9])
+        self.assertEqual(lines[50], lines[48])  # the cap
+        self.assertEqual(lines[48], ["o/r#7 is blocked (waiting 2880m): verify exited 1"])
+
+    def test_drive_queue_lists_an_unanswered_worker_question_once_by_id(self):
+        pending = {"id": "q1", "text": "which db?", "askedAt": "2026-10-20T00:00:00Z"}
+        row = {"id": "o/r#8", "state": "implementing", "question": pending}
+        self.assertEqual(self.project_run([], row, command=cli.cmd_drive_queue), ["o/r#8 asks question q1"])
+        answered = dict(row, question=dict(pending, answer="postgres"))
+        self.assertEqual(self.project_run([], answered, command=cli.cmd_drive_queue), [])
 
     def test_drive_queue_lists_a_stuck_acceptance_item(self):
         for state in ("blocked", "human_waiting", "changes_requested", "implementing", "closed"):
