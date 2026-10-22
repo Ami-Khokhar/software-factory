@@ -177,7 +177,7 @@ The states are the enum in `schemas/workitem.schema.json`.
 | `issued`, `planned` | the issue gains `factory:ready` | `ready` |
 | `ready` | the tick dispatches an implement WorkOrder, once each `Depends on #n` issue is closed with a merged PR on `factory/<n>` | `dispatching`, then `implementing` once the relay accepts |
 | `ready` | a `Depends on #n` issue is open | `ready` with `waitingOn: n`; nothing is dispatched |
-| `ready`, `changes_requested` | a `Worker:` line names an agent that is not in `FACTORY_WORKERS` | `human_waiting`; nothing is dispatched |
+| `ready`, `changes_requested` | a `Worker:` line names an agent that is not in `FACTORY_WORKERS` | the name is dropped and routing picks among the named allowed workers, else all allowed ones, with an `unknown_worker_rerouted` audit row (ADR-0110); `human_waiting` only when none is eligible |
 | `ready` | a `Depends on #n` issue closed without a merged PR, ended `cancelled` or `exhausted`, or does not exist | `human_waiting` |
 | `human_waiting` on a dependency | each tick re-reads it: merged or open again resumes the WorkItem (`ready`, `waitingOn: n` when open); a differently ended dependency re-arms its incident once; an unchanged one writes nothing (ADR-0081) |
 | state that would dispatch | a recovery pause barrier (ADR-0061) holds the WorkItem | nothing is dispatched: the decision refuses, or `dispatching` holds the relay call until the barrier releases |

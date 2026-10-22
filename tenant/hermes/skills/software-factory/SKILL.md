@@ -198,7 +198,8 @@ standard in the repo's AGENTS.md ask:
   owner which issues run side by side. A plan has at most 10 issues.
 - When the owner names a worker, put a `Worker: <relay agent id>` line in each issue body it
   is for, before `## Acceptance`; several lines give an order. Use only an agent the owner named.
-  If the agent is not in FACTORY_WORKERS, the issue waits for the owner with that reason.
+  If the agent is not in FACTORY_WORKERS, the factory drops that name and uses an allowed worker
+  (audit row `unknown_worker_rerouted`); the issue waits for the owner only when no allowed worker can run it.
 - The factory gives a WorkItem one 60-minute run after its second timeout-class failure when the
   relay allows it and its Project, if any, is active or done (ADR-0108). If that run also times out,
   the item blocks: split it or retry it under the rules below. Setting a longer run from the evidence

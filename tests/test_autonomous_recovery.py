@@ -224,6 +224,15 @@ class WorkerFailoverTest(ForemanCase):
                          ("worker_swap", True, True))
         self.assertEqual(result["recoveryId"], self.recoveries("worker_swap")[0]["recoveryId"])
 
+    def test_a_stale_worker_pin_still_gets_the_deferred_attempt(self):
+        """ADR-0110: the deferred failover drops a name outside FACTORY_WORKERS, as dispatch does."""
+        self.github.edit_issue(REPO, 7, "Worker: pi-gone-factory\n\n" + self.github.issue(REPO, 7)["body"])
+        self.relay_timeout()
+        wi = self.relay_timeout()
+        self.assertEqual(wi["state"], "ready")
+        self.assertEqual((wi["recovery"]["action"], wi["recovery"]["toWorker"]),
+                         ("block_deferred", "opencode-glm-factory"))
+
     def test_two_timeouts_do_not_block_while_an_untried_worker_remains(self):
         """B: the block waits for the failover the policy already covers, once per budget."""
         self.foreman.set_timeout(ID, 3600000, "owner")  # already at the longest run: no ADR-0108 run
