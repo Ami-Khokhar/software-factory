@@ -91,6 +91,19 @@ class GateLoopTest(unittest.TestCase):
         order = self.foreman.store.workorders(ID)[-1]
         self.assertEqual((order["kind"], order["round"]), ("fix", 1))
 
+    def test_each_gate_round_gets_its_own_free_fix_pass(self):
+        """ADR-0112: round 2's first CHANGES verdict also rides free once round 1's fix pushed a new
+        head — the exemption follows the WorkItem's current gate round, not a fixed one."""
+        self.foreman.config = Config(mcp_token="t", repos=frozenset({REPO}), max_passes=1)
+        self.gate("CHANGES", 1, "c1", MISSING_TEST)
+        self.assertEqual(self.tick()["state"], "implementing")  # round 1's fix pass rides free
+        self.assertEqual(self.pass_("c2", dispatch=False)["headSha"], "c2")
+        self.gate("CHANGES", 2, "c2", BAD_NAME)  # a new problem: the old one counts as resolved
+        wi = self.tick()
+        self.assertEqual(wi["state"], "implementing")
+        order = self.foreman.store.workorders(ID)[-1]
+        self.assertEqual((order["kind"], order["round"]), ("fix", 2))
+
     def test_a_second_fix_in_the_same_round_is_back_on_the_budget(self):
         """ADR-0112: only the round's first fix pass rides free; the next one hits FACTORY_MAX_PASSES."""
         self.foreman.config = Config(mcp_token="t", repos=frozenset({REPO}), max_passes=1)

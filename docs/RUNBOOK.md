@@ -127,11 +127,11 @@ crosses 1001 (a `human_waiting` WorkItem whose `blockedOn` names the decompositi
 | factory-mcp | Push `factory/<issue>` and open the PR. It refuses a patch that touches a protected path (`.github/`, `AGENTS.md`) or takes the PR over the file-count limit before the push (a lines exceedance warns instead, ADR-0070), then checks the pushed branch and the size again | Merge. There is no merge tool |
 | pr-gatekeeper | Review and merge, or ask for changes, or send the PR to a person (HUMAN) | Be bypassed by the factory: a HUMAN verdict waits for you |
 
-Limits: a WorkItem gets at most 4 worker passes (then `exhausted`); your `retry` gives it 4 more,
-also from `exhausted` (ADR-0035). You may also ask Day Desk in Telegram to retry it (ADR-0043). One
-exception (ADR-0112): a PR the gate returned CHANGES on keeps one fix pass per gate round past that count. Two failed attempts in a row
-block it. Each pass has 20 minutes. Two passes of one repo run at once (`FACTORY_PASSES_PER_REPO`). A PR with no gate verdict
-for 2 hours goes to you. For a Project member, the Project's shared budget and the 8-pass
+Limits: a WorkItem gets at most 4 worker passes (then `exhausted`); your `retry` gives it 4 more, also from
+`exhausted` (ADR-0035). One exception (ADR-0112): a PR the gate returned CHANGES on keeps one fix pass per gate
+round past that count. You may also ask Day Desk in Telegram to retry it (ADR-0043). Two failed attempts in a
+row block it. Each pass has 20 minutes. Two passes of one repo run at once (`FACTORY_PASSES_PER_REPO`). A PR
+with no gate verdict for 2 hours goes to you. For a Project member, the Project's shared budget and the 8-pass
 lifetime cap apply instead (see [the Project contract](contracts.md#project), ADR-0101).
 
 What the design does not protect against:

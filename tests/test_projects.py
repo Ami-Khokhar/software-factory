@@ -900,8 +900,9 @@ class ProjectBudgetTest(unittest.TestCase):
         self.assertEqual(self.store.project(self.project["id"])["passesUsed"], 0)
 
     def test_a_member_at_the_cap_exhausts_on_a_fix_dispatch_too(self):
-        """ADR-0112's free fix pass is non-member only: a member at the member cap still exhausts,
-        even when the dispatch is a fix no round has seen yet."""
+        """Guard: ADR-0112's free fix pass is non-member only, and this guards against moving the
+        exemption above the member branch — a member at the cap must still exhaust on a fix dispatch
+        no round has seen yet."""
         for n in range(projects.MAX_MEMBER_PASSES):
             self.store.save_workorder({"id": f"prior/{n}", "workItemId": self.id})
         wi = self.foreman.dispatch(self.store.get(self.id), "fix")

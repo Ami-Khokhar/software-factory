@@ -125,7 +125,9 @@ dispatch-preflight consumption of these records are separate operations.
   could keep a stale `blockedOn`; the store's migration 2 drops it from any
   WorkItem whose state is not `human_waiting` or `blocked`.
 - **Budgets have two ceilings.** `WorkOrder.budget` requires `maxPasses` and
-  `wallMs`. Reaching `maxPasses` moves the WorkItem to `exhausted`.
+  `wallMs`. Reaching `maxPasses` moves the WorkItem to `exhausted`, except the
+  first fix WorkOrder of a gate round, which is free for a non-member
+  (ADR-0112).
 - **`blockers[].fingerprint` is the identity of "the same problem."** Round
   counting is per unresolved problem, not per gate round (see
   [decisions.md](decisions.md), ADR-0005).
