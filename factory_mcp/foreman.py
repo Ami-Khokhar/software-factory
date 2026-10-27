@@ -634,9 +634,10 @@ class Foreman:
                                  facts["issue"]["workers"])
         if wi["state"] == "human_waiting":
             return self._recheck_dependency(wi)
-        # GitHub runs no workflow on a PR that conflicts with its base, so the gate would never answer
-        conflict = (wi["state"] in ("pr_open", "reviewing", "changes_requested") and facts["pr"] is not None
-                    and facts["pr"]["mergeable"] is False)
+        # GitHub runs no workflow on a PR that conflicts with its base, so the gate would never answer;
+        # an accepted MERGE never happens there either, so merge_pending takes the same redo (ADR-0114)
+        conflict = (wi["state"] in ("pr_open", "reviewing", "changes_requested", "merge_pending")
+                    and facts["pr"] is not None and facts["pr"]["mergeable"] is False)
         if wi["state"] == "changes_requested" or conflict:  # findings travel as data (ADR-0007)
             latest = workitem.verdict_for_head(facts)
             # a redo that failed leaves the PR, and the verdict on its head, as they were
