@@ -139,9 +139,10 @@ A tick comes from the background loop or from `factory_tick`.
    - `implementing`: read the task. When it is done, check the Result and what GitHub holds, push
      a patch, and open the PR or adopt the one already open on the branch. A push to an open PR
      rewrites its body, because the gate lints the body against the paths the PR now changes.
-   - `pr_open`, `reviewing` or `changes_requested` with a PR that GitHub says conflicts with its
-     base: dispatch an implement WorkOrder on the current default branch, with the conflict and
-     any gate findings as data; its push replaces the branch, and the gate runs again (ADR-0032).
+    - `pr_open`, `reviewing`, `changes_requested` or `merge_pending` with a PR that GitHub says
+      conflicts with its base: dispatch an implement WorkOrder on the current default branch, with
+      the conflict and any gate findings as data; its push replaces the branch, and the gate runs
+      again (ADR-0032, ADR-0114).
    - `pr_open` or `reviewing` with no verdict for `FACTORY_GATE_WAIT_SECONDS`: `human_waiting`.
    - `merged`: close the issue, because GitHub skips `Closes #n` when the gate's workflow token
      merges. Then `closed`.
@@ -190,12 +191,12 @@ The states are the enum in `schemas/workitem.schema.json`.
 | `changes_requested` | the same blocking problem in 2 gate rounds (ADR-0005) | `human_waiting` |
 | `reviewing`, `changes_requested` | a CHANGES verdict that names no finding, for example when only the gate's PR lint failed | `human_waiting`: a fix pass would have nothing to fix |
 | `changes_requested` | the tick dispatches a fix WorkOrder | `dispatching`, then `implementing` |
-| `pr_open`, `reviewing`, `changes_requested` | the PR conflicts with its base; the tick dispatches an implement WorkOrder on the current base | `dispatching`, then `implementing` |
+| `pr_open`, `reviewing`, `changes_requested`, `merge_pending` | the PR conflicts with its base; the tick dispatches an implement WorkOrder on the current base | `dispatching`, then `implementing` |
 | `merge_pending` | GitHub reports the PR merged | `merged` |
 | `merged` | factory-mcp closes the issue | `closed` |
 | any live state | the PR closed without a merge | `human_waiting` |
 | any live state | the issue closed without a merged PR | `cancelled` |
-| `ready`, `changes_requested` (a non-member, or a member of a done Project) | `FACTORY_MAX_PASSES` WorkOrders were dispatched since the last person's retry, and the gate's round has already used its free fix pass (ADR-0112) | `exhausted` |
+| `ready`, `changes_requested`, `merge_pending` (a non-member, or a member of a done Project) | `FACTORY_MAX_PASSES` WorkOrders were dispatched since the last person's retry, and the ADR-0112 free pass does not apply: only a gate round's first fix takes it, never a conflict redo | `exhausted` |
 | `ready`, `changes_requested` (a member) | the Project's budget is spent | `exhausted`, and the Project is `paused` |
 | `ready`, `changes_requested` (a member) | the Project is `paused` or `stopped` | unchanged, with no dispatch or audit write |
 | `ready`, `changes_requested` (a member) | 8 WorkOrders were dispatched over the member's lifetime | `exhausted`; the Lead splits it or the owner decides |
@@ -268,7 +269,7 @@ for a decision `factory_resolve_human` makes, Day Desk's once per incident or th
 | Transient GitHub GET resets, rate limits and server errors retry within a fixed wait bound; exhausted transport failures normalize to `GitHubError`; writes never retry | `GitHub._request` | `test_github`: `test_get_retries_bounded_rate_limits_and_server_errors`, `test_non_finite_retry_after_does_not_sleep_or_retry`, `test_get_retries_a_connection_reset`, `test_exhausted_get_transport_failures_are_github_errors`, `test_a_write_is_never_retried_after_a_server_error` |
 | The same problem twice goes to a person | `workitem.reconcile` | `test_gate_loop`: `test_same_problem_twice_goes_to_a_human` |
 | A merge without the gate is recorded | `workitem.reconcile` | `test_gate_loop`: `test_merge_without_a_merge_verdict_is_flagged` |
-| A PR that conflicts with its base is made again on the current base | `Foreman.act` | `test_gate_loop`: `test_a_pr_that_conflicts_with_main_is_made_again_on_the_current_main` |
+| A PR that conflicts with its base is made again on the current base, including one already accepted to merge | `Foreman.act` | `test_gate_loop`: `test_a_pr_that_conflicts_with_main_is_made_again_on_the_current_main`, `test_a_merge_pending_pr_that_conflicts_is_made_again_on_the_current_main`, `test_a_conflict_while_waiting_to_merge_cannot_spend_past_the_budget` |
 | No verdict for `FACTORY_GATE_WAIT_SECONDS` goes to a person | `Foreman.act` | `test_hardening`: `test_silent_gate_goes_to_a_person` |
 | The budget ends a WorkItem | `Foreman.dispatch` | `test_actions`: `test_budget_exhausts` |
 | A timeout moves the next attempt to another model family; the two-strike block waits for the failover the policy covers, once per budget, and stands when no untried worker remains (ADR-0081) | `factory_mcp/routing.py` `route`, `Foreman._dispatch`, `Foreman._defer_block` | `test_workers`: `test_a_timeout_family_is_avoided_while_another_family_may_run`; `test_autonomous_recovery`: `test_a_first_timeout_moves_the_next_attempt_to_another_model_family`, `test_two_timeouts_do_not_block_while_an_untried_worker_remains`, `test_two_timeouts_block_when_no_untried_worker_remains`, `test_the_pass_budget_still_stops_the_recovery_attempt` |

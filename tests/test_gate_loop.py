@@ -392,6 +392,95 @@ class GateLoopTest(unittest.TestCase):
         self.assertEqual(found[0], "merge-conflict")
         self.assertNotIn(fingerprint("src/app.py", "No test for the error"), found)
 
+    def merge_pending_conflict(self):
+        """Gate MERGE on c1, so PR 100 waits for GitHub to merge it, then main moves on and the PR
+        it waits on can no longer merge."""
+        self.gate("MERGE", 1, "c1")
+        self.assertEqual(self.tick()["state"], "merge_pending")
+        self.conflict()
+
+    def test_a_merge_pending_pr_that_conflicts_is_made_again_on_the_current_main(self):
+        """The accepted head's merge never happens (ADR-0114, which takes ADR-0032 to
+        merge_pending): the same implement redo runs on the current main, keeps the PR and carries
+        the acceptance, and the new head goes back to the gate."""
+        self.merge_pending_conflict()
+        wi = self.tick()
+        self.assertEqual(wi["state"], "implementing")
+        order = self.foreman.store.workorders(ID)[-1]
+        self.assertEqual((order["kind"], order["round"], order["baseSha"]), ("implement", 1, "m2"))
+        self.assertEqual([f["problem"] for f in order["findingsToAddress"]],
+                         ["PR #100 conflicts with main, which changed after this branch was made. "
+                          "Make the change again on the current main."])
+        self.assertEqual([a["claim"] for a in order["acceptance"]],
+                         ["default_config_path() raises when the user registry is missing",
+                          "README names the registry path"])
+        wi = self.pass_("c2", dispatch=False)
+        self.assertEqual((wi["state"], wi["prNumber"], len(self.github.pulls)), ("reviewing", 100, 1))
+        self.assertEqual(self.git.pushes[-1], {"branch": "factory/7", "base": "m2", "force": True})
+        self.assertEqual(self.tick()["state"], "reviewing")  # c1's MERGE verdict does not move c2
+        self.gate("MERGE", 2, "c2")
+        self.assertEqual(self.tick()["state"], "merge_pending")
+
+    def test_a_conflict_while_waiting_to_merge_cannot_spend_past_the_budget(self):
+        """A conflict redo is an implement pass, never the fix exemption (ADR-0112): a spent budget
+        ends it with no worker submission and no reset pass."""
+        self.foreman.config = Config(mcp_token="t", repos=frozenset({REPO}), max_passes=1)
+        self.merge_pending_conflict()
+        submitted = (len(self.foreman.store.workorders(ID)), len(self.relay.tasks))
+        wi = self.tick()
+        self.assertEqual(wi["state"], "exhausted")
+        self.assertIn("1 worker passes used", wi["terminalReason"])
+        self.assertEqual((len(self.foreman.store.workorders(ID)), len(self.relay.tasks)), submitted)
+
+    def test_a_running_redo_of_a_conflicting_merge_is_not_dispatched_again(self):
+        self.merge_pending_conflict()
+        wi = self.tick()
+        self.assertEqual((wi["state"], len(self.foreman.store.workorders(ID)), len(self.relay.tasks)),
+                         ("implementing", 2, 2))
+        wi = self.tick()  # the running pass works on a PR GitHub still reports as conflicting
+        self.assertEqual((wi["state"], len(self.foreman.store.workorders(ID)), len(self.relay.tasks)),
+                         ("implementing", 2, 2))
+
+    def test_a_merge_pending_pr_github_never_called_conflicting_dispatches_nothing(self):
+        """Guard: only mergeable false redoes the change; null is GitHub still computing it and true
+        is a PR its merge can take, so neither spends a pass."""
+        self.gate("MERGE", 1, "c1")
+        self.assertEqual(self.tick()["state"], "merge_pending")
+        for mergeable in (None, True):
+            with self.subTest(mergeable=mergeable):
+                self.github.pulls[0]["mergeable"] = mergeable
+                wi = self.tick()
+                self.assertEqual((wi["state"], len(self.foreman.store.workorders(ID)),
+                                  len(self.relay.tasks)), ("merge_pending", 1, 1))
+
+    def test_a_merge_pending_pr_that_ended_dispatches_nothing(self):
+        """Guard: GitHub's merge or the PR's closure ends the wait before a conflict could reach
+        a worker."""
+        for ended in ("merged", "closed"):
+            with self.subTest(ended=ended):
+                self.setUp()
+                self.gate("MERGE", 1, "c1")
+                self.assertEqual(self.tick()["state"], "merge_pending")
+                self.github.branches[(REPO, "main")] = "m2"
+                if ended == "merged":
+                    self.github.pulls[0].update(state="closed", merged_at="2026-09-24T03:00:00Z")
+                    expected = "closed"
+                else:
+                    self.github.pulls[0].update(state="closed")
+                    expected = "human_waiting"
+                wi = self.tick()
+                self.assertEqual((wi["state"], len(self.foreman.store.workorders(ID)),
+                                  len(self.relay.tasks)), (expected, 1, 1))
+
+    def test_a_conflict_cannot_dispatch_while_another_tick_holds_the_lease(self):
+        """Guard: the lease, not the conflict, owns the write, so a held lease leaves the wait as
+        it is and submits nothing."""
+        self.merge_pending_conflict()
+        self.foreman.store.acquire(ID, "another-tick")
+        wi = self.tick()
+        self.assertEqual((wi["state"], len(self.foreman.store.workorders(ID)), len(self.relay.tasks)),
+                         ("merge_pending", 1, 1))
+
     def test_a_live_head_changes_verdict_survives_a_later_comment_for_another_head(self):
         self.gate("CHANGES", 1, "c1", BAD_NAME)
         self.tick()

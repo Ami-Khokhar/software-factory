@@ -2781,3 +2781,30 @@ verdict it sets `regatedAt` to None, so the same verdict is "already accepted" o
 did not change; a verdict published before the regate is still ignored. The stale-run rule
 (ADR-0034) is untouched: it only matters when no verdict is taken. A WorkItem stored before this
 change keeps its `regatedAt`, and nothing in the store migrates.
+
+---
+
+## ADR-0114 — A PR accepted to merge that conflicts is made again on the current base
+
+Amends ADR-0032: the conflict redo covers `merge_pending`, not only the states waiting on the gate.
+
+**Context.** A MERGE verdict on the exact head writes `merge_pending`, and the tick then waits for
+GitHub to report the PR merged. When the default branch advanced between the verdict and the merge,
+GitHub reported the still-open PR `mergeable: false`, so nothing would ever merge it. ADR-0032's
+conflict redo named only `pr_open`, `reviewing` and `changes_requested`, so the tick did nothing,
+and `factory_resolve_human` takes only `human_waiting`, `blocked` and `exhausted`: the WorkItem
+could not reach a person or a worker, and waited on a merge GitHub would not make.
+
+**Decision.** `merge_pending` joins the states `Foreman.act` treats as conflicting: a
+`mergeable: false` PR there dispatches the same implement redo on the current default branch, with
+the `merge-conflict` finding first, the gate's blocking findings on the live head when there are
+any, and the WorkItem's acceptance and PR as they are. The push replaces the branch, so the new
+head goes back through the normal gate and the old MERGE verdict, which names the old head, cannot
+accept it. The pass is an implement pass, never ADR-0112's fix exemption, so a spent budget still
+ends it `exhausted` with no worker submission. `mergeable: null` or `true` waits for the next tick.
+
+**Consequence.** A PR the gate already accepted to merge recovers for one bounded worker pass
+instead of waiting forever; only `mergeable: false` moves it, so a tick never re-dispatches while
+GitHub computes or while a redo pass runs. The budget, the passes-per-repo cap, the recovery
+barriers and the lease all apply exactly as they do to a conflict on a PR waiting for its first
+verdict.
