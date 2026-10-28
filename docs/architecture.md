@@ -88,7 +88,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | File | What it does |
 |---|---|
 | `factory_mcp/__init__.py`, `__main__.py` | The package; `python3 -m factory_mcp` starts the server |
-| `factory_mcp/server.py` | Streamable HTTP on loopback: `POST /mcp` with the bearer token, `POST /worker/ask` with a pass's own token (ADR-0098), the background tick loop |
+| `factory_mcp/server.py` | Streamable HTTP on loopback: `POST /mcp` with the bearer token, `POST /worker/ask` and `POST /worker/memory` with a pass's own token (ADR-0098, ADR-0117), the background tick loop |
 | `factory_mcp/mcp.py` | The MCP protocol: one JSON-RPC message in, one response out, no I/O |
 | `factory_mcp/tools.py` | The tools, and whether each one reads or writes |
 | `factory_mcp/foreman.py` | The Foreman: intake, rebuild, tick, dispatch, poll a task, open a PR, and the person's acts (resolve, approve an issue, start a plan, add a repo, bootstrap a repo, approve or retire a lesson) |
@@ -237,7 +237,8 @@ for a decision `factory_resolve_human` makes, Day Desk's once per incident or th
   which Docker Desktop maps to the host — and blocks for a bounded wait. The
   server stores the question on the WorkItem and `factory_answer_question` answers it; the worker
   proceeds with its own reading when nobody answers in time. The token names that one pass, so it
-  can ask about nothing else, and it dies with the pass. `factory-ask` answers `-h` and `--help`
+  can ask questions and read repo/project-scoped memory (ADR-0117), and it dies with the pass.
+  `factory-ask` answers `-h` and `--help`
   itself with its usage, without contacting the channel (ADR-0111).
 - The runner turns the commits into a unified patch, measures the whole pull request — the branch's
   diff against its merge base with the default branch, so a fix is counted with the implementation it
