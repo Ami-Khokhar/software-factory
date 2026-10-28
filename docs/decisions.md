@@ -2858,7 +2858,8 @@ reflection budget into a nightly stream of model requests or lose unprocessed ev
 
 **Decision.** Use one global seven-day reservation in SQLite, claimed transactionally before
 reflection. Keep failed/crashed reservations; failed evidence is not acknowledged. Snapshot only
-a bounded prefix and advance per-repo cursors when its result is durable. Pending publication
+a bounded prefix per repo, taking turns and rotating the first repo between runs to share the
+byte budget. Advance per-repo cursors when the result is durable. Pending publication
 prevents a second reflection. The eligibility reader makes no model request.
 
 **Consequence.** The cron script checks cheaply each night; later reflection consumes the claim.

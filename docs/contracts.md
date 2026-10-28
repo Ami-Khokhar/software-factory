@@ -574,6 +574,7 @@ A failure or crashed claimant keeps that cooldown. No evidence means no claim. A
 run blocks another reflection until its publication is handled. Timestamps are UTC epoch seconds.
 
 Each claim contains at most 20 selected events per repo and 12,000 encoded event bytes across
-repos. Only incorporated sequences advance after successful planning/completion; failures leave
+repos. Collection takes turns across repos and rotates the starting repo between runs so a busy
+repo cannot monopolize the window. Each repo keeps a contiguous prefix. Only incorporated sequences advance after successful planning/completion; failures leave
 all evidence pending. This is an evidence window, not a sliding seven-day cutoff. Run history and
 cursors are additive SQLite tables; no WorkItem document changes. Claims do not create issues.
