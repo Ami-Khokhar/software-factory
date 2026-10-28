@@ -56,6 +56,10 @@ def text(value, name, limit):
     return " ".join(value.split())
 
 
+def record_id(repo, project, key):
+    return hashlib.sha256(json.dumps([repo.lower(), project, key]).encode()).hexdigest()[:24]
+
+
 class Knowledge:
     def __init__(self, store):
         self.store = store
@@ -93,7 +97,7 @@ class Knowledge:
             raise ToolError("version must be a nonnegative integer")
         if not isinstance(links, list) or len(links) > 10:
             raise ToolError("links must be at most 10 records")
-        identity = hashlib.sha256(json.dumps([repo.lower(), project, key]).encode()).hexdigest()[:24]
+        identity = record_id(repo, project, key)
         with self.store._lock, self.store._transaction():
             db = self.store._db
             current = db.execute("SELECT version, doc FROM memory_nodes WHERE id=?", (identity,)).fetchone()

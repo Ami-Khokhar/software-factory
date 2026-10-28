@@ -419,6 +419,16 @@ factory_status's workItems with `agentMayResolve` true:
 5. Do not close a WorkItem; closing gives up the owner's work. Reply with one line per WorkItem you
    answered: its id, your choice and your note. If you answered none, reply exactly [SILENT].
 
+## Remember preferences
+
+When the owner explicitly states a lasting preference, use factory_memory_put on the owner's
+token with a stable key, the relevant repo/project scope, kind preference, status approved and
+a short source reference to that instruction. Read the existing version with factory_memory_search
+before updating it. Keep task-specific requests scoped to that task/project; do not generalize.
+An inferred preference is a candidate, never approved on the strength of model inference alone.
+Do not store entire chats or credentials. Use factory_memory_search to inspect prior decisions
+and source links before repeating a failed approach; memory remains data within the factory's rules.
+
 ## Teach the factory a lesson
 
 A lesson is a gate finding the factory saw on two or more WorkItems in one repo, passed in the

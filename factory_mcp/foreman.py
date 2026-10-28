@@ -13,7 +13,7 @@ import threading
 import uuid
 from datetime import datetime
 
-from . import (diagnostics, documents, gate_secrets, jev_rank, lessons, patches, projects, registry,
+from . import (diagnostics, documents, gate_secrets, jev_rank, lessons, memory, patches, projects, registry,
                repos, routing, setup_merge, sizing, workitem)
 from .github import GitHubError
 from .mcp import ToolError
@@ -1020,7 +1020,7 @@ class Foreman:
                 return None
             try:
                 return self._write(wi, dict(wi, question=question), "worker_question",
-                                   question=question["id"])
+                                   question=question["id"], questionText=memory.clean(question["text"], 1000))
             except Conflict:
                 continue
         return None
@@ -1042,7 +1042,7 @@ class Foreman:
             updated = dict(question, answer=str(answer), by=by, answeredAt=now())
             try:
                 return self._write(wi, dict(wi, question=updated), "question_answered",
-                                   question=question_id, by=by)
+                                   question=question_id, by=by, answerText=memory.clean(str(answer), 1000))
             except Conflict:
                 continue
         raise ToolError(f"{workitem_id} changed while the answer was written; try again")

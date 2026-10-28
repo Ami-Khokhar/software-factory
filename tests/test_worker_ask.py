@@ -43,6 +43,19 @@ class AskTest(unittest.TestCase):
         self.assertEqual(self.foreman.store.get(ID)["state"], "implementing")
         return order
 
+    def test_question_evidence_survives_clear_without_exposing_credentials(self):
+        order = self.start()
+        self.foreman.worker_ask(order["ask"]["token"], "Which module owns retries?", wait_seconds=0)
+        question = self.store.get(ID)["question"]
+        self.foreman.answer_question(ID, question["id"], "relay.py; API_KEY=private-value", "day-desk")
+        self.store.put(dict(self.store.get(ID), question=None))
+        events = tools.build(self.store, self.foreman)["factory_memory_events"].fn({"repo": REPO})["events"]
+        questions = [e for e in events if e["action"] == "worker_question"]
+        answers = [e for e in events if e["action"] == "question_answered"]
+        self.assertEqual(questions[0]["detail"]["questionText"], "Which module owns retries?")
+        self.assertIn("relay.py", answers[0]["detail"]["answerText"])
+        self.assertNotIn("private-value", json.dumps(events))
+
     def test_each_pass_gets_its_own_ask_channel(self):
         order = self.start()
         self.assertTrue(order["ask"]["url"].startswith("http://host.docker.internal:"))

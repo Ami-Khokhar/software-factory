@@ -1,4 +1,4 @@
 #!/bin/sh
-# Cheap eligibility check; the reflection runner is added separately.
+# No-agent nightly call; the server checks configuration, evidence and cooldown first.
 set -eu
-exec "${FACTORY_BIN:-factory}" call factory_dream_status '{}'
+exec "${FACTORY_BIN:-factory}" call factory_dream_run '{}'

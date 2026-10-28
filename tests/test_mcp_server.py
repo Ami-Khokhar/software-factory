@@ -86,7 +86,7 @@ class McpServerTest(unittest.TestCase):
         writes = {t["name"] for t in tools if t["annotations"]["readOnlyHint"] is False}
         self.assertEqual(reads, {"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons",
                                  "factory_report", "factory_memory_events", "factory_memory_search", "factory_dream_status", "factory_docker_status", "factory_project_status"})
-        self.assertEqual(writes, {"factory_memory_put", "factory_intake", "factory_tick", "factory_resolve_human",
+        self.assertEqual(writes, {"factory_dream_run", "factory_memory_put", "factory_intake", "factory_tick", "factory_resolve_human",
                                   "factory_answer_question",
                                   "factory_propose_issue", "factory_add_repo", "factory_approve_issue",
                                   "factory_bootstrap_repo", "factory_approve_lesson",

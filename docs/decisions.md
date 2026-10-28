@@ -2863,3 +2863,17 @@ prevents a second reflection. The eligibility reader makes no model request.
 
 **Consequence.** The cron script checks cheaply each night; later reflection consumes the claim.
 A crashed run may wait the full cooldown before recovery. Cursor state and claims need backups.
+
+## ADR-0119 — Dream output is grounded candidate data
+
+**Context.** Reflection can suggest repairs and preferences but cannot invent evidence, spend
+unbounded calls or silently turn model inference into owner policy.
+
+**Decision.** Make one bounded, nonredirecting provider call per claimed window. Validate every
+candidate against known same-repo evidence IDs; reject unknown fields, oversized output and unsafe
+paths. Persist linked evidence and candidate knowledge, then the plan. Repeated memory identities
+are adopted without overwriting owner edits. Provider failures keep the seven-day reservation.
+
+**Consequence.** The normal factory can later turn a saved plan into work. No live model is used
+until configured. The memory graph can be searched by workers, but inferred preferences never enter
+an approved context packet automatically. New question/answer summaries are durable and redacted.

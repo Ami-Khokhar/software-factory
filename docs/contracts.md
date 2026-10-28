@@ -577,3 +577,20 @@ Each claim contains at most 20 selected events per repo and 12,000 encoded event
 repos. Only incorporated sequences advance after successful planning/completion; failures leave
 all evidence pending. This is an evidence window, not a sliding seven-day cutoff. Run history and
 cursors are additive SQLite tables; no WorkItem document changes. Claims do not create issues.
+
+## Bounded reflection (ADR-0119)
+
+Owner-only `factory_dream_run` uses `FACTORY_DREAM_URL` (full OpenAI-compatible chat-completions
+URL), `FACTORY_DREAM_MODEL`, and optional securely configured `FACTORY_DREAM_API_KEY`. Without
+endpoint/model it returns not_configured and consumes no cooldown. Only HTTPS is accepted except
+loopback test servers; redirects are refused. The request has at most 22,000 bytes and 2048 output
+tokens, one attempt, a 60-second socket timeout and a 64-KiB response bound. No raw provider error
+body is logged. The nightly no-agent script calls this tool; skipped checks make no model request.
+
+Output must contain at most three improvements and five learnings. Every candidate must cite real
+same-repo audit IDs. Improvements require bounded causes, file paths and acceptance checks; inferred
+preferences remain candidates. Evidence, blockers and learnings become linked graph records with
+source IDs. Prior repo context is included only within the input budget. Invalid output keeps the
+cooldown and unprocessed evidence. A valid plan is saved before later issue publication.
+Question/answer audit events now keep sanitized bounded text before the live question field clears.
+This is selected context, not a transcript archive or exhaustive private-data classification.
