@@ -107,6 +107,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/lessons.py` | Lesson candidates from the audit log, and `lessons.json` (ADR-0020) |
 | `factory_mcp/jev_rank.py` | The opt-in Jev call that ranks a repo's lessons for one dispatch, with its fallbacks (ADR-0058) |
 | `factory_mcp/routing.py` | Which worker takes the next attempt: locality first, then one that has not failed |
+| `factory_mcp/dreaming.py` | Durable evidence windows, fair repo selection and the seven-day reflection cooldown (ADR-0118) |
 | `factory_mcp/metrics.py` | The escalation text, the autonomy rate, whether each lesson works, and the weekly report's numbers |
 | `factory_mcp/runtime.py` | Sanitized, read-only runtime facts and observational MCP schema-cache diagnostics (ADR-0091) |
 | `factory_mcp/worker_ops.py` | Validates and runs one bounded sanitized provider-health check, stores its binding/quarantine record, and calls the relay's fixed registry-reload endpoint (ADR-0094) |
