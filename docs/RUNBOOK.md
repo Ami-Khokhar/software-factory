@@ -229,6 +229,18 @@ pass carries on without an answer. A deploy that changes `worker/Dockerfile` reb
 pass gets the command. `factory-ask` lives in the worker image, and a change to `worker/factory-ask`
 alone does not change `worker/Dockerfile`, so `factory update` does not rebuild the image; rebuild
 it with `docker build -t factory-worker:latest worker/` after such a change.
+
+### Worker memory
+
+After deploying the memory reader, rebuild the worker image with the normal pinned worker build
+(`docker build -t factory-worker:latest worker/`) and verify that `factory-memory --help` succeeds
+inside it. Restart factory-mcp for the new route. The worker's existing pass environment supplies
+the capability; do not copy owner tokens into the image. From a running pass, search with
+`factory-memory 'previous timeout'` and follow a record with `factory-memory --id ID`.
+The command makes no model call; network/model and actual image deployment remain separate checks.
+
+### Worker registration
+
 An agent registered before #98 must add its `--credential` and
 `--env` flags: without them the runner mounts no login and the harness fails on its first call.
 Register each worker in `~/.config/agent-relay/agents.json`

@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import diagnostics, mcp, tools
 from .config import Config
-from .foreman import Foreman
+from .foreman import Foreman, MemoryAccessError
 from .github import GitHub
 from .relay import Relay
 from .store import Store
@@ -44,7 +44,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _worker_ask(self):
         """A running worker pass asks Day Desk a question (ADR-0098). The pass's own token is the
-        whole credential: it names one live WorkOrder and can do nothing else. The route is on the
+        credential for questions and scoped memory reads on one live WorkOrder. The route is on the
         same loopback listener, which a worker container reaches as host.docker.internal."""
         try:
             length = int(self.headers.get("content-length") or 0)
@@ -68,7 +68,31 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(500, {"error": f"{type(exc).__name__}: {exc}"})
         self._send(200, reply)
 
+    def _worker_memory(self):
+        try:
+            length = int(self.headers.get("content-length") or 0)
+            if not 0 <= length <= 8192:
+                self.close_connection = True
+                return self._send(413, {"error": "body_too_large"})
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(body, dict):
+                raise ValueError("body must be an object")
+        except (ValueError, TypeError):
+            return self._send(400, {"error": "bad_request"})
+        token = body.pop("token", "")
+        try:
+            result = self.server.foreman.worker_memory(token, body)
+        except MemoryAccessError as exc:
+            return self._send(403, {"error": str(exc)})
+        except mcp.ToolError as exc:
+            return self._send(400, {"error": str(exc)})
+        except Exception:  # the worker gets a response without exposing stored context
+            return self._send(500, {"error": "memory retrieval failed"})
+        self._send(200, result)
+
     def do_POST(self):
+        if self.path.split("?")[0] == "/worker/memory":
+            return self._worker_memory()
         if self.path.split("?")[0] == "/worker/ask":
             return self._worker_ask()
         if self.path.split("?")[0] != "/mcp":
