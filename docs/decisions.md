@@ -2850,3 +2850,16 @@ image. The reader logs record IDs/versions for exposure tracking and accepts no 
 **Consequence.** Any harness in the image can search without a vendor-specific integration.
 Search may return labeled hypotheses; only approved records enter the initial packet. The normal
 worker rules and acceptance outrank retrieved memory. No WorkItem migration is needed.
+
+## ADR-0118 — Dream cooldown is durable and claimed before model work
+
+**Context.** A scheduler retry, process crash or concurrent caller must not turn a weekly
+reflection budget into a nightly stream of model requests or lose unprocessed events.
+
+**Decision.** Use one global seven-day reservation in SQLite, claimed transactionally before
+reflection. Keep failed/crashed reservations; failed evidence is not acknowledged. Snapshot only
+a bounded prefix and advance per-repo cursors when its result is durable. Pending publication
+prevents a second reflection. The eligibility reader makes no model request.
+
+**Consequence.** The cron script checks cheaply each night; later reflection consumes the claim.
+A crashed run may wait the full cooldown before recovery. Cursor state and claims need backups.

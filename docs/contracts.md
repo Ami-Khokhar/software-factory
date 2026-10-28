@@ -565,3 +565,15 @@ The image's `factory-memory 'query words'` and `factory-memory --id ID` use the 
 capability as factory-ask. Failed retrieval is explicit and exits nonzero; it does not invent
 context or block the worker from using its original WorkOrder. Rebuild the worker image to
 install this command; updating factory-mcp alone does not update running worker images.
+
+## Dream eligibility (ADR-0118)
+
+`factory_dream_status` reads eligibility and the next eligibility timestamp without a model call.
+The internal claimant writes a run and reserves exactly seven days atomically, across connections.
+A failure or crashed claimant keeps that cooldown. No evidence means no claim. A pending planned
+run blocks another reflection until its publication is handled. Timestamps are UTC epoch seconds.
+
+Each claim contains at most 20 selected events per repo and 12,000 encoded event bytes across
+repos. Only incorporated sequences advance after successful planning/completion; failures leave
+all evidence pending. This is an evidence window, not a sliding seven-day cutoff. Run history and
+cursors are additive SQLite tables; no WorkItem document changes. Claims do not create issues.

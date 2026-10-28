@@ -984,3 +984,11 @@ inside it. Restart factory-mcp for the new route. The worker's existing pass env
 the capability; do not copy owner tokens into the image. From a running pass, search with
 `factory-memory 'previous timeout'` and follow a record with `factory-memory --id ID`.
 The command makes no model call; network/model and actual image deployment remain separate checks.
+
+### Dream eligibility schedule
+
+The profile's `scripts/factory-dream.sh` currently checks eligibility only, without an agent or
+model call. Register it for 03:00 Asia/Kolkata in the profile's configured scheduling timezone:
+`hermes -p day-desk cron create "0 3 * * *" --no-agent --script factory-dream.sh --deliver telegram --name factory-dream`.
+Check the job's effective timezone with the installed Hermes version before enabling it; the cron
+expression alone does not encode IST. This does not yet enable model reflection or issue creation.

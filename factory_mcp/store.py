@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .knowledge import Knowledge
+from .dreaming import Dreaming
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS workitems (
@@ -209,6 +210,7 @@ class Store:
         self._db.executescript(SCHEMA)
         self._migrate()
         self.knowledge = Knowledge(self)
+        self.dreaming = Dreaming(self)
 
     def _migrate(self):
         """Bring WorkItems written by an older factory-mcp up to the contract. Safe to re-run."""
