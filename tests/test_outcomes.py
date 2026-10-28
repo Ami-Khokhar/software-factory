@@ -52,6 +52,8 @@ class OutcomesTest(unittest.TestCase):
         self.assertEqual(second["direction"], "not_observed_better")
         latest = self.store.knowledge.search(self.config, {"repo": "o/r", "id": first["memoryId"]})["memories"][0]
         self.assertEqual(latest["status"], "contradicted")
+        self.assertEqual(self.store.knowledge.search(self.config, {
+            "repo": "o/r", "id": first["memoryId"], "approvedOnly": True})["memories"], [])
         old = self.store.knowledge.search(self.config, {"repo": "o/r", "id": first["memoryId"], "version": 1})["memories"][0]
         self.assertEqual(old["status"], "approved")
 

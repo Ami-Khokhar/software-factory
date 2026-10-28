@@ -59,8 +59,22 @@ class KnowledgeTest(unittest.TestCase):
         self.assertTrue(self.agent["factory_memory_search"].listing()["annotations"]["readOnlyHint"])
 
     def test_token_cost_preferences_are_not_mistaken_for_credentials(self):
-        node = self.put(text="Prefer efficient token use and lower token costs", status="approved")
-        self.assertEqual(self.search(query="token costs", approvedOnly=True), [node])
+        for index, content in enumerate(("Prefer efficient token use and lower token costs",
+                "Store the token in the keychain, never in the repo", "Keep secrets out of logs",
+                "Rotate the password before the release", "FACTORY_WALL_MS=1200000 fixed the timeout")):
+            node = self.put(key=f"safe-{index}", text=content, status="approved")
+            self.assertEqual(self.search(id=node["id"], approvedOnly=True), [node])
+
+    def test_a_valid_kind_change_is_refused_without_changing_the_record(self):
+        first = self.put()
+        with self.assertRaisesRegex(ToolError, "kind cannot change"):
+            self.put(version=1, kind="learning")
+        self.assertEqual(self.search(id=first["id"]), [first])
+
+    def test_preferences_precede_other_matching_knowledge(self):
+        decision = self.put(key="diagram-choice", kind="decision", text="Use diagrams")
+        preference = self.put(key="visual-style", text="Use diagrams")
+        self.assertEqual(self.search(query="diagrams"), [preference, decision])
 
     def test_project_read_cannot_see_sibling_memory_or_links(self):
         shared = self.put()

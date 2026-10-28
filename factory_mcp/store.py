@@ -19,6 +19,14 @@ from .dreaming import Dreaming
 from .improvements import SCHEMA as IMPROVEMENT_SCHEMA
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS memory_nodes (
+ id TEXT PRIMARY KEY, repo TEXT NOT NULL, project TEXT NOT NULL,
+ version INTEGER NOT NULL, doc TEXT NOT NULL, search TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS memory_scope ON memory_nodes(repo, project);
+CREATE TABLE IF NOT EXISTS memory_versions (
+ id TEXT NOT NULL, version INTEGER NOT NULL, doc TEXT NOT NULL,
+ PRIMARY KEY(id, version));
+
 CREATE TABLE IF NOT EXISTS workitems (
   id TEXT PRIMARY KEY,
   state_version INTEGER NOT NULL,

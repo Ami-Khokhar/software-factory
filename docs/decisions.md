@@ -2905,3 +2905,14 @@ Demote measured advice when relevant tracked files change or comparisons cannot 
 **Consequence.** Workers can retrieve measured knowledge with provenance and versions. Counts are
 labeled owner-reported and temporal exposure is not causal attribution. General semantic retrieval,
 complete trace retention and arbitrary graph dependency invalidation remain outside this first version.
+
+## ADR-0122 — Store owns context table initialization
+
+**Context.** The graph helper created its own tables, apart from the Store schema and migration
+path. Memory-ID reads also entered the audit as if their ID named a WorkItem.
+
+**Decision.** Initialize graph tables through Store's idempotent schema script. Keep context-ID
+tool calls in the global audit and continue omitting memory text/source from write arguments.
+
+**Consequence.** Existing graph rows and version history remain unchanged; future table upgrades
+belong to Store's migration path. Owner/agent memory reads remain visible in the global tool trail.

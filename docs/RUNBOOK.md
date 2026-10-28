@@ -957,7 +957,7 @@ deployment record stays where it was. Set the list by hand, then run `factory up
 again, which verifies it by readback and discovery:
 
 ```bash
-hermes -p day-desk config set mcp_servers.factory.tools.include '["factory_bootstrap_repo", "factory_add_repo", "factory_approve_lesson", "factory_retire_lesson", "factory_approve_plan_allowance", "factory_authorize_setup_merge", "factory_revoke_setup_merge"]'
+hermes -p day-desk config set mcp_servers.factory.tools.include '["factory_bootstrap_repo", "factory_add_repo", "factory_approve_lesson", "factory_retire_lesson", "factory_memory_put", "factory_dream_run", "factory_improvement_validate", "factory_approve_plan_allowance", "factory_authorize_setup_merge", "factory_revoke_setup_merge"]'
 ```
 
 Keep the driving identity out of it: never add the approval tool, or any owner tool,

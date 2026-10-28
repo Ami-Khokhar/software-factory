@@ -65,6 +65,20 @@ class McpServerTest(unittest.TestCase):
         refused = self.rpc("tools/call", {"name": "factory_memory_put", "arguments": args}, token=AGENT)
         self.assertIn("error", refused)
 
+    def test_memory_id_lookups_remain_in_the_global_tool_audit(self):
+        args = {"repo": "o/r", "key": "presentation", "kind": "preference",
+                "text": "Use concise diagrams", "source": "owner:message-1"}
+        made = self.rpc("tools/call", {"name": "factory_memory_put", "arguments": args})
+        node = json.loads(made["result"]["content"][0]["text"])
+        result = self.rpc("tools/call", {"name": "factory_memory_search",
+                         "arguments": {"repo": "o/r", "id": node["id"]}}, token=AGENT)
+        self.assertFalse(result["result"]["isError"])
+        calls = [row for row in self.store.global_history()
+                 if row["action"] == "tool:factory_memory_search"]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["detail"]["args"]["id"], node["id"])
+        self.assertEqual(self.store.history(node["id"]), [])
+
     def test_handshake(self):
         result = self.rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                                          "clientInfo": {"name": "hermes", "version": "1"}})["result"]

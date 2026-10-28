@@ -143,7 +143,7 @@ def make_server(config, store, github=None, relay=None):
             if name == "factory_queue_retry" and isinstance(saved.get("evidence"), str):
                 saved["evidence"] = diagnostics.sanitize(saved["evidence"])
             store.log(f"tool:{name}", {"args": saved, "ok": ok, "caller": caller},
-                      workitem_id=args.get("id"))
+                      workitem_id=None if name.startswith("factory_memory_") else args.get("id"))
         return write
     server.audit = {caller: audit(caller) for caller in server.tools}
     return server
