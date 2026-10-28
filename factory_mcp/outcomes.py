@@ -110,7 +110,7 @@ def report(store, config, args):
             for h in histories[wid][first + 1:]) for wid, first in seen.items())
         row["effect"] = (row.get("validation") or {}).get("direction", "unknown")
     return {"improvements": rows, "limit": 100,
-            "note": "Failures after exposure are not proof of same-cause recurrence; zero exposure proves no improvement."}
+            "note": "Failures after exposure are not proof of same-cause recurrence; zero exposure leaves improvement unknown."}
 
 
 def validate(foreman, args, at):
