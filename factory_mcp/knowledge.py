@@ -3,13 +3,14 @@ import hashlib
 import json
 import re
 
-from .diagnostics import sanitize
 from .mcp import Tool, ToolError
 
 KINDS = ("preference", "decision", "learning", "blocker", "fix", "evidence")
 STATES = ("candidate", "approved", "contradicted", "retired")
 SECRET = re.compile(r"sk-[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}"
                     r"|-----BEGIN [A-Z ]*PRIVATE KEY-----|https?://[^/\s:]+:[^/\s@]+@")
+CREDENTIAL = re.compile(r"(?i)\b(?:[a-z0-9_]*(?:api[_-]?key|token|password|passwd|passphrase|secret|credential))"
+                        r"\s*[=:]\s*(?!<redacted>)\S+|\bBearer\s+(?!<redacted>)\S+")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS memory_nodes (
  id TEXT PRIMARY KEY, repo TEXT NOT NULL, project TEXT NOT NULL,
@@ -51,7 +52,7 @@ def tools(store, config, clock):
 def text(value, name, limit):
     if not isinstance(value, str) or not value.strip() or len(value) > limit:
         raise ToolError(f"{name} needs 1..{limit} characters")
-    if SECRET.search(value) or sanitize(value, limit) != " ".join(value.split()):
+    if SECRET.search(value) or CREDENTIAL.search(value):
         raise ToolError(f"{name} contains credential-like text; remove it before storing")
     return " ".join(value.split())
 

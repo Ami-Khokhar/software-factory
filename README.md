@@ -24,6 +24,9 @@ Read historical evidence with `factory call factory_memory_events '{"repo":"owne
 The read-only tool returns bounded audit events and snapshot cursors; see the
 [memory evidence contract](docs/contracts.md#memory-evidence-feed).
 
+Memory, preference records and seven-day-gated dreaming are described in the
+[memory guide](docs/MEMORY.md). Reflection and automatic repair require explicit configuration.
+
 ## Run factory-mcp
 
 ```bash

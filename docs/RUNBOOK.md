@@ -1013,3 +1013,17 @@ still belong to the factory's budget policy; dreaming grants no additional retri
 Check publication_pending and admission_reserved records after network failures. A create that
 might have succeeded is searched by marker on later calls and is not blindly repeated. Resolve
 an uncertain intent after checking GitHub, rather than deleting state to force another create.
+
+### Measure and revalidate repairs
+
+Use `factory call factory_improvement_status '{"repo":"owner/repo"}'` to inspect progress.
+A merge becomes a factual fix node on the next nightly call, even during the reflection cooldown.
+After deploying and measuring relevant work, call factory_improvement_validate with repo,
+fingerprint, full deployed revision, source, baselineOpportunities/baselineRecurrences,
+opportunities/recurrences and the previous version (0 for creation). The tool records your
+attestation; it does not run commands or certify that the deployment includes the fix.
+No opportunities means no improvement claim. Keep measurement sources private where appropriate.
+Relevant tracked code changes mark advice for revalidation on nightly maintenance. The report and
+maintenance window covers the latest 100 repairs per repo; review older records explicitly when
+operating beyond that window. All cooldown and admission coordination assumes one shared factory
+SQLite database; independent database copies are independent factories, not an HA coordinator.

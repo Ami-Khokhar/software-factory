@@ -90,6 +90,13 @@ def publish(foreman, run):
             row = store._db.execute("SELECT doc FROM dream_issues WHERE fingerprint=?", (fingerprint,)).fetchone()
         record = json.loads(row[0]) if row else None
         if record and record.get("issueNumber"):
+            if record.get("status") == "admission_reserved":
+                existing = store.get(f"{repo}#{record['issueNumber']}")
+                if existing is None:
+                    pending = True
+                else:
+                    record["status"] = "admitted"
+                    save(store, fingerprint, repo, record)
             published.append(record)
             continue
         if repo not in cache:
@@ -119,7 +126,8 @@ def publish(foreman, run):
         if not config.trusts(repo, (issue.get("user") or {}).get("login")):
             raise ToolError("improvement issue author is not trusted")
         record = {"repo": repo, "fingerprint": fingerprint, "issueNumber": issue["number"],
-                  "runId": run["id"], "memoryId": candidate["memoryId"], "status": "proposed"}
+                  "runId": run["id"], "memoryId": candidate["memoryId"], "status": "proposed",
+                  "paths": candidate["paths"]}
         reason = automatic_reason(foreman, candidate, issue, expected, run)
         wid = f"{repo}#{issue['number']}"
         if reason is None and reserve_admission(store, run["id"], wid):
@@ -140,6 +148,8 @@ def publish(foreman, run):
 
 
 def run(foreman, at):
+    from .outcomes import refresh
+    refresh(foreman, at)
     latest = foreman.store.dreaming.latest()
     if latest and latest["status"] in ("planned", "publishing"):
         return publish(foreman, latest)

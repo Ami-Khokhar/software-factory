@@ -58,6 +58,10 @@ class KnowledgeTest(unittest.TestCase):
         self.assertFalse(self.owner["factory_memory_put"].listing()["annotations"]["readOnlyHint"])
         self.assertTrue(self.agent["factory_memory_search"].listing()["annotations"]["readOnlyHint"])
 
+    def test_token_cost_preferences_are_not_mistaken_for_credentials(self):
+        node = self.put(text="Prefer efficient token use and lower token costs", status="approved")
+        self.assertEqual(self.search(query="token costs", approvedOnly=True), [node])
+
     def test_project_read_cannot_see_sibling_memory_or_links(self):
         shared = self.put()
         one = self.put(projectId="project-one", links=[{"id": shared["id"], "relation": "uses"}])

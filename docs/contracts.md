@@ -610,3 +610,24 @@ commands, edited/closed issues, untrusted authors and descendants of failed impr
 automatically admitted. Eligible work passes through approve_issue and normal worker/gate budgets;
 dreaming never merges code or replenishes exhausted budgets. Ambiguous admission stays reserved.
 An exact related gate follow-up is reused without editing its body and needs owner review.
+
+## Improvement outcomes (ADR-0121)
+
+`factory_improvement_status` is a read tool for one enabled repo, bounded to its latest 100
+publication records. It separates WorkItem implementation state from runtime effect. It reports
+worker passes, failed passes, submitted/read memory exposure and failures later in the same audit
+sequence. Exposure is not proof the agent used advice, and a later failure is not necessarily
+same-cause recurrence. A quiet period or zero exposure leaves effect unknown.
+
+Nightly maintenance links merged repairs to graph fix records, preserving that deployment and
+runtime effects remain unverified. Owner-only `factory_improvement_validate` attaches a full
+reported deployed revision, source, baseline opportunity/recurrence counts and after counts.
+Both denominators must be positive. It produces a versioned learning and labels its origin
+owner_reported; this tool does not execute acceptance commands or prove deployment ancestry.
+A later measurement can contradict the prior claim; history remains. Pass version for updates.
+
+For tracked measured repairs, nightly maintenance checks relevant target paths against the
+current default-branch comparison. Changed/renamed paths, a comparison at GitHub's file cap,
+missing path metadata or unavailable comparison require revalidation and demote approved measured
+advice to candidate. Merge facts remain facts. Checks are bounded to the status window and are
+conservative; this is not a general dependency analyzer for all graph records.
