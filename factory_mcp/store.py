@@ -328,6 +328,23 @@ class Store:
                              (now(), request_id))
         return stored
 
+    def memory_events(self, repo, actions, after, through, limit):
+        """Read bounded evidence with a repo-local high-water mark under one lock."""
+        scope = "FROM audit a JOIN workitems w ON w.id = a.workitem_id " \
+                "WHERE json_extract(w.doc, '$.repo') = ? COLLATE NOCASE " \
+                "AND a.action IN (" + ",".join("?" for _ in actions) + ")"
+        params = (repo, *actions)
+        with self._lock:
+            if through is None:
+                through = max(after, self._db.execute("SELECT COALESCE(MAX(a.seq), 0) " + scope,
+                                                      params).fetchone()[0])
+            rows = self._db.execute(
+                "SELECT a.seq, a.at, a.action, a.workitem_id, a.detail " + scope
+                + " AND a.seq > ? AND a.seq <= ? ORDER BY a.seq LIMIT ?",
+                (*params, after, through, limit)).fetchall()
+        return ([{"seq": seq, "at": at, "action": action, "workItemId": wid,
+                  "detail": json.loads(detail)} for seq, at, action, wid, detail in rows], through)
+
     def log(self, action, detail, workitem_id=None):
         with self._lock:
             self._db.execute("INSERT INTO audit (at, workitem_id, action, detail) VALUES (?, ?, ?, ?)",

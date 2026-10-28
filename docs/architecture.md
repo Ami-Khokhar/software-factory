@@ -4,6 +4,14 @@ For anyone changing this repo. Running the factory is in [RUNBOOK.md](RUNBOOK.md
 documents the parts exchange are in [contracts.md](contracts.md), and the reasons behind the design
 are in [decisions.md](decisions.md).
 
+## Read evidence for memory
+
+`factory_memory_events` pages selected durable audit events for one enabled repo. Day Desk can
+use the read-only tool to inspect previous failures and accepted commits without receiving raw
+tool arguments or full transcripts. Snapshot sequence cursors let a caller finish a bounded read
+while new work continues. The contract is in `contracts.md`; `memory.py` selects and sanitizes
+the evidence and `Store.memory_events` enforces repository filtering in its query.
+
 ## Components
 
 ```

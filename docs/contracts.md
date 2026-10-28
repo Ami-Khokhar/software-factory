@@ -9,6 +9,26 @@ or state is in a schema only if the factory writes it and something acts on it.
 
 See also: [`architecture.md`](architecture.md) · [`decisions.md`](decisions.md).
 
+## Memory evidence feed
+
+`factory_memory_events` is a read tool on both owner and driving tokens. It requires an enabled
+`repo`, accepts `after` (audit sequence, default 0), `limit` (1–100, default 50) and optional
+`through` (snapshot boundary, at least `after`). Unknown arguments and invalid types are refused
+by the handler, not only its schema. It changes no WorkItem and invokes no model.
+
+The response is `{repo, events, through, nextCursor, hasMore}`. Each event carries `seq`, `at`,
+`action`, `workItemId` and selected `detail` fields. Pass `nextCursor` as `after` and reuse
+`through` until `hasMore` is false; then omit `through` to collect new evidence. Sequences survive
+restart but belong to this SQLite database; they are not portable through store loss/rebuild.
+
+Events include dispatches, failed attempts, accepted Results, reconciliations, human resolutions
+and question/answer events already in the audit. They are joined to existing WorkItems in the
+requested repo. Global events, other repos and tool-argument records are excluded. Nested payloads
+and arbitrary keys are omitted; selected strings use diagnostic redaction and a 300-character cap.
+This is bounded internal evidence, not full transcripts, full findings or a guarantee that every
+kind of private text is removed. Question/answer events currently identify the question, not its
+full text. No memory graph, learned preferences or scheduled dreaming is enabled by this tool.
+
 ## Worker health operations
 
 `factory_check_worker` accepts only a registered worker id and the caller name. It reads the relay

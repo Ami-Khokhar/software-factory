@@ -20,6 +20,10 @@ decisions are in [`docs/decisions.md`](docs/decisions.md).
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
+Read historical evidence with `factory call factory_memory_events '{"repo":"owner/repo","limit":50}'`.
+The read-only tool returns bounded audit events and snapshot cursors; see the
+[memory evidence contract](docs/contracts.md#memory-evidence-feed).
+
 ## Run factory-mcp
 
 ```bash

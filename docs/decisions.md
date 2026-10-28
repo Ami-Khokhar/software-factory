@@ -2808,3 +2808,19 @@ instead of waiting forever; only `mergeable: false` moves it, so a tick never re
 GitHub computes or while a redo pass runs. The budget, the passes-per-repo cap, the recovery
 barriers and the lease all apply exactly as they do to a conflict on a PR waiting for its first
 verdict.
+
+## ADR-0115 — Memory starts with scoped durable evidence
+
+**Context.** The weekly report summarizes selected outcomes; it is not a complete, resumable
+source for memory or dreaming. Returning raw audits would expose tool arguments and unbounded
+payloads, and offset pagination would make it difficult to finish a snapshot as work continues.
+
+**Decision.** Add `factory_memory_events` as an owner/agent read tool. Query selected audit actions
+joined to WorkItems in one enabled repo. Use the durable audit sequence for pagination and a
+repo-local snapshot boundary. Project selected scalar fields only, using the existing diagnostic
+redaction and length bound. Reuse existing SQLite audit storage; no new schema or model is needed.
+
+**Consequence.** Clients can consume a bounded snapshot across restarts and then request newer
+records. The tool is not a full trace archive or a public-data sanitization guarantee. Store loss
+invalidates its cursors. Graph records, preferences, worker retrieval and seven-day dreaming remain
+separate changes; adding this evidence reader alone starts no autonomous improvement work.
