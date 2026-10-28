@@ -97,6 +97,11 @@ class GitHub:
     def issue(self, repo, number):
         return self._request("GET", f"{self.api}/repos/{repo}/issues/{number}")[0]
 
+    def all_issues(self, repo):
+        """Include closed issues when adopting durable improvement identities."""
+        return [issue for issue in self._get_all(f"/repos/{repo}/issues", state="all")
+                if "pull_request" not in issue]
+
     def labelled_issues(self, repo, label):
         return [i for i in self._get_all(f"/repos/{repo}/issues", labels=label, state="open")
                 if "pull_request" not in i]
