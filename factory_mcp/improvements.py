@@ -5,12 +5,6 @@ import json
 from . import dream_model
 from .mcp import ToolError
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS dream_issues (
- fingerprint TEXT PRIMARY KEY, repo TEXT NOT NULL, doc TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS dream_admissions (
- run_id TEXT PRIMARY KEY, workitem_id TEXT NOT NULL);
-"""
 
 
 def body(candidate, run):

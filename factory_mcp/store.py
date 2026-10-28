@@ -16,9 +16,13 @@ from pathlib import Path
 
 from .knowledge import Knowledge
 from .dreaming import Dreaming
-from .improvements import SCHEMA as IMPROVEMENT_SCHEMA
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS dream_issues (
+ fingerprint TEXT PRIMARY KEY, repo TEXT NOT NULL, doc TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS dream_admissions (
+ run_id TEXT PRIMARY KEY, workitem_id TEXT NOT NULL);
+
 CREATE TABLE IF NOT EXISTS workitems (
   id TEXT PRIMARY KEY,
   state_version INTEGER NOT NULL,
@@ -212,7 +216,6 @@ class Store:
         self._migrate()
         self.knowledge = Knowledge(self)
         self.dreaming = Dreaming(self)
-        self._db.executescript(IMPROVEMENT_SCHEMA)
 
     def _migrate(self):
         """Bring WorkItems written by an older factory-mcp up to the contract. Safe to re-run."""
