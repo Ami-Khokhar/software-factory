@@ -18,6 +18,11 @@ from .knowledge import Knowledge
 from .dreaming import Dreaming
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS dream_runs (
+ id TEXT PRIMARY KEY, started REAL NOT NULL, eligible REAL NOT NULL,
+ status TEXT NOT NULL, doc TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS dream_cursors (repo TEXT PRIMARY KEY, seq INTEGER NOT NULL);
+
 CREATE TABLE IF NOT EXISTS workitems (
   id TEXT PRIMARY KEY,
   state_version INTEGER NOT NULL,

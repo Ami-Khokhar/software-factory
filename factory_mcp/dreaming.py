@@ -7,18 +7,11 @@ from . import memory
 from .mcp import ToolError
 
 COOLDOWN = timedelta(days=7)
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS dream_runs (
- id TEXT PRIMARY KEY, started REAL NOT NULL, eligible REAL NOT NULL,
- status TEXT NOT NULL, doc TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS dream_cursors (repo TEXT PRIMARY KEY, seq INTEGER NOT NULL);
-"""
 
 
 class Dreaming:
     def __init__(self, store):
         self.store = store
-        store._db.executescript(SCHEMA)
 
     def latest(self):
         with self.store._lock:
