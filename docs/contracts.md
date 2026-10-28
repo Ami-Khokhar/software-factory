@@ -525,3 +525,24 @@ An owner retry does not replenish a member's shared Project budget or lifetime c
   removed field does not linger in them.
 - A consumer must reject a document with an unknown `schemaVersion` rather than
   guess.
+
+## Versioned context graph (ADR-0116)
+
+`factory_memory_put` is owner-only. Required fields: `repo`, stable `key`, `kind`, `text`
+(1–1000 characters) and `source` (1–500). Optional `projectId` must name a Project in that repo.
+Kinds: preference, decision, learning, blocker, fix, evidence. Status defaults to `candidate`;
+`approved`, `contradicted` and `retired` are explicit owner decisions. Source records provenance,
+not proof of correctness. Credential-shaped input is refused; this is not exhaustive PII scanning.
+The audit omits memory content/source; the graph itself retains them and needs private storage.
+
+`version` is 0 for creation, or the current version for an update; stale writes fail atomically.
+Identity is derived from repo/project/key. Kind and scope cannot change. Up to 10 `{id, relation}`
+links may point to records in the same project or repo scope; repo records cannot link to private
+project records. Versions and previous sources remain readable after an update.
+
+`factory_memory_search` is available to owner and driving tokens: `repo`, optional `projectId`,
+`query` (up to 200 characters), `limit` (1–20), `approvedOnly`, or `id` and historical `version`.
+Search requires all case-folded words, treats wildcards literally, and prefers preferences.
+Repo-only queries omit project records. Project queries include shared repo records. Follow a
+returned link by ID with the same scope. Empty results do not distinguish hidden from absent IDs.
+These tools store knowledge and provenance; they do not yet inject it into worker prompts.

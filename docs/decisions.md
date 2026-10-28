@@ -2824,3 +2824,16 @@ redaction and length bound. Reuse existing SQLite audit storage; no new schema o
 records. The tool is not a full trace archive or a public-data sanitization guarantee. Store loss
 invalidates its cursors. Graph records, preferences, worker retrieval and seven-day dreaming remain
 separate changes; adding this evidence reader alone starts no autonomous improvement work.
+
+## ADR-0116 — Context records keep scope, provenance and versions
+
+**Context.** Future workers need decisions and preferences without treating inferred model text
+as owner policy. A mutable unscoped note would lose provenance and could leak project context.
+
+**Decision.** Keep context nodes and version history in two additive SQLite tables. The owner
+writes candidate or approved records with sources and optimistic versions; Day Desk may search.
+Links obey the source record's visibility, and memory text never enters the general tool audit.
+
+**Consequence.** No model or external database is needed. Existing store files gain the tables
+on open without changing WorkItem documents. Inferred records remain candidates until explicitly
+approved. Scope checks protect retrieval; callers still must protect the SQLite file and backups.

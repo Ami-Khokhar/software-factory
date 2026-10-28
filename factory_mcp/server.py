@@ -115,6 +115,9 @@ def make_server(config, store, github=None, relay=None):
     def audit(caller):
         def write(name, args, ok):
             saved = dict(args)
+            if name == "factory_memory_put":
+                saved = {key: args[key] for key in ("repo", "projectId", "key", "kind", "status", "version")
+                         if key in args}
             if name == "factory_queue_retry" and isinstance(saved.get("evidence"), str):
                 saved["evidence"] = diagnostics.sanitize(saved["evidence"])
             store.log(f"tool:{name}", {"args": saved, "ok": ok, "caller": caller},
