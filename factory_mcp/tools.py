@@ -1,7 +1,7 @@
 """The factory tools that Day Desk (Hermes) and the factory CLI call. Each one declares its effect."""
 from datetime import datetime, timezone
 
-from . import docker, lessons, metrics, projects, repos, runtime, worker_ops
+from . import docker, lessons, memory, metrics, projects, repos, runtime, worker_ops
 from .foreman import MAX_ALLOWANCE, MAX_PLAN_ISSUES, RECOVERY_ACTIONS, Foreman, agent_may_resolve, lead_may_act
 from .github import GitHubError
 from .mcp import Tool, ToolError
@@ -9,7 +9,7 @@ from .mcp import Tool, ToolError
 # What Day Desk may call when it drives the factory with FACTORY_AGENT_TOKEN (ADR-0030). Setting up
 # a repo, its gate secrets, and the lessons workers read stay with the owner's token.
 AGENT_TOOLS = frozenset({"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons",
-                         "factory_report", "factory_check_worker", "factory_reload_workers",
+                         "factory_report", "factory_memory_events", "factory_check_worker", "factory_reload_workers",
                          "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
                          "factory_start_project",
                          "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
@@ -625,6 +625,16 @@ def build(store, foreman, agent=False):
                              "by": {"type": "string", "minLength": 1}}},
              "write", lambda args: {"workItem": foreman.use_allowance(
                  args["id"], args["planId"], args["action"], args["note"], args["by"])}),
+        Tool("factory_memory_events",
+             "Read bounded, sanitized audit evidence for an enabled repo. Reuse through with "
+             "nextCursor as after to finish a stable snapshot. No model calls or issue creation. "
+             "This is selected evidence, not full transcripts or a privacy guarantee for raw text.",
+             {"type": "object", "required": ["repo"], "additionalProperties": False,
+              "properties": {"repo": {"type": "string"},
+                             "after": {"type": "integer", "minimum": 0},
+                             "through": {"type": "integer", "minimum": 0},
+                             "limit": {"type": "integer", "minimum": 1, "maximum": 100}}},
+             "read", lambda args: memory.events(store, foreman.config, args)),
         Tool("factory_lessons",
              "Show what the factory learned about one repo: the blocking gate findings that "
              "recurred on two or more WorkItems (candidates), and the lessons the owner approved "

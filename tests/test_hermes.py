@@ -39,6 +39,7 @@ class ProfileTest(unittest.TestCase):
             self.assertFalse(listing["inputSchema"]["additionalProperties"])
         self.assertTrue(driving["factory_runtime_status"].listing()["annotations"]["readOnlyHint"])
         self.assertTrue(driving["factory_project_status"].listing()["annotations"]["readOnlyHint"])
+        self.assertTrue(driving["factory_memory_events"].listing()["annotations"]["readOnlyHint"])
         real = set(tools.build(None, None))
         owner_only = {"factory_extend_project", "factory_stop_project"}
         self.assertTrue(owner_only <= real - set(driving))
