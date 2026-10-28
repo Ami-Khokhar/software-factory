@@ -105,6 +105,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/setup_merge.py` | The owner-authorized merge of a repo's one canonical setup PR, digest-checked, fail-closed, journalled by request ID, with readback and readiness (ADR-0074) |
 | `factory_mcp/gate_secrets.py` | A repo's gate Actions secrets, set from the owner's Keychain through `gh` (ADR-0022) |
 | `factory_mcp/lessons.py` | Lesson candidates from the audit log, and `lessons.json` (ADR-0020) |
+| `factory_mcp/dream_model.py` | One bounded reflection request, validated source references and candidate graph records (ADR-0119) |
 | `factory_mcp/jev_rank.py` | The opt-in Jev call that ranks a repo's lessons for one dispatch, with its fallbacks (ADR-0058) |
 | `factory_mcp/routing.py` | Which worker takes the next attempt: locality first, then one that has not failed |
 | `factory_mcp/metrics.py` | The escalation text, the autonomy rate, whether each lesson works, and the weekly report's numbers |
