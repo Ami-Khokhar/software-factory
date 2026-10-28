@@ -14,6 +14,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .knowledge import Knowledge
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS workitems (
   id TEXT PRIMARY KEY,
@@ -206,6 +208,7 @@ class Store:
         self._db.execute("PRAGMA synchronous = FULL")
         self._db.executescript(SCHEMA)
         self._migrate()
+        self.knowledge = Knowledge(self)
 
     def _migrate(self):
         """Bring WorkItems written by an older factory-mcp up to the contract. Safe to re-run."""

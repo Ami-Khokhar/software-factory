@@ -97,6 +97,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/diagnostics.py` | What a failed attempt means, read from the Result's optional diagnostics (ADR-0050): one evidence-backed cause, or an unknown one, with sanitized bounded context. The next WorkOrder carries the latest attempt and, when that one is not actionable, the last failing-test finding an intervening timeout would otherwise bury — read from the durable attempt records, so it survives the person's retry (ADR-0078) |
 | `factory_mcp/verdict.py` | Reading the gate's verdict marker; finding fingerprints and blockers |
 | `factory_mcp/store.py` | SQLite: WorkItems with optimistic concurrency, WorkOrders, the durable request journal, pause barriers holding a recovery graph until released, the audit log, leases, migrations |
+| `factory_mcp/knowledge.py` | Versioned repo/project context, provenance links and scoped keyword retrieval (ADR-0116) |
 | `factory_mcp/projects.py` | What the Lead's Project fields must hold to store one (ADR-0099): the budget, blueprint and doneWhen limits, and the first limit a field set breaks |
 | `factory_mcp/github.py` | The GitHub REST client |
 | `factory_mcp/relay.py` | The agent-relay task client, and where it finds the relay's token |
@@ -322,3 +323,8 @@ for a decision `factory_resolve_human` makes, Day Desk's once per incident or th
 - **Autonomy rate**: of the WorkItems that ended, the share that merged with no human state, no
   commit other than a worker's or the gate's merge of the base branch (ADR-0039), and a MERGE
   verdict on the merged head (`metrics.autonomy`). It is the project's measure of success.
+
+`knowledge.py` keeps scoped graph nodes, links and immutable version history in the factory's
+SQLite file. Owner-only writes and read-only `factory_memory_search` expose the graph through
+MCP; Day Desk's owner tool profile includes the writer. Neither graph storage nor search changes
+worker dispatch or starts dreaming. See the versioned context contract in `contracts.md`.

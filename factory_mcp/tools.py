@@ -1,7 +1,8 @@
 """The factory tools that Day Desk (Hermes) and the factory CLI call. Each one declares its effect."""
 from datetime import datetime, timezone
 
-from . import docker, lessons, memory, metrics, projects, repos, runtime, worker_ops
+from . import docker, knowledge, lessons, memory, metrics, projects, repos, runtime, worker_ops
+from .store import now
 from .foreman import MAX_ALLOWANCE, MAX_PLAN_ISSUES, RECOVERY_ACTIONS, Foreman, agent_may_resolve, lead_may_act
 from .github import GitHubError
 from .mcp import Tool, ToolError
@@ -9,7 +10,8 @@ from .mcp import Tool, ToolError
 # What Day Desk may call when it drives the factory with FACTORY_AGENT_TOKEN (ADR-0030). Setting up
 # a repo, its gate secrets, and the lessons workers read stay with the owner's token.
 AGENT_TOOLS = frozenset({"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons",
-                         "factory_report", "factory_memory_events", "factory_check_worker", "factory_reload_workers",
+                         "factory_report", "factory_memory_events", "factory_memory_search",
+                         "factory_check_worker", "factory_reload_workers",
                          "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
                          "factory_start_project",
                          "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
@@ -676,5 +678,6 @@ def build(store, foreman, agent=False):
                              "by": {"type": "string", "minLength": 1, "description": "who retired it"}}},
              "write", lambda args: foreman.retire_lesson(args["repo"], args["fingerprint"], args["by"])),
     ]
+    tools.extend(knowledge.tools(store, foreman.config if foreman else None, now))
     runtime_schemas.extend(tool.listing() for tool in tools if not agent or tool.name in AGENT_TOOLS)
     return {tool.name: tool for tool in tools if not agent or tool.name in AGENT_TOOLS}
