@@ -68,7 +68,27 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(500, {"error": f"{type(exc).__name__}: {exc}"})
         self._send(200, reply)
 
+    def _worker_memory(self):
+        try:
+            length = int(self.headers.get("content-length") or 0)
+            if not 0 <= length <= 8192:
+                self.close_connection = True
+                return self._send(413, {"error": "body_too_large"})
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(body, dict):
+                raise ValueError("body must be an object")
+        except (ValueError, TypeError):
+            return self._send(400, {"error": "bad_request"})
+        token = body.pop("token", "")
+        try:
+            result = self.server.foreman.worker_memory(token, body)
+        except mcp.ToolError as exc:
+            return self._send(403, {"error": str(exc)})
+        self._send(200, result)
+
     def do_POST(self):
+        if self.path.split("?")[0] == "/worker/memory":
+            return self._worker_memory()
         if self.path.split("?")[0] == "/worker/ask":
             return self._worker_ask()
         if self.path.split("?")[0] != "/mcp":

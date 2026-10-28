@@ -154,3 +154,24 @@ class Knowledge:
         with self.store._lock:
             rows = self.store._db.execute(sql, (*params, limit + 1)).fetchall()
         return {"memories": [json.loads(row[0]) for row in rows[:limit]], "hasMore": len(rows) > limit}
+
+    def packet(self, config, wi):
+        """A small approved packet, ranked by task words; no embedding or model call."""
+        project = self.store.project(wi["projectId"]) if wi.get("projectId") else None
+        scope = {"repo": wi["repo"], "projectId": project["id"] if project else "", "approvedOnly": True}
+        words = list(dict.fromkeys(re.findall(r"[\w-]{4,}", wi["goal"].casefold())))[:6]
+        found = {doc["id"]: doc for doc in self.search(config, {**scope, "limit": 20})["memories"]}
+        for word in words:
+            found.update({doc["id"]: doc for doc in self.search(config, {**scope, "query": word})["memories"]})
+        ranked = sorted(found.values(), key=lambda doc: (
+            doc["kind"] != "preference", -sum(w in doc["text"].casefold() for w in words), doc["id"]))
+        selected, used = [], 0
+        for doc in ranked:
+            if doc["kind"] != "preference" and not any(w in doc["text"].casefold() for w in words):
+                continue
+            row = {key: doc[key] for key in ("id", "version", "kind", "text", "source")}
+            size = len(json.dumps(row))
+            if used + size <= 4000 and len(selected) < 6:
+                selected.append(row)
+                used += size
+        return selected

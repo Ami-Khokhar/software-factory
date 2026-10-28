@@ -975,3 +975,12 @@ readiness and never retries an issue. `{"action":"stop"}` refuses queued/running
 factory work and any running container. Ask to stop Docker explicitly. Stop other
 apps and finish Day Desk's terminal session first. The host process needs `docker`
 and `orb` on PATH. No Docker socket is mounted into the sandbox.
+
+### Worker memory
+
+After deploying the memory reader, rebuild the worker image with the normal pinned worker build
+(`docker build -t factory-worker:latest worker/`) and verify that `factory-memory --help` succeeds
+inside it. Restart factory-mcp for the new route. The worker's existing pass environment supplies
+the capability; do not copy owner tokens into the image. From a running pass, search with
+`factory-memory 'previous timeout'` and follow a record with `factory-memory --id ID`.
+The command makes no model call; network/model and actual image deployment remain separate checks.

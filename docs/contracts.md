@@ -546,3 +546,22 @@ Search requires all case-folded words, treats wildcards literally, and prefers p
 Repo-only queries omit project records. Project queries include shared repo records. Follow a
 returned link by ID with the same scope. Empty results do not distinguish hidden from absent IDs.
 These tools store knowledge and provenance; they do not yet inject it into worker prompts.
+
+## Worker memory retrieval (ADR-0117)
+
+New WorkOrders may carry `memory`: up to six approved `{id, version, kind, text, source}`
+records, with at most 4000 characters across encoded records. Retrieval uses repo/project scope,
+preferences and task-word matches; it makes no model call. Stored WorkOrders preserve what the
+worker received even when the current memory changes. Old WorkOrders omit this optional field.
+
+`POST /worker/memory` accepts the live pass token plus `query`, `id` and `limit` only. The server
+selects the pass's repo/project; a worker cannot choose another scope or historical version.
+Candidate, retired and contradicted records remain labeled as such when explicitly searched;
+they are data, not permission. Reads log returned memory IDs/versions, not query text or content.
+A completed pass loses access. This extends the per-pass capability beyond the ask route to
+scoped context reads; it still grants no owner tools or writes.
+
+The image's `factory-memory 'query words'` and `factory-memory --id ID` use the same environment
+capability as factory-ask. Failed retrieval is explicit and exits nonzero; it does not invent
+context or block the worker from using its original WorkOrder. Rebuild the worker image to
+install this command; updating factory-mcp alone does not update running worker images.

@@ -2837,3 +2837,16 @@ Links obey the source record's visibility, and memory text never enters the gene
 **Consequence.** No model or external database is needed. Existing store files gain the tables
 on open without changing WorkItem documents. Inferred records remain candidates until explicitly
 approved. Scope checks protect retrieval; callers still must protect the SQLite file and backups.
+
+## ADR-0117 — Workers retrieve context with their pass capability
+
+**Context.** A bounded prompt cannot contain all knowledge. Giving workers the owner's MCP token
+would let a coding pass change factory policy or see unrelated project context.
+
+**Decision.** Persist a small approved context snapshot in each new WorkOrder. Add an HTTP reader
+that derives scope from the existing live pass capability, and ship factory-memory in the worker
+image. The reader logs record IDs/versions for exposure tracking and accepts no scope override.
+
+**Consequence.** Any harness in the image can search without a vendor-specific integration.
+Search may return labeled hypotheses; only approved records enter the initial packet. The normal
+worker rules and acceptance outrank retrieved memory. No WorkItem migration is needed.
