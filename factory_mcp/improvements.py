@@ -30,10 +30,18 @@ def body(candidate, run):
     return "\n".join(lines)
 
 
-def save(store, fingerprint, repo, doc):
-    with store._lock:
+def save(store, fingerprint, repo, doc, expected_validation=None):
+    with store._lock, store._transaction():
+        row = store._db.execute("SELECT doc FROM dream_issues WHERE fingerprint=?", (fingerprint,)).fetchone()
+        current = json.loads(row[0]) if row else {}
+        if expected_validation is not None and (current.get("validation") or {}).get("version", 0) != expected_validation:
+            raise ToolError("measurement changed during maintenance; retry from current state")
+        merged = {**current, **doc}
+        if current.get("status") == "admitted" and doc.get("status") in ("proposed", "admission_reserved"):
+            merged["status"] = "admitted"
         store._db.execute("INSERT INTO dream_issues VALUES (?,?,?) ON CONFLICT(fingerprint) "
-                          "DO UPDATE SET doc=excluded.doc", (fingerprint, repo, json.dumps(doc)))
+                          "DO UPDATE SET doc=excluded.doc", (fingerprint, repo, json.dumps(merged)))
+    return merged
 
 
 def automatic_reason(foreman, candidate, issue, expected, run):
@@ -136,7 +144,7 @@ def publish(foreman, run):
             record["status"] = "admitted"
         else:
             record["reason"] = reason or "one admission per run; another repair is active or reserved"
-        save(store, fingerprint, repo, record)
+        record = save(store, fingerprint, repo, record)
         published.append(record)
     if not pending:
         with store._lock:

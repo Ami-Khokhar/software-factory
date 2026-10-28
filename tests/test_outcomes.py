@@ -104,3 +104,14 @@ class OutcomesTest(unittest.TestCase):
         current = self.store.knowledge.search(self.config, {"repo": "o/r", "id": measured["memoryId"]})["memories"][0]
         self.assertEqual(current["status"], "candidate")
         self.assertEqual(current["version"], 2)
+        self.assertEqual(self.report()["validation"]["version"], 2)
+
+    def test_publication_updates_preserve_newer_measurements_and_stale_checks_fail(self):
+        self.merged()
+        self.measure()
+        improvements.save(self.store, self.record["fingerprint"], "o/r", {"status": "proposed"})
+        self.assertEqual(self.report()["validation"]["version"], 1)
+        with self.assertRaises(ToolError):
+            improvements.save(self.store, self.record["fingerprint"], "o/r",
+                              {"checkedHead": "old"}, expected_validation=0)
+        self.assertIsNone(self.report().get("checkedHead"))

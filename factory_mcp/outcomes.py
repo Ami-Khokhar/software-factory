@@ -45,10 +45,11 @@ def refresh(foreman, at):
                     "links": [{"id": record["memoryId"], "relation": "addresses"}]}, at.isoformat())
             if record.get("fixMemoryId") != identity:
                 record["fixMemoryId"] = identity
-                save(store, record["fingerprint"], repo, record)
+                save(store, record["fingerprint"], repo, {"fixMemoryId": identity})
             measurement = record.get("validation")
             if not measurement or measurement["direction"] == "needs_revalidation":
                 continue
+            expected_version = measurement["version"]
             try:
                 if repo not in heads:
                     branch = foreman.github.repository(repo)["default_branch"]
@@ -65,12 +66,13 @@ def refresh(foreman, at):
                 current = store.knowledge.search(config, {"repo": repo, "id": measurement["memoryId"]})["memories"]
                 if current and current[0]["status"] == "approved":
                     node = current[0]
-                    store.knowledge.put(config, {key: node[key] for key in (
+                    updated = store.knowledge.put(config, {key: node[key] for key in (
                         "repo", "projectId", "key", "kind", "text", "source", "version", "links")} | {
                             "status": "candidate"}, at.isoformat())
+                    measurement["version"] = updated["version"]
                 measurement["direction"] = "needs_revalidation"
-            record["checkedHead"] = head
-            save(store, record["fingerprint"], repo, record)
+            save(store, record["fingerprint"], repo, {"checkedHead": head, "validation": measurement},
+                 expected_validation=expected_version)
 
 
 def report(store, config, args):
@@ -120,6 +122,7 @@ def validate(foreman, args, at):
     row = next((row for row in rows if row.get("fingerprint") == args["fingerprint"]), None)
     if row is None or phase(foreman.store, row)[0] != "merged":
         raise ToolError("only a known merged improvement can receive deployment evidence")
+    expected_version = (row.get("validation") or {}).get("version", 0)
     revision = args["revision"]
     if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ToolError("revision must be a full deployed commit SHA")
@@ -145,8 +148,8 @@ def validate(foreman, args, at):
     from .improvements import save
     row["validation"] = {**args, "origin": "owner_reported", "direction": direction, "memoryId": node["id"],
                          "version": node["version"], "at": at.isoformat()}
-    row.pop("checkedHead", None)
-    save(foreman.store, row["fingerprint"], row["repo"], row)
+    save(foreman.store, row["fingerprint"], row["repo"], {"validation": row["validation"], "checkedHead": None},
+         expected_validation=expected_version)
     return row["validation"]
 
 
