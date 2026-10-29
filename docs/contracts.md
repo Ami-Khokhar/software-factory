@@ -606,3 +606,19 @@ source IDs. Prior repo context is included only within the input budget. Invalid
 cooldown and unprocessed evidence. A valid plan is saved before later issue publication.
 Question/answer audit events now keep sanitized bounded text before the live question field clears.
 This is selected context, not a transcript archive or exhaustive private-data classification.
+
+## Improvement publication (ADR-0120)
+
+factory_dream_run now publishes a saved plan before starting any new reflection. Each issue has
+acceptance, source issue links, path fences and a deterministic marker. Publication intents are
+saved before GitHub creation. A retry searches all issue states, adopts a trusted matching issue,
+and never blindly repeats an ambiguous create. A marker that never becomes visible leaves
+publication pending for operator diagnosis; no model call is made to retry publication.
+
+FACTORY_DREAM_AUTO_REPOS is a comma-separated opt-in subset of enabled repos. By default all
+improvements remain factory:proposed. At most one repair per run may be admitted automatically,
+with no concurrent automatically admitted repair. Protected/credential paths, complex acceptance
+commands, edited/closed issues, untrusted authors and descendants of failed improvements are not
+automatically admitted. Eligible work passes through approve_issue and normal worker/gate budgets;
+dreaming never merges code or replenishes exhausted budgets. Ambiguous admission stays reserved.
+An exact related gate follow-up is reused without editing its body and needs owner review.

@@ -1012,3 +1012,14 @@ Do not commit the key or pass it as a CLI argument. The endpoint must include it
 path. Without endpoint/model the job skips. Repeated runs inside seven days skip; failures retain
 that cooldown. The reflection step saves a plan and candidate graph nodes; issue publication is
 handled by the next step. Actual provider access and deployment require separate validation.
+
+### Improvement admission
+
+The admission step publishes saved plans as `factory:proposed` issues. Set `FACTORY_DREAM_AUTO_REPOS`
+to an explicit subset of `FACTORY_REPOS` only after validating proposed output and provider access.
+One eligible issue per dream may become `factory:ready` through normal trusted-author admission;
+normal ticks do the implementation and the gate does the merging. Existing fix-round allowances
+still belong to the factory's budget policy; dreaming grants no additional retries.
+Check `publication_pending` and `admission_reserved` records after network failures. A create that
+might have succeeded is searched by marker on later calls and is not blindly repeated. Resolve
+an uncertain intent after checking GitHub, rather than deleting state to force another create.

@@ -109,6 +109,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/lessons.py` | Lesson candidates from the audit log, and `lessons.json` (ADR-0020) |
 | `factory_mcp/dream_model.py` | One bounded reflection request, validated source references and candidate graph records (ADR-0119) |
 | `factory_mcp/jev_rank.py` | The opt-in Jev call that ranks a repo's lessons for one dispatch, with its fallbacks (ADR-0058) |
+| `factory_mcp/improvements.py` | Recover deduplicated dream issue publication and admit one bounded repair through normal factory policy (ADR-0120) |
 | `factory_mcp/routing.py` | Which worker takes the next attempt: locality first, then one that has not failed |
 | `factory_mcp/dreaming.py` | Durable evidence windows, fair repo selection and the seven-day reflection cooldown (ADR-0118) |
 | `factory_mcp/metrics.py` | The escalation text, the autonomy rate, whether each lesson works, and the weekly report's numbers |

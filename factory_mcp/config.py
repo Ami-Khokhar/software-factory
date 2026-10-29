@@ -43,6 +43,7 @@ class Config:
     jev_url: str = jev_rank.HOST  # the System One endpoint; tests point it at a local fake
     dream_url: str = ""  # OpenAI-compatible chat-completions endpoint; empty disables reflection
     dream_model: str = ""
+    dream_auto_repos: frozenset = frozenset()
     dream_api_key: str = field(default="", repr=False)
 
     def listed(self, repo):
@@ -113,6 +114,7 @@ class Config:
         return cls(
             dream_url=env.get("FACTORY_DREAM_URL", ""),
             dream_model=env.get("FACTORY_DREAM_MODEL", ""),
+            dream_auto_repos=frozenset(repo.strip() for repo in env.get("FACTORY_DREAM_AUTO_REPOS", "").split(",") if repo.strip()),
             dream_api_key=env.get("FACTORY_DREAM_API_KEY", ""),
             mcp_token=token,
             repos=repos,

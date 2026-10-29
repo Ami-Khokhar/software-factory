@@ -69,6 +69,9 @@ class FakeGitHub:
             raise GitHubError(404, "Not Found")
         return self.issues[(repo, number)]
 
+    def all_issues(self, repo):
+        return [issue for (r, _), issue in self.issues.items() if r == repo]
+
     def labelled_issues(self, repo, label):
         return [i for (r, _), i in sorted(self.issues.items()) if r == repo and i["state"] == "open"
                 and label in {n["name"] for n in i["labels"]}]

@@ -35,6 +35,8 @@ class Api(BaseHTTPRequestHandler):
                            retry_after="0")
                 return
             body, link = {"number": int(self.path.rsplit("/", 1)[-1])}, ""
+        elif self.path.startswith("/repos/o/r/issues?"):
+            body, link = [{"number": 1, "state": "closed"}, {"number": 2, "pull_request": {}}], ""
         elif self.path.startswith("/repos/o/r/issues/5/comments"):
             page = 2 if "page=2" in self.path else 1
             body, link = ([{"id": page}], f'<{base}/repos/o/r/issues/5/comments?page=2>; rel="next"'
@@ -106,6 +108,11 @@ class GitHubClientTest(unittest.TestCase):
     def tearDown(self):
         self.server.shutdown()
         self.server.server_close()
+
+    def test_adoption_lists_closed_issues_but_excludes_pull_requests(self):
+        self.assertEqual(self.github.all_issues("o/r"), [{"number": 1, "state": "closed"}])
+        self.assertIn("state=all", Api.seen[0][0])
+        self.assertEqual(Api.seen[0][1], "Bearer tok")
 
     def test_paginates_and_authenticates(self):
         self.assertEqual(self.github.comments("o/r", 5), [{"id": 1}, {"id": 2}])

@@ -2881,3 +2881,17 @@ reconcile event, capped at 100 characters each and 300 total; it does not expose
 **Consequence.** The normal factory can later turn a saved plan into work. No live model is used
 until configured. The memory graph can be searched by workers, but inferred preferences never enter
 an approved context packet automatically. New question/answer summaries are durable and redacted.
+
+## ADR-0120 — Improvement publication has identities and bounded admission
+
+**Context.** A lost GitHub response could duplicate issues, and unrestricted self-repair could
+spend model calls recursively or bypass the factory's existing authority boundaries.
+
+**Decision.** Journal an intent per root-cause fingerprint before creating an issue, adopt matching
+trusted issues including closed ones, and leave ambiguous creates pending. Automatic admission
+requires an explicit repo allowlist, one reserved slot per dream run and no active prior repair.
+Existing approve_issue author checks, protected paths, normal budgets and gate merging remain.
+
+**Consequence.** Publication retries need no reflection. Uncertain creates or admissions may need
+operator diagnosis; absence of a response is not evidence an operation failed. A failed repair
+can contribute evidence and a proposed issue but cannot automatically spawn another repair chain.
