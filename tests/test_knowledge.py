@@ -59,7 +59,8 @@ class KnowledgeTest(unittest.TestCase):
         self.assertTrue(self.agent["factory_memory_search"].listing()["annotations"]["readOnlyHint"])
 
     def test_token_cost_preferences_are_not_mistaken_for_credentials(self):
-        node = self.put(text="Prefer efficient token use and lower token costs", status="approved")
+        node = self.put(text="Prefer efficient token use, lower token costs and security token configuration",
+                        status="approved")
         self.assertEqual(self.search(query="token costs", approvedOnly=True), [node])
 
     def test_project_read_cannot_see_sibling_memory_or_links(self):
@@ -81,6 +82,8 @@ class KnowledgeTest(unittest.TestCase):
     def test_invalid_updates_rollback_and_secrets_are_refused(self):
         first = self.put()
         for changes in ({"text": "API_KEY=private-value"}, {"text": "sk-" + "a1B2" * 8},
+                        {"text": "ghp_" + "A" * 32}, {"text": "github_pat_" + "B" * 32},
+                        {"text": "AKIA" + "C" * 16}, {"text": "PRIVATE_KEY=private-value"},
                         {"source": "password=hidden"},
                         {"kind": "unknown"}, {"status": "unknown"}, {"version": True},
                         {"links": [{"id": "missing", "relation": "uses"}]}, {"text": "x" * 1001}):
