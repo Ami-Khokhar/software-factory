@@ -141,6 +141,53 @@ class WorkerMemoryTest(unittest.TestCase):
                 self.assertEqual(caught.exception.code, 400)
                 self.assertIn("error", json.load(caught.exception))
 
+    def test_only_the_active_pass_token_can_use_worker_channels(self):
+        self.remember()
+        first = self.start()
+
+        def post(base, route, payload):
+            request = urllib.request.Request(base + route, json.dumps(payload).encode())
+            try:
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    return response.status, json.load(response)
+            except urllib.error.HTTPError as caught:
+                return caught.code, json.load(caught)
+
+        def fail_pass():
+            wi = self.store.get(ID)
+            self.relay.finish(wi["providerTaskId"], status="failed", error="worker stopped")
+            return self.foreman.tick(ID)["workItem"]
+
+        with self.serving() as base:
+            self.assertEqual(fail_pass()["state"], "ready")
+            second = self.foreman.tick(ID)["workItem"]
+            second_order = self.store.workorders(ID)[-1]
+            self.assertEqual(second["activeWorkOrderId"], second_order["id"])
+            self.assertNotEqual(first["ask"]["token"], second_order["ask"]["token"])
+            old = first["ask"]["token"]
+            current = second_order["ask"]["token"]
+            self.assertEqual(post(base, "memory", {"token": old})[0], 403)
+            self.assertEqual(post(base, "ask", {"token": old, "question": "stale?", "wait": 1})[0], 409)
+            self.assertIsNone(self.store.get(ID).get("question"))
+            self.assertEqual(post(base, "memory", {"token": current})[0], 200)
+            wi = self.store.get(ID)
+            self.store.put(dict(wi, activeWorkOrderId=None))
+            self.assertEqual(post(base, "memory", {"token": current})[0], 403)
+            wi = self.store.get(ID)
+            self.store.put(dict(wi, activeWorkOrderId=second_order["id"]))
+
+            self.assertEqual(fail_pass()["state"], "blocked")
+            self.assertEqual(post(base, "memory", {"token": current})[0], 403)
+            self.assertEqual(post(base, "ask", {"token": current, "question": "stopped?", "wait": 1})[0], 409)
+            self.assertIsNone(self.store.get(ID).get("question"))
+            self.foreman.resolve_human(ID, "retry", "retry after failed pass", "owner")
+            third = self.foreman.tick(ID)["workItem"]
+            self.assertEqual(third["state"], "implementing")
+            for stale in (old, current):
+                self.assertEqual(post(base, "memory", {"token": stale})[0], 403)
+                self.assertEqual(post(base, "ask", {"token": stale, "question": "stale?", "wait": 1})[0], 409)
+                self.assertIsNone(self.store.get(ID).get("question"))
+
     def test_memory_route_logs_storage_failure_without_leaking_request_data(self):
         token = self.start()["ask"]["token"]
         with self.serving() as base:
