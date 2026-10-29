@@ -255,7 +255,12 @@ class Store:
         for wi in self.all():
             if wi.get("state") not in ("dispatching", "implementing"):
                 continue
+            active_id = wi.get("activeWorkOrderId")
+            if not active_id:
+                continue
             for order in self.workorders(wi["id"]):
+                if order["id"] != active_id:
+                    continue
                 offered = str((order.get("ask") or {}).get("token") or "")
                 if offered and hmac.compare_digest(offered.encode("utf-8"), token.encode("utf-8")):
                     return wi, order

@@ -187,8 +187,10 @@ dispatch-preflight consumption of these records are separate operations.
   and `token` is 32 hex characters, new for every pass. The runner passes them to the harness as
   `FACTORY_ASK_URL`, `FACTORY_ASK_TOKEN` and `FACTORY_ASK_WAIT`; the image's `factory-ask` posts
   one question and blocks for the answer, then continues. The server accepts the token only while
-  that WorkItem is `dispatching` or `implementing`, so a finished pass cannot ask, and the token
-  also grants scoped memory reads through `POST /worker/memory` (ADR-0117). `WorkItem.question` holds
+  that WorkItem is `dispatching` or `implementing` and names that exact WorkOrder as
+  `activeWorkOrderId`, so a finished or superseded pass cannot ask; a missing active order fails
+  closed. The token also grants scoped memory reads through `POST /worker/memory` (ADR-0117).
+  `WorkItem.question` holds
   `{id, text, askedAt, answer, by, answeredAt}`: `factory_status` shows it while the answer is
   empty, and `factory_answer_question` writes the answer and wakes the waiting worker. A new
   dispatch clears the field. Older WorkOrders have no `ask`, and their passes cannot ask; no
@@ -558,8 +560,9 @@ worker received even when the current memory changes. Old WorkOrders omit this o
 selects the pass's repo/project; a worker cannot choose another scope or historical version.
 Candidate, retired and contradicted records remain labeled as such when explicitly searched;
 they are data, not permission. Reads log returned memory IDs/versions, not query text or content.
-A completed pass loses access. This extends the per-pass capability beyond the ask route to
-scoped context reads; it still grants no owner tools or writes.
+A completed or superseded pass loses access, even while a later pass for that WorkItem is running.
+This extends the per-pass capability beyond the ask route to scoped context reads; it still grants
+no owner tools or writes.
 The HTTP reader returns 400 for invalid arguments, 403 for an inactive capability and a generic
 500 for an internal failure, without exposing stored context.
 
