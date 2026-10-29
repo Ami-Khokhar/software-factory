@@ -1,8 +1,9 @@
-"""The WorkItem store (SQLite) and the audit log.
+"""The central SQLite store for WorkItems, audit, memory graph and dreaming state.
 
 A WorkItem is stored as its whole JSON document. `stateVersion` is optimistic concurrency: a write
 must name the version it read, and it stores version + 1. `PRAGMA user_version` counts the migrations
-a store has had.
+a store has had. Dreaming tables use the same idempotent schema and future migration path, so run
+and cursor state is initialized before its helper is attached.
 """
 import hashlib
 import hmac
@@ -15,8 +16,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .knowledge import Knowledge
+from .dreaming import Dreaming
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS dream_runs (
+ id TEXT PRIMARY KEY, started REAL NOT NULL, eligible REAL NOT NULL,
+ status TEXT NOT NULL, doc TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS dream_cursors (repo TEXT PRIMARY KEY, seq INTEGER NOT NULL);
+
 CREATE TABLE IF NOT EXISTS workitems (
   id TEXT PRIMARY KEY,
   state_version INTEGER NOT NULL,
@@ -209,6 +216,7 @@ class Store:
         self._db.executescript(SCHEMA)
         self._migrate()
         self.knowledge = Knowledge(self)
+        self.dreaming = Dreaming(self)
 
     def _migrate(self):
         """Bring WorkItems written by an older factory-mcp up to the contract. Safe to re-run."""

@@ -10,7 +10,7 @@ from .mcp import Tool, ToolError
 # What Day Desk may call when it drives the factory with FACTORY_AGENT_TOKEN (ADR-0030). Setting up
 # a repo, its gate secrets, and the lessons workers read stay with the owner's token.
 AGENT_TOOLS = frozenset({"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons",
-                         "factory_report", "factory_memory_events", "factory_memory_search",
+                         "factory_report", "factory_memory_events", "factory_memory_search", "factory_dream_status",
                          "factory_check_worker", "factory_reload_workers",
                          "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
                          "factory_start_project",
@@ -627,6 +627,9 @@ def build(store, foreman, agent=False):
                              "by": {"type": "string", "minLength": 1}}},
              "write", lambda args: {"workItem": foreman.use_allowance(
                  args["id"], args["planId"], args["action"], args["note"], args["by"])}),
+        Tool("factory_dream_status", "Check dreaming cooldown and pending evidence without a model call.",
+             {"type": "object", "additionalProperties": False}, "read",
+             lambda args: store.dreaming.status(foreman.config, datetime.now(timezone.utc))),
         Tool("factory_memory_events",
              "Read bounded, sanitized audit evidence for an enabled repo. Reuse through with "
              "nextCursor as after to finish a stable snapshot. No model calls or issue creation. "

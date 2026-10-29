@@ -4,6 +4,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 
 from factory_mcp.config import Config
 from factory_mcp.server import make_server
@@ -54,6 +55,21 @@ class McpServerTest(unittest.TestCase):
                 events = json.loads(result["content"][0]["text"])["events"]
                 self.assertEqual(events[0]["detail"]["reason"], "verification failed")
 
+    def test_dream_status_returns_ready_and_cooldown_over_http(self):
+        self.store.put(workitem())
+        self.store.log("attempt_failed", {"reason": "verification failed"}, "o/r#1")
+        response = self.rpc("tools/call", {"name": "factory_dream_status", "arguments": {}})["result"]
+        self.assertFalse(response["isError"])
+        ready = json.loads(response["content"][0]["text"])
+        self.assertEqual(ready, {"eligible": True, "reason": "ready", "nextEligibleAt": 0})
+
+        claimed = self.store.dreaming.claim(self.server.foreman.config, datetime.now(timezone.utc))
+        self.assertIsNotNone(claimed)
+        response = self.rpc("tools/call", {"name": "factory_dream_status", "arguments": {}})["result"]
+        cooldown = json.loads(response["content"][0]["text"])
+        self.assertEqual(cooldown["reason"], "cooldown")
+        self.assertEqual(cooldown["nextEligibleAt"], claimed["nextEligibleAt"])
+
     def test_memory_write_is_owner_only_and_audit_omits_content(self):
         args = {"repo": "o/r", "key": "presentation", "kind": "preference",
                 "text": "Use concise diagrams", "source": "owner:message-1"}
@@ -85,7 +101,7 @@ class McpServerTest(unittest.TestCase):
         reads = {t["name"] for t in tools if t["annotations"]["readOnlyHint"] is True}
         writes = {t["name"] for t in tools if t["annotations"]["readOnlyHint"] is False}
         self.assertEqual(reads, {"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons",
-                                 "factory_report", "factory_memory_events", "factory_memory_search", "factory_docker_status", "factory_project_status"})
+                                 "factory_report", "factory_memory_events", "factory_memory_search", "factory_dream_status", "factory_docker_status", "factory_project_status"})
         self.assertEqual(writes, {"factory_memory_put", "factory_intake", "factory_tick", "factory_resolve_human",
                                   "factory_answer_question",
                                   "factory_propose_issue", "factory_add_repo", "factory_approve_issue",
@@ -127,7 +143,7 @@ class McpServerTest(unittest.TestCase):
         """Day Desk drives with FACTORY_AGENT_TOKEN (ADR-0030). The token, not the model, decides what
         it may call. A new tool joins AGENT_TOOLS on purpose."""
         listed = {t["name"] for t in self.rpc("tools/list", token=AGENT)["result"]["tools"]}
-        self.assertEqual(listed, {"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons", "factory_report", "factory_memory_events", "factory_memory_search",
+        self.assertEqual(listed, {"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons", "factory_report", "factory_memory_events", "factory_memory_search", "factory_dream_status",
                                   "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
                                   "factory_start_project",
                                   "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",

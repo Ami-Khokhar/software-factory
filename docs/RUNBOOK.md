@@ -987,3 +987,18 @@ readiness and never retries an issue. `{"action":"stop"}` refuses queued/running
 factory work and any running container. Ask to stop Docker explicitly. Stop other
 apps and finish Day Desk's terminal session first. The host process needs `docker`
 and `orb` on PATH. No Docker socket is mounted into the sandbox.
+
+### Dream eligibility schedule
+
+The profile's `scripts/factory-dream.sh` currently checks eligibility only, without an agent or
+model call. Install it in the profile before registering the job:
+
+```bash
+cp ~/.local/share/software-factory/tenant/hermes/scripts/factory-dream.sh ~/.hermes/profiles/day-desk/scripts/factory-dream.sh
+chmod +x ~/.hermes/profiles/day-desk/scripts/factory-dream.sh
+```
+
+Register it for 03:00 Asia/Kolkata in the profile's configured scheduling timezone:
+`hermes -p day-desk cron create "0 3 * * *" --no-agent --script factory-dream.sh --name factory-dream`.
+Check the job's effective timezone with the installed Hermes version before enabling it; the cron
+expression alone does not encode IST. The check writes to the job log without nightly Telegram delivery.

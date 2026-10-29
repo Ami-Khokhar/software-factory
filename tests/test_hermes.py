@@ -1,7 +1,10 @@
 """The Day Desk profile (tenant/hermes, ADR-0021, ADR-0030, ADR-0041): it drives the factory with the
 agent token and runs the other factory tools on the owner's token, with no yes per call, and its
 shell runs in a Docker sandbox that gets the GitHub token and nothing else from the host."""
+import os
 import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -17,6 +20,18 @@ TERMINAL = CONFIG["terminal"]
 
 
 class ProfileTest(unittest.TestCase):
+    def test_dream_script_finds_factory_on_hermes_path(self):
+        with tempfile.TemporaryDirectory() as home:
+            local_bin = Path(home) / ".local" / "bin"
+            local_bin.mkdir(parents=True)
+            factory = local_bin / "factory"
+            factory.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\"\n")
+            factory.chmod(0o755)
+            env = dict(os.environ, HOME=home, PATH="/usr/bin:/bin", FACTORY_BIN="")
+            result = subprocess.run(["/bin/sh", str(PROFILE / "scripts" / "factory-dream.sh")],
+                                    check=True, capture_output=True, text=True, env=env)
+            self.assertEqual(result.stdout.strip(), "call factory_dream_status {}")
+
     def test_day_desk_reaches_factory_mcp_where_it_listens_by_default(self):
         for server in (DRIVE, OWNER):
             self.assertEqual(server["url"], f"http://127.0.0.1:{Config(mcp_token='t', repos=frozenset()).port}/mcp")
@@ -41,6 +56,7 @@ class ProfileTest(unittest.TestCase):
         self.assertTrue(driving["factory_project_status"].listing()["annotations"]["readOnlyHint"])
         self.assertTrue(driving["factory_memory_events"].listing()["annotations"]["readOnlyHint"])
         self.assertTrue(driving["factory_memory_search"].listing()["annotations"]["readOnlyHint"])
+        self.assertTrue(driving["factory_dream_status"].listing()["annotations"]["readOnlyHint"])
         real = set(tools.build(None, None))
         owner_only = {"factory_extend_project", "factory_stop_project"}
         self.assertTrue(owner_only <= real - set(driving))

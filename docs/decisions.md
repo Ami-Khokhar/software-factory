@@ -2851,3 +2851,17 @@ Invalid inputs return 400, inactive capabilities 403 and unexpected storage fail
 **Consequence.** Any harness in the image can search without a vendor-specific integration.
 Search may return labeled hypotheses; only approved records enter the initial packet. The normal
 worker rules and acceptance outrank retrieved memory. No WorkItem migration is needed.
+
+## ADR-0118 — Dream cooldown is durable and claimed before model work
+
+**Context.** A scheduler retry, process crash or concurrent caller must not turn a weekly
+reflection budget into a nightly stream of model requests or lose unprocessed events.
+
+**Decision.** Use one global seven-day reservation in SQLite, claimed transactionally before
+reflection. Keep failed/crashed reservations; failed evidence is not acknowledged. Snapshot only
+a bounded prefix per repo, taking turns and rotating the first repo between runs to share the
+byte budget. Advance per-repo cursors when the result is durable. Pending publication
+prevents a second reflection. The eligibility reader makes no model request.
+
+**Consequence.** The cron script checks cheaply each night; later reflection consumes the claim.
+A crashed run may wait the full cooldown before recovery. Cursor state and claims need backups.
