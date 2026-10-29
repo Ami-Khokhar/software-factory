@@ -122,6 +122,16 @@ class MemoryTest(unittest.TestCase):
             with self.subTest(args=args), self.assertRaises(ToolError):
                 self.read(**args)
 
+    def test_invalid_scope_and_keys_name_the_input_to_fix_without_argument_values(self):
+        with self.assertRaisesRegex(ToolError, "missing/r.*must be enabled"):
+            self.read(repo="missing/r")
+        with self.assertRaises(ToolError) as caught:
+            self.read(unknown="private-value")
+        self.assertIn("unknown", str(caught.exception))
+        self.assertIn("allowed:", str(caught.exception))
+        self.assertIn("through", str(caught.exception))
+        self.assertNotIn("private-value", str(caught.exception))
+
     def test_readonly_agent_tool_returns_evidence_over_mcp(self):
         self.log(reason="test failed")
         listing = self.tool.listing()

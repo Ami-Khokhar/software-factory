@@ -1,4 +1,5 @@
 """Workers get bounded snapshots and use a pass-scoped HTTP reader."""
+import io
 import json
 import os
 import subprocess
@@ -7,8 +8,8 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from contextlib import contextmanager, redirect_stderr
 from pathlib import Path
-from contextlib import contextmanager
 
 from factory_mcp import documents
 from factory_mcp.config import Config
@@ -130,7 +131,7 @@ class WorkerMemoryTest(unittest.TestCase):
         self.assertEqual(done.returncode, 2)
         self.assertIn("no active factory capability", done.stderr)
 
-    def test_memory_route_reports_argument_and_storage_errors_as_json(self):
+    def test_memory_route_reports_argument_errors_as_json(self):
         token = self.start()["ask"]["token"]
         with self.serving() as base:
             for args in ({"query": "x" * 201}, {"limit": "many"}, {"repo": "other/r"}):
@@ -139,9 +140,78 @@ class WorkerMemoryTest(unittest.TestCase):
                     urllib.request.urlopen(request, timeout=5)
                 self.assertEqual(caught.exception.code, 400)
                 self.assertIn("error", json.load(caught.exception))
+
+    def test_only_the_active_pass_token_can_use_worker_channels(self):
+        self.remember()
+        first = self.start()
+
+        def post(base, route, payload):
+            request = urllib.request.Request(base + route, json.dumps(payload).encode())
+            try:
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    return response.status, json.load(response)
+            except urllib.error.HTTPError as caught:
+                return caught.code, json.load(caught)
+
+        def fail_pass():
+            wi = self.store.get(ID)
+            self.relay.finish(wi["providerTaskId"], status="failed", error="worker stopped")
+            return self.foreman.tick(ID)["workItem"]
+
+        with self.serving() as base:
+            self.assertEqual(fail_pass()["state"], "ready")
+            second = self.foreman.tick(ID)["workItem"]
+            second_order = self.store.workorders(ID)[-1]
+            self.assertEqual(second["activeWorkOrderId"], second_order["id"])
+            self.assertNotEqual(first["ask"]["token"], second_order["ask"]["token"])
+            old = first["ask"]["token"]
+            current = second_order["ask"]["token"]
+            self.assertEqual(post(base, "memory", {"token": old})[0], 403)
+            self.assertEqual(post(base, "ask", {"token": old, "question": "stale?", "wait": 1})[0], 409)
+            self.assertIsNone(self.store.get(ID).get("question"))
+            self.assertEqual(post(base, "memory", {"token": current})[0], 200)
+            wi = self.store.get(ID)
+            self.store.put(dict(wi, activeWorkOrderId=None))
+            self.assertEqual(post(base, "memory", {"token": current})[0], 403)
+            wi = self.store.get(ID)
+            self.store.put(dict(wi, activeWorkOrderId=second_order["id"]))
+
+            self.assertEqual(fail_pass()["state"], "blocked")
+            self.assertEqual(post(base, "memory", {"token": current})[0], 403)
+            self.assertEqual(post(base, "ask", {"token": current, "question": "stopped?", "wait": 1})[0], 409)
+            self.assertIsNone(self.store.get(ID).get("question"))
+            self.foreman.resolve_human(ID, "retry", "retry after failed pass", "owner")
+            third = self.foreman.tick(ID)["workItem"]
+            self.assertEqual(third["state"], "implementing")
+            for stale in (old, current):
+                self.assertEqual(post(base, "memory", {"token": stale})[0], 403)
+                self.assertEqual(post(base, "ask", {"token": stale, "question": "stale?", "wait": 1})[0], 409)
+                self.assertIsNone(self.store.get(ID).get("question"))
+
+    def test_memory_route_logs_storage_failure_without_leaking_request_data(self):
+        token = self.start()["ask"]["token"]
+        with self.serving() as base:
             self.store.close()  # Real SQLite failure: no mock of the controller or search.
+            payload = {"token": token, "query": "credential-like-marker-should-not-leak"}
+            request = urllib.request.Request(base + "memory", json.dumps(payload).encode())
+            diagnostic = io.StringIO()
+            with redirect_stderr(diagnostic), self.assertRaises(urllib.error.HTTPError) as caught:
+                urllib.request.urlopen(request, timeout=5)
+            self.assertEqual(caught.exception.code, 500)
+            self.assertEqual(json.load(caught.exception), {"error": "memory retrieval failed"})
+            self.assertIn("factory-mcp worker memory failed (ProgrammingError); check factory database and server logs",
+                          diagnostic.getvalue())
+            self.assertNotIn(token, diagnostic.getvalue())
+            self.assertNotIn("credential-like-marker-should-not-leak", diagnostic.getvalue())
+
+    def test_closed_stderr_does_not_interrupt_memory_error_response(self):
+        token = self.start()["ask"]["token"]
+        with self.serving() as base:
+            self.store.close()  # Real SQLite failure reaches the route over HTTP.
+            diagnostic = io.StringIO()
+            diagnostic.close()
             request = urllib.request.Request(base + "memory", json.dumps({"token": token}).encode())
-            with self.assertRaises(urllib.error.HTTPError) as caught:
+            with redirect_stderr(diagnostic), self.assertRaises(urllib.error.HTTPError) as caught:
                 urllib.request.urlopen(request, timeout=5)
             self.assertEqual(caught.exception.code, 500)
             self.assertEqual(json.load(caught.exception), {"error": "memory retrieval failed"})

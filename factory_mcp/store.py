@@ -1,8 +1,9 @@
-"""The WorkItem store (SQLite) and the audit log.
+"""The central SQLite store for WorkItems, audit, memory graph and dreaming state.
 
 A WorkItem is stored as its whole JSON document. `stateVersion` is optimistic concurrency: a write
 must name the version it read, and it stores version + 1. `PRAGMA user_version` counts the migrations
-a store has had.
+a store has had. Dreaming tables use the same idempotent schema and future migration path, so run
+and cursor state is initialized before its helper is attached.
 """
 import hashlib
 import hmac
@@ -254,7 +255,12 @@ class Store:
         for wi in self.all():
             if wi.get("state") not in ("dispatching", "implementing"):
                 continue
+            active_id = wi.get("activeWorkOrderId")
+            if not active_id:
+                continue
             for order in self.workorders(wi["id"]):
+                if order["id"] != active_id:
+                    continue
                 offered = str((order.get("ask") or {}).get("token") or "")
                 if offered and hmac.compare_digest(offered.encode("utf-8"), token.encode("utf-8")):
                     return wi, order

@@ -4,6 +4,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 
 from factory_mcp.config import Config
 from factory_mcp.server import make_server
@@ -53,6 +54,21 @@ class McpServerTest(unittest.TestCase):
             if not refused:
                 events = json.loads(result["content"][0]["text"])["events"]
                 self.assertEqual(events[0]["detail"]["reason"], "verification failed")
+
+    def test_dream_status_returns_ready_and_cooldown_over_http(self):
+        self.store.put(workitem())
+        self.store.log("attempt_failed", {"reason": "verification failed"}, "o/r#1")
+        response = self.rpc("tools/call", {"name": "factory_dream_status", "arguments": {}})["result"]
+        self.assertFalse(response["isError"])
+        ready = json.loads(response["content"][0]["text"])
+        self.assertEqual(ready, {"eligible": True, "reason": "ready", "nextEligibleAt": 0})
+
+        claimed = self.store.dreaming.claim(self.server.foreman.config, datetime.now(timezone.utc))
+        self.assertIsNotNone(claimed)
+        response = self.rpc("tools/call", {"name": "factory_dream_status", "arguments": {}})["result"]
+        cooldown = json.loads(response["content"][0]["text"])
+        self.assertEqual(cooldown["reason"], "cooldown")
+        self.assertEqual(cooldown["nextEligibleAt"], claimed["nextEligibleAt"])
 
     def test_memory_write_is_owner_only_and_audit_omits_content(self):
         args = {"repo": "o/r", "key": "presentation", "kind": "preference",

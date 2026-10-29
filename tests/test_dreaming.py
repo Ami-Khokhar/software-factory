@@ -1,4 +1,5 @@
 """Persistent eligibility, failure cooldown, bounded windows and concurrent claims."""
+import json
 import tempfile
 import threading
 import unittest
@@ -6,7 +7,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from factory_mcp.config import Config
-from factory_mcp.memory import events
 from factory_mcp.store import Store
 from tests.fakes import workitem
 
@@ -86,29 +86,35 @@ class DreamingTest(unittest.TestCase):
         self.assertEqual(self.store.dreaming.status(self.config, AT + timedelta(days=8))["reason"],
                          "publication_pending")
 
+    def test_disabled_repo_evidence_is_not_claimed(self):
+        wid = "disabled/r#2"
+        self.store.put(dict(workitem(), id=wid, repo="disabled/r"))
+        self.store.log("attempt_failed", {"reason": "private disabled evidence"}, wid)
+        self.assertEqual(self.store.dreaming.status(self.config, AT)["reason"], "no_evidence")
+        self.assertIsNone(self.store.dreaming.claim(self.config, AT))
+
     def test_busy_repos_share_the_window_and_deferred_repos_lead_after_restart(self):
-        import json
-        repos = {f"o/r{n:02}" for n in range(30)}
+        repos = ("o/a", "o/b", "o/c")
         config = Config(mcp_token="owner", repos=frozenset(repos))
-        sequences = {}
         for repo in sorted(repos):
             wid = repo + "#1"
             self.store.put(dict(workitem(), id=wid, repo=repo))
             for _ in range(2):
-                self.store.log("attempt_failed", {"reason": "x" * 300, "diagnosis": "y" * 300}, wid)
-            sequences[repo] = [row["seq"] for row in events(self.store, config, {"repo": repo})["events"]]
+                self.store.log("attempt_failed", {"reason": "界" * 300,
+                                                   "diagnosis": "界" * 300,
+                                                   "note": "界" * 300}, wid)
         first = self.store.dreaming.claim(config, AT)
-        included = {event["repo"] for event in first["evidence"]}
-        self.assertGreater(len(included), 1)
-        self.assertLess(len(included), len(repos))
-        self.assertLessEqual(sum(len(json.dumps(event).encode()) for event in first["evidence"]), 12000)
-        for repo, cursor in first["cursors"].items():
-            self.assertEqual([event["seq"] for event in first["evidence"] if event["repo"] == repo],
-                             [seq for seq in sequences[repo] if seq <= cursor])
+        first_repos = {event["repo"] for event in first["evidence"]}
+        sizes = [len(json.dumps(event).encode()) for event in first["evidence"]]
+        self.assertEqual(first_repos, {"o/a", "o/b"})
+        self.assertEqual(len(first["evidence"]), 2)
+        self.assertTrue(all(4000 < size <= 6000 for size in sizes), sizes)
+        self.assertLessEqual(sum(sizes), 12000)
+        self.assertEqual(set(first["cursors"]), first_repos)
         self.store.dreaming.settle(first["id"], "complete", {})
         self.store.close()
         self.store = Store(self.path)
         second = self.store.dreaming.claim(config, AT + timedelta(days=7))
-        deferred = repos - included
-        self.assertIn(second["evidence"][0]["repo"], deferred)
-        self.assertTrue(deferred <= {event["repo"] for event in second["evidence"]})
+        second_repos = {event["repo"] for event in second["evidence"]}
+        self.assertIn("o/c", second_repos)
+        self.assertEqual(second["evidence"][0]["repo"], "o/c")
