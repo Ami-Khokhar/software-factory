@@ -7,18 +7,11 @@ from . import memory
 from .mcp import ToolError
 
 COOLDOWN = timedelta(days=7)
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS dream_runs (
- id TEXT PRIMARY KEY, started REAL NOT NULL, eligible REAL NOT NULL,
- status TEXT NOT NULL, doc TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS dream_cursors (repo TEXT PRIMARY KEY, seq INTEGER NOT NULL);
-"""
 
 
 class Dreaming:
     def __init__(self, store):
         self.store = store
-        store._db.executescript(SCHEMA)
 
     def latest(self):
         with self.store._lock:
@@ -27,16 +20,27 @@ class Dreaming:
 
     def collect(self, config):
         evidence, cursors, size = [], {}, 0
-        for repo in sorted(config.repos):
+        repos, pages, blocked = sorted(config.repos), {}, set()
+        last = self.latest()
+        previous = last["evidence"][-1]["repo"] if last and last.get("evidence") else None
+        if previous in repos:
+            start = repos.index(previous) + 1
+            repos = repos[start:] + repos[:start]
+        for repo in repos:
             with self.store._lock:
                 row = self.store._db.execute("SELECT seq FROM dream_cursors WHERE repo=?", (repo,)).fetchone()
             after = row[0] if row else 0
-            page = memory.events(self.store, config, {"repo": repo, "after": after, "limit": 20})
-            for event in page["events"]:
-                event = {"repo": repo, **event}
+            pages[repo] = memory.events(self.store, config, {"repo": repo, "after": after, "limit": 20})["events"]
+        # Share the byte budget; rotate the first repo after each durable run.
+        for index in range(20):
+            for repo in repos:
+                if repo in blocked or index >= len(pages[repo]):
+                    continue
+                event = {"repo": repo, **pages[repo][index]}
                 count = len(json.dumps(event).encode())
                 if size + count > 12000:
-                    break
+                    blocked.add(repo)  # Never acknowledge a later event past an omitted one.
+                    continue
                 evidence.append(event)
                 cursors[repo] = event["seq"]
                 size += count

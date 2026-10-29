@@ -34,10 +34,8 @@ RUN git config --system safe.directory '*' \
 
 # The ask channel (ADR-0098): a running pass asks Day Desk a question and waits briefly for the
 # answer. runner.py sets FACTORY_ASK_URL, FACTORY_ASK_TOKEN and FACTORY_ASK_WAIT in the harness env.
-COPY factory-ask /usr/local/bin/factory-ask
-COPY factory-memory /usr/local/bin/factory-memory
-RUN chmod 755 /usr/local/bin/factory-memory
-RUN chmod 755 /usr/local/bin/factory-ask
+COPY factory-ask factory-memory /usr/local/bin/
+RUN chmod 755 /usr/local/bin/factory-ask /usr/local/bin/factory-memory
 
 USER node
 # The container is thrown away after each step, so a verify command may pip-install freely. No
