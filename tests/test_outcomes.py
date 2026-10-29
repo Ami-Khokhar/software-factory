@@ -119,6 +119,18 @@ class OutcomesTest(unittest.TestCase):
                               {"checkedHead": "old"}, expected_validation=0)
         self.assertIsNone(self.report().get("checkedHead"))
 
+    def test_stale_admission_snapshot_preserves_newer_measurement_and_checked_head(self):
+        self.merged()
+        self.measure()
+        snapshot = outcomes.records(self.store, self.config, "o/r")[0]
+        self.measure(version=1, recurrences=6)
+        improvements.save(self.store, self.record["fingerprint"], "o/r", {"checkedHead": "new-head"},
+                          expected_validation=2)
+        improvements.save(self.store, self.record["fingerprint"], "o/r", {**snapshot, "status": "admitted"})
+        current = outcomes.records(self.store, self.config, "o/r")[0]
+        self.assertEqual(current["validation"]["version"], 2)
+        self.assertEqual(current["checkedHead"], "new-head")
+
     def test_stale_refresh_cannot_demote_a_concurrent_newer_measurement(self):
         self.merged()
         self.measure()
