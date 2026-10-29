@@ -31,6 +31,12 @@ def save(store, fingerprint, repo, doc, expected_validation=None):
         if expected_validation is not None and (current.get("validation") or {}).get("version", 0) != expected_validation:
             raise ToolError("measurement changed during maintenance; retry from current state")
         merged = {**current, **doc}
+        if expected_validation is None and current.get("validation"):
+            merged["validation"] = current["validation"]
+            if "checkedHead" in current:
+                merged["checkedHead"] = current["checkedHead"]
+            else:
+                merged.pop("checkedHead", None)
         if current.get("status") == "admitted" and doc.get("status") in ("proposed", "admission_reserved"):
             merged["status"] = "admitted"
         store._db.execute("INSERT INTO dream_issues VALUES (?,?,?) ON CONFLICT(fingerprint) "
