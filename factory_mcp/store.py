@@ -1,8 +1,10 @@
-"""The WorkItem store (SQLite) and the audit log.
+"""The central SQLite store for WorkItems, audit, memory graph and dreaming state.
 
 A WorkItem is stored as its whole JSON document. `stateVersion` is optimistic concurrency: a write
 must name the version it read, and it stores version + 1. `PRAGMA user_version` counts the migrations
-a store has had.
+a store has had. The shared memory and dreaming tables live in this idempotent schema so their
+cursors, evidence windows, graph history and publication records are initialized in one place
+before the helper modules are attached.
 """
 import hashlib
 import hmac

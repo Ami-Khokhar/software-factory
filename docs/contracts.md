@@ -572,8 +572,9 @@ install this command; updating factory-mcp alone does not update running worker 
 
 `factory_dream_status` reads eligibility and the next eligibility timestamp without a model call.
 The internal claimant writes a run and reserves exactly seven days atomically, across connections.
-A failure or crashed claimant keeps that cooldown. No evidence means no claim. A pending planned
-run blocks another reflection until its publication is handled. Timestamps are UTC epoch seconds.
+A failure or crashed claimant keeps that cooldown. No evidence means no claim. A planned run remains
+held until the publication consumer records completion; it does not age out or allow another model
+request. Timestamps are UTC epoch seconds.
 
 Each claim contains at most 20 selected events per repo and 12,000 encoded event bytes across
 repos. Collection takes turns across repos and rotates the starting repo between runs so a busy
