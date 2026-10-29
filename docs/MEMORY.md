@@ -17,6 +17,7 @@ flowchart LR
 
 Different repos are separate scopes. The graph uses SQLite and bounded keyword search, not a
 vector service. Memory is data; current worker rules and acceptance take precedence.
+Credential labels followed by `:` or `=` are conservatively refused; phrase guidance as sentences.
 
 ## Use it
 

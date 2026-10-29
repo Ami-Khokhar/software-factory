@@ -62,9 +62,12 @@ class KnowledgeTest(unittest.TestCase):
         for index, content in enumerate(("Prefer efficient token use, lower token costs and security token configuration",
                 "Store the token in the keychain, never in the repo", "Keep secrets out of logs",
                 "Rotate the password before the release", "FACTORY_WALL_MS=1200000 fixed the timeout",
-                "Rotation policy for tokens: quarterly", "credentials: run factory auth")):
-            node = self.put(key=f"safe-{index}", text=content, status="approved")
-            self.assertEqual(self.search(id=node["id"], approvedOnly=True), [node])
+                "Rotate tokens quarterly", "Run factory auth for credentials")):
+            with self.subTest(content=content):
+                node = self.put(key=f"safe-{index}", text=content, status="approved")
+                self.assertEqual(self.search(id=node["id"], approvedOnly=True), [node])
+                if index == 0:
+                    self.assertEqual(self.search(query="token costs", approvedOnly=True), [node])
 
         config = self.put(key="runtime", text="FACTORY_WALL_MS=1200000", version=0)
         self.assertEqual(config["text"], "FACTORY_WALL_MS=1200000")
@@ -102,9 +105,16 @@ class KnowledgeTest(unittest.TestCase):
                         {"text": "ghp_" + "A" * 32}, {"text": "github_pat_" + "B" * 32},
                         {"text": "AKIA" + "C" * 16}, {"text": "PRIVATE_KEY=private-value"},
                         {"text": "AWS_SECRET_ACCESS_KEY=synthetic-value"},
+                        {"text": "secret_key: synthetic-value"},
+                        {"text": "aws_secret_access_key: synthetic-value"},
+                        {"text": "private_key_id: synthetic-value"},
+                        {"text": "access_token_v2: synthetic-value"},
+                        {"text": "password_hash: synthetic-value"},
                         {"text": "aws_secret_access_key=synthetic-value"},
                         {"text": "access_token=synthetic-value"}, {"text": "client_secret=synthetic-value"},
                         {"text": "DATABASE_URL=postgres://user:pass@host/db"},
+                        {"text": "Rotation policy for tokens: quarterly"},
+                        {"text": "credentials: run factory auth"},
                         {"source": "password=hidden"},
                         {"kind": "unknown"}, {"status": "unknown"}, {"version": True},
                         {"links": [{"id": "missing", "relation": "uses"}]}, {"text": "x" * 1001}):

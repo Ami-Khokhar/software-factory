@@ -541,7 +541,8 @@ Kinds: preference, decision, learning, blocker, fix, evidence. Status defaults t
 `approved`, `contradicted` and `retired` are explicit owner decisions. Source records provenance,
 not proof of correctness. Private-key/token shapes, credential assignments and authenticated URLs
 are refused; ordinary security prose and nonsecret configuration examples are allowed. This is not
-exhaustive PII scanning.
+exhaustive PII scanning. Assignment-shaped credential labels are conservatively refused even when
+used as ordinary prose; rephrase guidance as sentences.
 The audit omits memory content/source; the graph itself retains them and needs private storage.
 
 `version` is 0 for creation, or the current version for an update; stale writes fail atomically.
