@@ -29,8 +29,10 @@ Reconcile events also project up to three blocking gate problem strings as `deta
 each capped at 100 characters and 300 characters total, with the same redaction. Other finding
 fields and nested data remain omitted.
 This is bounded internal evidence, not full transcripts, full findings or a guarantee that every
-kind of private text is removed. Question/answer events currently identify the question, not its
-full text. No memory graph, learned preferences or scheduled dreaming is enabled by this tool.
+kind of private text is removed. Question/answer events may include selected `questionText` and
+`answerText`, each sanitized and capped at 300 characters before the live WorkItem field clears.
+They remain selected text, not raw transcripts. No memory graph, learned preferences or scheduled
+dreaming is enabled by this tool.
 
 ## Worker health operations
 

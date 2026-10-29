@@ -82,7 +82,7 @@ class MemoryTest(unittest.TestCase):
 
     def test_gate_problems_are_bounded_sanitized_summaries(self):
         secret = "sk-" + "a" * 24
-        self.log(reason="selected scalar", blocking=[
+        self.log(action="reconcile", reason="selected scalar", blocking=[
             {"problem": "First " + secret, "fingerprint": "hidden", "nested": {"private": "hidden"}},
             {"problem": "b" * 120}, {"problem": "third"}, {"problem": "fourth"},
             {"nested": {"problem": "malformed"}},
@@ -95,10 +95,16 @@ class MemoryTest(unittest.TestCase):
         self.assertLessEqual(sum(map(len, problems)), 300)
         self.assertEqual(problems[0], "<redacted>")
         self.assertEqual(problems[1], "b" * 100)
+        self.assertEqual(problems[2], "third")
         self.assertNotIn("blocking", event["detail"])
         encoded = json.dumps(event)
         for hidden in (secret, "fingerprint", "nested", "private", "fourth", "malformed"):
             self.assertNotIn(hidden, encoded)
+
+        self.log(action="reconcile", blocking=[{"nested": {"problem": "malformed"}},
+                                                 {"problem": "after malformed"}])
+        second = self.read()["events"][1]
+        self.assertEqual(second["detail"]["gateProblems"], ["after malformed"])
 
     def test_empty_and_exactly_full_pages_finish_without_moving_cursor_backwards(self):
         self.assertEqual(self.read(after=20)["nextCursor"], 20)
