@@ -102,6 +102,7 @@ class KnowledgeTest(unittest.TestCase):
                         {"text": "ghp_" + "A" * 32}, {"text": "github_pat_" + "B" * 32},
                         {"text": "AKIA" + "C" * 16}, {"text": "PRIVATE_KEY=private-value"},
                         {"text": "AWS_SECRET_ACCESS_KEY=synthetic-value"},
+                        {"text": "aws_secret_access_key=synthetic-value"},
                         {"text": "access_token=synthetic-value"}, {"text": "client_secret=synthetic-value"},
                         {"text": "DATABASE_URL=postgres://user:pass@host/db"},
                         {"source": "password=hidden"},
