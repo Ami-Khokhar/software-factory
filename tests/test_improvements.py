@@ -65,6 +65,30 @@ class ImprovementsTest(unittest.TestCase):
             create.assert_not_called()
         self.assertEqual(result["status"], "publication_pending")
 
+    def test_unknown_admission_stays_pending_without_spending_a_second_slot(self):
+        self.config = dataclasses.replace(self.config, dream_auto_repos=frozenset({"o/r"}))
+        self.foreman.config = self.config
+        run = self.prepare()
+        with mock.patch.object(self.foreman, "approve_issue", side_effect=ToolError("unknown outcome")), self.assertRaises(ToolError):
+            improvements.publish(self.foreman, run)
+        with mock.patch.object(self.foreman, "approve_issue") as approve:
+            result = improvements.publish(self.foreman, run)
+            approve.assert_not_called()
+        self.assertEqual(result["status"], "publication_pending")
+
+    def test_completed_admission_with_lost_response_is_adopted(self):
+        self.config = dataclasses.replace(self.config, dream_auto_repos=frozenset({"o/r"}))
+        self.foreman.config = self.config
+        run, approve = self.prepare(), self.foreman.approve_issue
+        def lost(*args):
+            approve(*args)
+            raise ToolError("response lost")
+        with mock.patch.object(self.foreman, "approve_issue", side_effect=lost), self.assertRaises(ToolError):
+            improvements.publish(self.foreman, run)
+        result = improvements.publish(self.foreman, run)
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["issues"][0]["status"], "admitted")
+
     def test_allowlisted_auto_admission_uses_normal_trust_checks_and_only_one_slot(self):
         self.config = dataclasses.replace(self.config, dream_auto_repos=frozenset({"o/r"}))
         self.foreman.config = self.config

@@ -2895,3 +2895,17 @@ Existing approve_issue author checks, protected paths, normal budgets and gate m
 **Consequence.** Publication retries need no reflection. Uncertain creates or admissions may need
 operator diagnosis; absence of a response is not evidence an operation failed. A failed repair
 can contribute evidence and a proposed issue but cannot automatically spawn another repair chain.
+
+## ADR-0121 — Merge, exposure and measured improvement are different evidence
+
+**Context.** A merged PR may not be deployed, and a week without related work cannot prove a
+repair helped. Second-resolution timestamps can also misclassify an earlier failure as exposure.
+
+**Decision.** Report submitted context and explicit reads by audit order, not timestamp guesses.
+Persist linked merge facts without claiming runtime success. Owner-authorized, source-linked
+before/after measurements may approve a scoped learning; contradictions preserve prior versions.
+Demote measured advice when relevant tracked files change or comparisons cannot establish freshness.
+
+**Consequence.** Workers can retrieve measured knowledge with provenance and versions. Counts are
+labeled owner-reported and temporal exposure is not causal attribution. General semantic retrieval,
+complete trace retention and arbitrary graph dependency invalidation remain outside this first version.

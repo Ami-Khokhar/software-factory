@@ -29,6 +29,7 @@ mcp_servers:
         - factory_retire_lesson
         - factory_memory_put
         - factory_dream_run
+        - factory_improvement_validate
         - factory_approve_plan_allowance
         - factory_authorize_setup_merge
         - factory_revoke_setup_merge

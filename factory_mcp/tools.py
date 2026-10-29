@@ -1,7 +1,7 @@
 """The factory tools that Day Desk (Hermes) and the factory CLI call. Each one declares its effect."""
 from datetime import datetime, timezone
 
-from . import docker, improvements, knowledge, lessons, memory, metrics, projects, repos, runtime, worker_ops
+from . import docker, improvements, knowledge, lessons, memory, metrics, outcomes, projects, repos, runtime, worker_ops
 from .store import now
 from .foreman import MAX_ALLOWANCE, MAX_PLAN_ISSUES, RECOVERY_ACTIONS, Foreman, agent_may_resolve, lead_may_act
 from .github import GitHubError
@@ -11,6 +11,7 @@ from .mcp import Tool, ToolError
 # a repo, its gate secrets, and the lessons workers read stay with the owner's token.
 AGENT_TOOLS = frozenset({"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons",
                          "factory_report", "factory_memory_events", "factory_memory_search", "factory_dream_status",
+                         "factory_improvement_status",
                          "factory_check_worker", "factory_reload_workers",
                          "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
                          "factory_start_project",
@@ -687,5 +688,6 @@ def build(store, foreman, agent=False):
              "write", lambda args: foreman.retire_lesson(args["repo"], args["fingerprint"], args["by"])),
     ]
     tools.extend(knowledge.tools(store, foreman.config if foreman else None, now))
+    tools.extend(outcomes.tools(store, foreman, lambda: datetime.now(timezone.utc)))
     runtime_schemas.extend(tool.listing() for tool in tools if not agent or tool.name in AGENT_TOOLS)
     return {tool.name: tool for tool in tools if not agent or tool.name in AGENT_TOOLS}

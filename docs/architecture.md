@@ -112,6 +112,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/improvements.py` | Recover deduplicated dream issue publication and admit one bounded repair through normal factory policy (ADR-0120) |
 | `factory_mcp/routing.py` | Which worker takes the next attempt: locality first, then one that has not failed |
 | `factory_mcp/dreaming.py` | Durable evidence windows, fair repo selection and the seven-day reflection cooldown (ADR-0118) |
+| `factory_mcp/outcomes.py` | Report merge facts and context exposure; validate owner-reported effects and demote stale measured advice (ADR-0121) |
 | `factory_mcp/metrics.py` | The escalation text, the autonomy rate, whether each lesson works, and the weekly report's numbers |
 | `factory_mcp/runtime.py` | Sanitized, read-only runtime facts and observational MCP schema-cache diagnostics (ADR-0091) |
 | `factory_mcp/worker_ops.py` | Validates and runs one bounded sanitized provider-health check, stores its binding/quarantine record, and calls the relay's fixed registry-reload endpoint (ADR-0094) |
