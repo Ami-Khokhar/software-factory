@@ -16,11 +16,13 @@ def clean(value, limit=300):
 
 def events(store, config, args):
     """Read one stable snapshot page. Cursors are audit sequences, not offsets."""
-    if set(args) - {"repo", "after", "through", "limit"}:
-        raise ToolError("unknown memory event argument")
+    allowed = {"repo", "after", "through", "limit"}
+    if set(args) - allowed:
+        raise ToolError(f"unknown memory event arguments: {sorted(set(args) - allowed)}; "
+                        f"allowed: {sorted(allowed)}")
     repo = args.get("repo")
     if not isinstance(repo, str) or config.listed(repo) is None:
-        raise ToolError("repo must be enabled in FACTORY_REPOS or repos.json")
+        raise ToolError(f"{repo!r} must be enabled in FACTORY_REPOS or repos.json")
     after, limit, through = args.get("after", 0), args.get("limit", 50), args.get("through")
     if type(after) is not int or after < 0:
         raise ToolError("after must be a nonnegative integer")
@@ -40,6 +42,12 @@ def events(store, config, args):
                 detail[key] = clean(value)
             elif type(value) in (int, bool):
                 detail[key] = value
+        blocking = row["detail"].get("blocking")
+        if isinstance(blocking, list):
+            problems = [clean(item["problem"], 100) for item in blocking[:3]
+                        if isinstance(item, dict) and isinstance(item.get("problem"), str)]
+            if problems:
+                detail["gateProblems"] = problems
         selected.append({"seq": row["seq"], "at": row["at"], "action": row["action"],
                          "workItemId": row["workItemId"], "detail": detail})
     return {"repo": repo, "events": selected, "through": through,

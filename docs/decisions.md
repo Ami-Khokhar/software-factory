@@ -2875,6 +2875,8 @@ unbounded calls or silently turn model inference into owner policy.
 candidate against known same-repo evidence IDs; reject unknown fields, oversized output and unsafe
 paths. Persist linked evidence and candidate knowledge, then the plan. Repeated memory identities
 are adopted without overwriting owner edits. Provider failures keep the seven-day reservation.
+The memory evidence projection includes at most three sanitized blocking gate problem summaries per
+reconcile event, capped at 100 characters each and 300 total; it does not expose complete findings.
 
 **Consequence.** The normal factory can later turn a saved plan into work. No live model is used
 until configured. The memory graph can be searched by workers, but inferred preferences never enter

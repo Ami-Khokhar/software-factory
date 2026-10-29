@@ -990,29 +990,36 @@ and `orb` on PATH. No Docker socket is mounted into the sandbox.
 
 ### Dream eligibility schedule
 
-The profile's `scripts/factory-dream.sh` currently checks eligibility only, without an agent or
-model call. Register it for 03:00 Asia/Kolkata in the profile's configured scheduling timezone:
-`hermes -p day-desk cron create "0 3 * * *" --no-agent --script factory-dream.sh --deliver telegram --name factory-dream`.
+The profile's `scripts/factory-dream.sh` runs the no-agent reflection check. Install it in the profile
+before registering the job:
+
+```bash
+cp ~/.local/share/software-factory/tenant/hermes/scripts/factory-dream.sh ~/.hermes/profiles/day-desk/scripts/factory-dream.sh
+chmod +x ~/.hermes/profiles/day-desk/scripts/factory-dream.sh
+```
+
+Register it for 03:00 Asia/Kolkata in the profile's configured scheduling timezone:
+`hermes -p day-desk cron create "0 3 * * *" --no-agent --script factory-dream.sh --name factory-dream`.
 Check the job's effective timezone with the installed Hermes version before enabling it; the cron
-expression alone does not encode IST. This does not yet enable model reflection or issue creation.
+expression alone does not encode IST. The check writes to the job log without nightly Telegram delivery.
 
 ### Enable reflection
 
-The same nightly script now calls factory_dream_run. Configure FACTORY_DREAM_URL,
-FACTORY_DREAM_MODEL and FACTORY_DREAM_API_KEY in the factory service's secure environment, permit
-that provider destination, restart factory-mcp, and verify one synthetic run before enabling
-cron. Do not commit the key or pass it as a CLI argument. The endpoint must include its chat
-completion path. Without endpoint/model the job skips. Repeated runs inside seven days skip;
-failures retain that cooldown. The current reflection step saves a plan and candidate graph nodes;
-it does not yet dispatch repairs. Actual provider access and deployment require separate validation.
+The same nightly script calls `factory_dream_run`. Configure `FACTORY_DREAM_URL`,
+`FACTORY_DREAM_MODEL` and `FACTORY_DREAM_API_KEY` in the factory service's secure environment, permit
+that provider destination, restart factory-mcp, and verify one synthetic run before enabling cron.
+Do not commit the key or pass it as a CLI argument. The endpoint must include its chat completion
+path. Without endpoint/model the job skips. Repeated runs inside seven days skip; failures retain
+that cooldown. The reflection step saves a plan and candidate graph nodes; issue publication is
+handled by the next step. Actual provider access and deployment require separate validation.
 
 ### Improvement admission
 
-Reflection now publishes saved plans as factory:proposed issues. Set FACTORY_DREAM_AUTO_REPOS to
-an explicit subset of FACTORY_REPOS only after validating proposed output and provider access.
-One eligible issue per dream may become factory:ready through normal trusted-author admission;
+The admission step publishes saved plans as `factory:proposed` issues. Set `FACTORY_DREAM_AUTO_REPOS`
+to an explicit subset of `FACTORY_REPOS` only after validating proposed output and provider access.
+One eligible issue per dream may become `factory:ready` through normal trusted-author admission;
 normal ticks do the implementation and the gate does the merging. Existing fix-round allowances
 still belong to the factory's budget policy; dreaming grants no additional retries.
-Check publication_pending and admission_reserved records after network failures. A create that
+Check `publication_pending` and `admission_reserved` records after network failures. A create that
 might have succeeded is searched by marker on later calls and is not blindly repeated. Resolve
 an uncertain intent after checking GitHub, rather than deleting state to force another create.
