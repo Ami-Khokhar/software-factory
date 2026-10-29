@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""Read scoped factory memory using this pass's existing capability."""
+import argparse
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("query", nargs="?", default="")
+    parser.add_argument("--id")
+    args = parser.parse_args()
+    url, token = os.environ.get("FACTORY_ASK_URL", ""), os.environ.get("FACTORY_ASK_TOKEN", "")
+    if not token or not url.endswith("/worker/ask"):
+        print("factory-memory: no active factory capability", file=sys.stderr)
+        return 2
+    payload = {"token": token, "query": args.query, "limit": 10}
+    if args.id:
+        payload["id"] = args.id
+    request = urllib.request.Request(url[:-len("ask")] + "memory", json.dumps(payload).encode(),
+                                     {"content-type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            print(json.dumps(json.load(response), indent=2))
+    except (OSError, ValueError, urllib.error.URLError):
+        print("factory-memory: retrieval unavailable; use the WorkOrder and report missing context",
+              file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

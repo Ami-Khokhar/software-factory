@@ -23,6 +23,48 @@
     "createdAt"
   ],
   "properties": {
+    "memory": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "version",
+          "kind",
+          "text",
+          "source"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "kind": {
+            "enum": [
+              "preference",
+              "decision",
+              "learning",
+              "blocker",
+              "fix",
+              "evidence"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "source": {
+            "type": "string",
+            "maxLength": 500
+          }
+        }
+      }
+    },
     "schemaVersion": { "const": "factory.workorder/v1" },
     "id": { "type": "string", "minLength": 1 },
     "workItemId": { "type": "string", "minLength": 1 },

@@ -30,6 +30,10 @@ PATHS_HOLDING = ("dispatching", "implementing", "pr_open", "reviewing", "changes
                  "merge_pending")
 
 
+class MemoryAccessError(ToolError):
+    """A worker memory capability does not name a running pass."""
+
+
 def _covers(prefix, entry):
     """`prefix` covers `entry` when its literal head, cut at the first wildcard, is `entry` or a
     directory prefix of it."""
@@ -930,6 +934,9 @@ class Foreman:
                                     continuation.get("sha") if continuation else None,
                                     project=self.store.project(wi["projectId"]) if wi.get("projectId") else None)
         order["ask"] = {"url": self.config.ask_url, "token": secrets.token_hex(16)}  # ADR-0098
+        packet = self.store.knowledge.packet(self.config, wi)
+        if packet:
+            order["memory"] = packet
         if member:
             try:
                 self.store.charge_project_pass(project_id)
@@ -958,6 +965,19 @@ class Foreman:
                                  cwd=self.config.checkout(wi["repo"]))
         return self._write(wi, dict(wi, state="implementing", providerTaskId=task["id"]),
                            "submitted", task=task["id"])
+
+    def worker_memory(self, token, args):
+        found = self.store.order_by_ask_token(token)
+        if found is None:
+            raise MemoryAccessError("this pass is not running, so it has no memory access")
+        if not isinstance(args, dict) or set(args) - {"query", "id", "limit"}:
+            raise ToolError("worker memory accepts only query, id and limit")
+        wi, order = found
+        result = self.store.knowledge.search(self.config, {
+            **args, "repo": wi["repo"], "projectId": (order.get("project") or {}).get("id", "")})
+        self.store.log("memory_read", {"workOrder": order["id"], "memories": [
+            {"id": doc["id"], "version": doc["version"]} for doc in result["memories"]]}, wi["id"])
+        return result
 
     def worker_ask(self, token, question, wait_seconds=240):
         """A running pass asks Day Desk a question (ADR-0098). Stores it on the WorkItem and waits,

@@ -88,7 +88,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | File | What it does |
 |---|---|
 | `factory_mcp/__init__.py`, `__main__.py` | The package; `python3 -m factory_mcp` starts the server |
-| `factory_mcp/server.py` | Streamable HTTP on loopback: `POST /mcp` with the bearer token, `POST /worker/ask` with a pass's own token (ADR-0098), the background tick loop |
+| `factory_mcp/server.py` | Streamable HTTP on loopback: `POST /mcp` with the bearer token, `POST /worker/ask` and `POST /worker/memory` with a pass's own token (ADR-0098, ADR-0117), the background tick loop |
 | `factory_mcp/mcp.py` | The MCP protocol: one JSON-RPC message in, one response out, no I/O |
 | `factory_mcp/tools.py` | The tools, and whether each one reads or writes |
 | `factory_mcp/foreman.py` | The Foreman: intake, rebuild, tick, dispatch, poll a task, open a PR, and the person's acts (resolve, approve an issue, start a plan, add a repo, bootstrap a repo, approve or retire a lesson) |
@@ -97,6 +97,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/diagnostics.py` | What a failed attempt means, read from the Result's optional diagnostics (ADR-0050): one evidence-backed cause, or an unknown one, with sanitized bounded context. The next WorkOrder carries the latest attempt and, when that one is not actionable, the last failing-test finding an intervening timeout would otherwise bury — read from the durable attempt records, so it survives the person's retry (ADR-0078) |
 | `factory_mcp/verdict.py` | Reading the gate's verdict marker; finding fingerprints and blockers |
 | `factory_mcp/store.py` | SQLite: WorkItems with optimistic concurrency, WorkOrders, the durable request journal, pause barriers holding a recovery graph until released, the audit log, leases, migrations |
+| `factory_mcp/knowledge.py` | Versioned repo/project context, provenance links and scoped keyword retrieval (ADR-0116) |
 | `factory_mcp/memory.py` | Bounded repo-scoped evidence from selected audit actions and sanitized scalar fields, paged by sequence (ADR-0115) |
 | `factory_mcp/projects.py` | What the Lead's Project fields must hold to store one (ADR-0099): the budget, blueprint and doneWhen limits, and the first limit a field set breaks |
 | `factory_mcp/github.py` | The GitHub REST client |
@@ -237,7 +238,8 @@ for a decision `factory_resolve_human` makes, Day Desk's once per incident or th
   which Docker Desktop maps to the host — and blocks for a bounded wait. The
   server stores the question on the WorkItem and `factory_answer_question` answers it; the worker
   proceeds with its own reading when nobody answers in time. The token names that one pass, so it
-  can ask about nothing else, and it dies with the pass. `factory-ask` answers `-h` and `--help`
+  can ask questions and read repo/project-scoped memory (ADR-0117), and it dies with the pass.
+  `factory-ask` answers `-h` and `--help`
   itself with its usage, without contacting the channel (ADR-0111).
 - The runner turns the commits into a unified patch, measures the whole pull request — the branch's
   diff against its merge base with the default branch, so a fix is counted with the implementation it
@@ -323,3 +325,8 @@ for a decision `factory_resolve_human` makes, Day Desk's once per incident or th
 - **Autonomy rate**: of the WorkItems that ended, the share that merged with no human state, no
   commit other than a worker's or the gate's merge of the base branch (ADR-0039), and a MERGE
   verdict on the merged head (`metrics.autonomy`). It is the project's measure of success.
+
+`knowledge.py` keeps scoped graph nodes, links and immutable version history in the factory's
+SQLite file. Owner-only writes and read-only `factory_memory_search` expose the graph through
+MCP; Day Desk's owner tool profile includes the writer. Neither graph storage nor search changes
+worker dispatch or starts dreaming. See the versioned context contract in `contracts.md`.

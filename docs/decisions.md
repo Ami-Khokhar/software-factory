@@ -2824,3 +2824,30 @@ redaction and length bound. Reuse existing SQLite audit storage; no new schema o
 records. The tool is not a full trace archive or a public-data sanitization guarantee. Store loss
 invalidates its cursors. Graph records, preferences, worker retrieval and seven-day dreaming remain
 separate changes; adding this evidence reader alone starts no autonomous improvement work.
+
+## ADR-0116 — Context records keep scope, provenance and versions
+
+**Context.** Future workers need decisions and preferences without treating inferred model text
+as owner policy. A mutable unscoped note would lose provenance and could leak project context.
+
+**Decision.** Keep context nodes and version history in two additive SQLite tables. The owner
+writes candidate or approved records with sources and optimistic versions; Day Desk may search.
+Links obey the source record's visibility, and memory text never enters the general tool audit.
+
+**Consequence.** No model or external database is needed. Existing store files gain the tables
+on open without changing WorkItem documents. Inferred records remain candidates until explicitly
+approved. Scope checks protect retrieval; callers still must protect the SQLite file and backups.
+
+## ADR-0117 — Workers retrieve context with their pass capability
+
+**Context.** A bounded prompt cannot contain all knowledge. Giving workers the owner's MCP token
+would let a coding pass change factory policy or see unrelated project context.
+
+**Decision.** Persist a small approved context snapshot in each new WorkOrder. Add an HTTP reader
+that derives scope from the existing live pass capability, and ship factory-memory in the worker
+image. The reader logs record IDs/versions for exposure tracking and accepts no scope override.
+Invalid inputs return 400, inactive capabilities 403 and unexpected storage failures a generic 500.
+
+**Consequence.** Any harness in the image can search without a vendor-specific integration.
+Search may return labeled hypotheses; only approved records enter the initial packet. The normal
+worker rules and acceptance outrank retrieved memory. No WorkItem migration is needed.

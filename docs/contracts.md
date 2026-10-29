@@ -188,7 +188,7 @@ dispatch-preflight consumption of these records are separate operations.
   `FACTORY_ASK_URL`, `FACTORY_ASK_TOKEN` and `FACTORY_ASK_WAIT`; the image's `factory-ask` posts
   one question and blocks for the answer, then continues. The server accepts the token only while
   that WorkItem is `dispatching` or `implementing`, so a finished pass cannot ask, and the token
-  grants nothing but a question about its own pass. `WorkItem.question` holds
+  also grants scoped memory reads through `POST /worker/memory` (ADR-0117). `WorkItem.question` holds
   `{id, text, askedAt, answer, by, answeredAt}`: `factory_status` shows it while the answer is
   empty, and `factory_answer_question` writes the answer and wakes the waiting worker. A new
   dispatch clears the field. Older WorkOrders have no `ask`, and their passes cannot ask; no
@@ -525,3 +525,45 @@ An owner retry does not replenish a member's shared Project budget or lifetime c
   removed field does not linger in them.
 - A consumer must reject a document with an unknown `schemaVersion` rather than
   guess.
+
+## Versioned context graph (ADR-0116)
+
+`factory_memory_put` is owner-only. Required fields: `repo`, stable `key`, `kind`, `text`
+(1–1000 characters) and `source` (1–500). Optional `projectId` must name a Project in that repo.
+Kinds: preference, decision, learning, blocker, fix, evidence. Status defaults to `candidate`;
+`approved`, `contradicted` and `retired` are explicit owner decisions. Source records provenance,
+not proof of correctness. Credential-shaped input is refused; this is not exhaustive PII scanning.
+The audit omits memory content/source; the graph itself retains them and needs private storage.
+
+`version` is 0 for creation, or the current version for an update; stale writes fail atomically.
+Identity is derived from repo/project/key. Kind and scope cannot change. Up to 10 `{id, relation}`
+links may point to records in the same project or repo scope; repo records cannot link to private
+project records. Versions and previous sources remain readable after an update.
+
+`factory_memory_search` is available to owner and driving tokens: `repo`, optional `projectId`,
+`query` (up to 200 characters), `limit` (1–20), `approvedOnly`, or `id` and historical `version`.
+Search requires all case-folded words, treats wildcards literally, and prefers preferences.
+Repo-only queries omit project records. Project queries include shared repo records. Follow a
+returned link by ID with the same scope. Empty results do not distinguish hidden from absent IDs.
+These tools manage knowledge and provenance; dispatch attaches a small approved packet to worker prompts.
+
+## Worker memory retrieval (ADR-0117)
+
+New WorkOrders may carry `memory`: up to six approved `{id, version, kind, text, source}`
+records, with at most 4000 characters across encoded records. Retrieval uses repo/project scope,
+preferences and task-word matches; it makes no model call. Stored WorkOrders preserve what the
+worker received even when the current memory changes. Old WorkOrders omit this optional field.
+
+`POST /worker/memory` accepts the live pass token plus `query`, `id` and `limit` only. The server
+selects the pass's repo/project; a worker cannot choose another scope or historical version.
+Candidate, retired and contradicted records remain labeled as such when explicitly searched;
+they are data, not permission. Reads log returned memory IDs/versions, not query text or content.
+A completed pass loses access. This extends the per-pass capability beyond the ask route to
+scoped context reads; it still grants no owner tools or writes.
+The HTTP reader returns 400 for invalid arguments, 403 for an inactive capability and a generic
+500 for an internal failure, without exposing stored context.
+
+The image's `factory-memory 'query words'` and `factory-memory --id ID` use the same environment
+capability as factory-ask. Failed retrieval is explicit and exits nonzero; it does not invent
+context or block the worker from using its original WorkOrder. Rebuild the worker image to
+install this command; updating factory-mcp alone does not update running worker images.
