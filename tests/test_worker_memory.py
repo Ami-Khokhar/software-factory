@@ -1,5 +1,6 @@
 """Workers get bounded snapshots and use a pass-scoped HTTP reader."""
 import json
+import io
 import os
 import subprocess
 import sys
@@ -7,6 +8,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from contextlib import redirect_stderr
 from pathlib import Path
 from contextlib import contextmanager
 
@@ -140,8 +142,13 @@ class WorkerMemoryTest(unittest.TestCase):
                 self.assertEqual(caught.exception.code, 400)
                 self.assertIn("error", json.load(caught.exception))
             self.store.close()  # Real SQLite failure: no mock of the controller or search.
-            request = urllib.request.Request(base + "memory", json.dumps({"token": token}).encode())
-            with self.assertRaises(urllib.error.HTTPError) as caught:
+            payload = {"token": token, "query": "credential-like-marker-should-not-leak"}
+            request = urllib.request.Request(base + "memory", json.dumps(payload).encode())
+            diagnostic = io.StringIO()
+            with redirect_stderr(diagnostic), self.assertRaises(urllib.error.HTTPError) as caught:
                 urllib.request.urlopen(request, timeout=5)
             self.assertEqual(caught.exception.code, 500)
             self.assertEqual(json.load(caught.exception), {"error": "memory retrieval failed"})
+            self.assertEqual(diagnostic.getvalue(), "factory-mcp worker memory failed (ProgrammingError)\n")
+            self.assertNotIn(token, diagnostic.getvalue())
+            self.assertNotIn("credential-like-marker-should-not-leak", diagnostic.getvalue())
