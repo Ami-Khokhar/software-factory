@@ -2,9 +2,8 @@
 
 A WorkItem is stored as its whole JSON document. `stateVersion` is optimistic concurrency: a write
 must name the version it read, and it stores version + 1. `PRAGMA user_version` counts the migrations
-a store has had. The shared memory and dreaming tables live in this idempotent schema so their
-cursors, evidence windows, graph history and publication records are initialized in one place
-before the helper modules are attached.
+a store has had. Dreaming tables use the same idempotent schema and future migration path, so run
+and cursor state is initialized before its helper is attached.
 """
 import hashlib
 import hmac

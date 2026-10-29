@@ -1001,4 +1001,4 @@ chmod +x ~/.hermes/profiles/day-desk/scripts/factory-dream.sh
 Register it for 03:00 Asia/Kolkata in the profile's configured scheduling timezone:
 `hermes -p day-desk cron create "0 3 * * *" --no-agent --script factory-dream.sh --name factory-dream`.
 Check the job's effective timezone with the installed Hermes version before enabling it; the cron
-The check writes its result to the job log; it does not send a nightly Telegram message.
+expression alone does not encode IST. The check writes to the job log without nightly Telegram delivery.
