@@ -30,7 +30,7 @@ class ProfileTest(unittest.TestCase):
             env = dict(os.environ, HOME=home, PATH="/usr/bin:/bin", FACTORY_BIN="")
             result = subprocess.run(["/bin/sh", str(PROFILE / "scripts" / "factory-dream.sh")],
                                     check=True, capture_output=True, text=True, env=env)
-            self.assertEqual(result.stdout.strip(), "call factory_dream_status {}")
+            self.assertEqual(result.stdout.strip(), "call factory_dream_run {}")
 
     def test_day_desk_reaches_factory_mcp_where_it_listens_by_default(self):
         for server in (DRIVE, OWNER):
