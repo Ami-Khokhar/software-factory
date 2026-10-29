@@ -89,6 +89,15 @@ class OutcomesTest(unittest.TestCase):
         improvements.run(self.foreman, base.AT + timedelta(hours=1))
         self.assertIn("fixMemoryId", self.report())
 
+    def test_driver_composes_a_blocker_ending_in_token_without_rejecting_it(self):
+        root = self.store.knowledge.search(self.config, {"repo": "o/r", "id": self.record["memoryId"]})["memories"][0]
+        self.store.knowledge.put(self.config, {key: root[key] for key in (
+            "repo", "projectId", "key", "kind", "source", "links")} | {
+                "text": "Refresh expired access token", "version": root["version"]}, base.AT.isoformat())
+        self.store.put(workitem(id=self.wid, state="merged", headSha="a" * 40, prNumber=100))
+        improvements.run(self.foreman, base.AT + timedelta(hours=1))
+        self.assertIn("fixMemoryId", self.report())
+
     def test_validation_is_owner_only_and_status_respects_repo_scope(self):
         agent = tools.build(self.store, self.foreman, agent=True)
         self.assertIn("factory_improvement_status", agent)

@@ -8,9 +8,10 @@ from .mcp import Tool, ToolError
 KINDS = ("preference", "decision", "learning", "blocker", "fix", "evidence")
 STATES = ("candidate", "approved", "contradicted", "retired")
 SECRET = re.compile(r"sk-[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}"
-                    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----|https?://[^/\s:]+:[^/\s@]+@")
+                    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+                    r"|[A-Za-z][A-Za-z0-9+.-]*://[^/\s:]+:[^/\s@]+@")
 CREDENTIAL = re.compile(
-    r"(?i)\b(?:[a-z0-9_]*(?:api[_-]?key|token|password|passwd|passphrase|secret|credential|private[_-]?key))"
+    r"(?i)\b(?:[a-z0-9_]*(?:api[_-]?key|token|password|passwd|passphrase|secret|credential|private[_-]?key)[a-z0-9_]*)"
     r"\s*[=:]\s*(?!<redacted>)\S+|\bBearer\s+(?!<redacted>)\S+"
     r"|\bgh[pousr]_[A-Za-z0-9]{6,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bAKIA[0-9A-Z]{16}\b")
 SCHEMA = """

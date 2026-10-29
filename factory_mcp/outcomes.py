@@ -38,7 +38,7 @@ def refresh(foreman, at):
                 root = store.knowledge.search(config, {"repo": repo, "id": record["memoryId"]})["memories"]
                 context = root[0]["text"][:300] if root else "the recorded blocker"
                 store.knowledge.put(config, {"repo": repo, "key": key, "kind": "fix", "status": "approved",
-                    "text": f"Proposed repair for {context}: issue #{record['issueNumber']} merged at PR head {wi['headSha']}. "
+                    "text": f"Proposed repair for {context}. Issue #{record['issueNumber']} merged at PR head {wi['headSha']}. "
                             "Deployment and runtime effect remain unverified.",
                     "source": f"https://github.com/{repo}/pull/{wi['prNumber']}" if wi.get("prNumber")
                               else f"https://github.com/{repo}/issues/{record['issueNumber']}",
@@ -101,7 +101,7 @@ def report(store, config, args):
         state, wi = phase(store, row)
         row["implementation"] = state
         row["workerPasses"] = len(store.workorders(wi["id"])) if wi else 0
-        row["failedPasses"] = sum(h["action"] == "attempt_failed" for h in store.history(wi["id"])) if wi else 0
+        row["failedPasses"] = sum(h["action"] == "attempt_failed" for h in histories.get(wi["id"], [])) if wi else 0
         seen = {}
         for id_ in (row.get("fixMemoryId"), (row.get("validation") or {}).get("memoryId")):
             for wid, first in exposures.get(id_, {}).items():
