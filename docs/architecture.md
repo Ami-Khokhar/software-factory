@@ -88,7 +88,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | File | What it does |
 |---|---|
 | `factory_mcp/__init__.py`, `__main__.py` | The package; `python3 -m factory_mcp` starts the server |
-| `factory_mcp/server.py` | Streamable HTTP on loopback: `POST /mcp` with the bearer token, `POST /worker/ask` with a pass's own token (ADR-0098), the background tick loop |
+| `factory_mcp/server.py` | Streamable HTTP on loopback: `POST /mcp` with the bearer token, `POST /worker/ask` and `POST /worker/memory` with a pass's own token (ADR-0098, ADR-0117), the background tick loop |
 | `factory_mcp/mcp.py` | The MCP protocol: one JSON-RPC message in, one response out, no I/O |
 | `factory_mcp/tools.py` | The tools, and whether each one reads or writes |
 | `factory_mcp/foreman.py` | The Foreman: intake, rebuild, tick, dispatch, poll a task, open a PR, and the person's acts (resolve, approve an issue, start a plan, add a repo, bootstrap a repo, approve or retire a lesson) |
@@ -97,6 +97,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/diagnostics.py` | What a failed attempt means, read from the Result's optional diagnostics (ADR-0050): one evidence-backed cause, or an unknown one, with sanitized bounded context. The next WorkOrder carries the latest attempt and, when that one is not actionable, the last failing-test finding an intervening timeout would otherwise bury — read from the durable attempt records, so it survives the person's retry (ADR-0078) |
 | `factory_mcp/verdict.py` | Reading the gate's verdict marker; finding fingerprints and blockers |
 | `factory_mcp/store.py` | SQLite: WorkItems with optimistic concurrency, WorkOrders, the durable request journal, pause barriers holding a recovery graph until released, the audit log, leases, migrations |
+| `factory_mcp/knowledge.py` | Versioned repo/project context, provenance links and scoped keyword retrieval (ADR-0116) |
 | `factory_mcp/projects.py` | What the Lead's Project fields must hold to store one (ADR-0099): the budget, blueprint and doneWhen limits, and the first limit a field set breaks |
 | `factory_mcp/github.py` | The GitHub REST client |
 | `factory_mcp/relay.py` | The agent-relay task client, and where it finds the relay's token |
@@ -108,6 +109,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/dream_model.py` | One bounded reflection request, validated source references and candidate graph records (ADR-0119) |
 | `factory_mcp/jev_rank.py` | The opt-in Jev call that ranks a repo's lessons for one dispatch, with its fallbacks (ADR-0058) |
 | `factory_mcp/routing.py` | Which worker takes the next attempt: locality first, then one that has not failed |
+| `factory_mcp/dreaming.py` | Durable evidence windows, fair repo selection and the seven-day reflection cooldown (ADR-0118) |
 | `factory_mcp/metrics.py` | The escalation text, the autonomy rate, whether each lesson works, and the weekly report's numbers |
 | `factory_mcp/runtime.py` | Sanitized, read-only runtime facts and observational MCP schema-cache diagnostics (ADR-0091) |
 | `factory_mcp/worker_ops.py` | Validates and runs one bounded sanitized provider-health check, stores its binding/quarantine record, and calls the relay's fixed registry-reload endpoint (ADR-0094) |
@@ -237,7 +239,8 @@ for a decision `factory_resolve_human` makes, Day Desk's once per incident or th
   which Docker Desktop maps to the host — and blocks for a bounded wait. The
   server stores the question on the WorkItem and `factory_answer_question` answers it; the worker
   proceeds with its own reading when nobody answers in time. The token names that one pass, so it
-  can ask about nothing else, and it dies with the pass. `factory-ask` answers `-h` and `--help`
+  can ask questions and read repo/project-scoped memory (ADR-0117), and it dies with the pass.
+  `factory-ask` answers `-h` and `--help`
   itself with its usage, without contacting the channel (ADR-0111).
 - The runner turns the commits into a unified patch, measures the whole pull request — the branch's
   diff against its merge base with the default branch, so a fix is counted with the implementation it

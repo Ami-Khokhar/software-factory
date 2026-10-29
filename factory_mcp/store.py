@@ -18,6 +18,11 @@ from .knowledge import Knowledge
 from .dreaming import Dreaming
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS dream_runs (
+ id TEXT PRIMARY KEY, started REAL NOT NULL, eligible REAL NOT NULL,
+ status TEXT NOT NULL, doc TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS dream_cursors (repo TEXT PRIMARY KEY, seq INTEGER NOT NULL);
+
 CREATE TABLE IF NOT EXISTS workitems (
   id TEXT PRIMARY KEY,
   state_version INTEGER NOT NULL,
@@ -242,7 +247,7 @@ class Store:
 
     def order_by_ask_token(self, token):
         """The WorkItem and live WorkOrder this ask token belongs to, or None (ADR-0098). The token
-        is the pass's whole capability: it can ask about that pass and read its answer, nothing else."""
+        grants questions, answers and repo/project-scoped memory reads for that live pass."""
         token = str(token or "")
         if not token:
             return None

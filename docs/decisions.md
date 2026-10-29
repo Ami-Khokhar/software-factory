@@ -2846,6 +2846,7 @@ would let a coding pass change factory policy or see unrelated project context.
 **Decision.** Persist a small approved context snapshot in each new WorkOrder. Add an HTTP reader
 that derives scope from the existing live pass capability, and ship factory-memory in the worker
 image. The reader logs record IDs/versions for exposure tracking and accepts no scope override.
+Invalid inputs return 400, inactive capabilities 403 and unexpected storage failures a generic 500.
 
 **Consequence.** Any harness in the image can search without a vendor-specific integration.
 Search may return labeled hypotheses; only approved records enter the initial packet. The normal
@@ -2858,7 +2859,8 @@ reflection budget into a nightly stream of model requests or lose unprocessed ev
 
 **Decision.** Use one global seven-day reservation in SQLite, claimed transactionally before
 reflection. Keep failed/crashed reservations; failed evidence is not acknowledged. Snapshot only
-a bounded prefix and advance per-repo cursors when its result is durable. Pending publication
+a bounded prefix per repo, taking turns and rotating the first repo between runs to share the
+byte budget. Advance per-repo cursors when the result is durable. Pending publication
 prevents a second reflection. The eligibility reader makes no model request.
 
 **Consequence.** The cron script checks cheaply each night; later reflection consumes the claim.
