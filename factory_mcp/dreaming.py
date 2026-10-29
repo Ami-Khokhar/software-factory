@@ -51,21 +51,22 @@ class Dreaming:
         eligible_at = last["nextEligibleAt"] if last else 0
         if at.timestamp() < eligible_at:
             return {"eligible": False, "reason": "cooldown", "nextEligibleAt": eligible_at}
-        if last and last["status"] in ("planned", "publishing"):
+        if last and last["status"] == "planned":
             return {"eligible": False, "reason": "publication_pending", "runId": last["id"]}
         evidence, _ = self.collect(config)
         return {"eligible": bool(evidence), "reason": "ready" if evidence else "no_evidence",
                 "nextEligibleAt": eligible_at}
 
     def claim(self, config, at):
-        if not self.status(config, at)["eligible"]:
+        last = self.latest()
+        if last and (at.timestamp() < last["nextEligibleAt"] or last["status"] == "planned"):
             return None
         evidence, cursors = self.collect(config)
         if not evidence:
             return None
         with self.store._lock, self.store._transaction():
             last = self.store._db.execute("SELECT eligible, status FROM dream_runs ORDER BY started DESC LIMIT 1").fetchone()
-            if last and (at.timestamp() < last[0] or last[1] in ("planned", "publishing")):
+            if last and (at.timestamp() < last[0] or last[1] == "planned"):
                 return None
             # A crashed claim cannot cause nightly model retries. Once its cooldown ends,
             # the unprocessed evidence is eligible again; old state remains available.
@@ -74,7 +75,7 @@ class Dreaming:
             run = {"id": uuid.uuid4().hex, "startedAt": at.timestamp(),
                    "nextEligibleAt": (at + COOLDOWN).timestamp(), "status": "claimed",
                    "evidence": evidence, "cursors": cursors}
-            self.store._db.execute("INSERT INTO dream_runs VALUES (?,?,?,?,?)", (
+            self.store._db.execute("INSERT INTO dream_runs (id, started, eligible, status, doc) VALUES (?,?,?,?,?)", (
                 run["id"], run["startedAt"], run["nextEligibleAt"], run["status"], json.dumps(run)))
         return run
 
@@ -93,6 +94,6 @@ class Dreaming:
                                   (state, json.dumps(run), run_id))
             if state != "failed":
                 for repo, cursor in run["cursors"].items():
-                    self.store._db.execute("INSERT INTO dream_cursors VALUES (?,?) ON CONFLICT(repo) "
+                    self.store._db.execute("INSERT INTO dream_cursors (repo, seq) VALUES (?,?) ON CONFLICT(repo) "
                         "DO UPDATE SET seq=MAX(seq,excluded.seq)", (repo, cursor))
         return run

@@ -80,6 +80,32 @@ class MemoryTest(unittest.TestCase):
         self.assertEqual(event["workItemId"], "o/r#1")
         self.assertIn("at", event)
 
+    def test_gate_problems_are_bounded_sanitized_summaries(self):
+        secret = "sk-" + "a" * 24
+        self.log(action="reconcile", reason="selected scalar", blocking=[
+            {"problem": "First " + secret, "fingerprint": "hidden", "nested": {"private": "hidden"}},
+            {"problem": "b" * 120}, {"problem": "third"}, {"problem": "fourth"},
+            {"nested": {"problem": "malformed"}},
+        ])
+        event = self.read()["events"][0]
+        self.assertEqual(event["detail"]["reason"], "selected scalar")
+        problems = event["detail"]["gateProblems"]
+        self.assertEqual(len(problems), 3)
+        self.assertLessEqual(max(map(len, problems)), 100)
+        self.assertLessEqual(sum(map(len, problems)), 300)
+        self.assertEqual(problems[0], "<redacted>")
+        self.assertEqual(problems[1], "b" * 100)
+        self.assertEqual(problems[2], "third")
+        self.assertNotIn("blocking", event["detail"])
+        encoded = json.dumps(event)
+        for hidden in (secret, "fingerprint", "nested", "private", "fourth", "malformed"):
+            self.assertNotIn(hidden, encoded)
+
+        self.log(action="reconcile", blocking=[{"nested": {"problem": "malformed"}},
+                                                 {"problem": "after malformed"}])
+        second = self.read()["events"][1]
+        self.assertEqual(second["detail"]["gateProblems"], ["after malformed"])
+
     def test_empty_and_exactly_full_pages_finish_without_moving_cursor_backwards(self):
         self.assertEqual(self.read(after=20)["nextCursor"], 20)
         self.assertEqual(self.read(after=20)["through"], 20)
@@ -95,6 +121,16 @@ class MemoryTest(unittest.TestCase):
                      {"after": 2, "through": 1}, {"unknown": "value"}):
             with self.subTest(args=args), self.assertRaises(ToolError):
                 self.read(**args)
+
+    def test_invalid_scope_and_keys_name_the_input_to_fix_without_argument_values(self):
+        with self.assertRaisesRegex(ToolError, "missing/r.*must be enabled"):
+            self.read(repo="missing/r")
+        with self.assertRaises(ToolError) as caught:
+            self.read(unknown="private-value")
+        self.assertIn("unknown", str(caught.exception))
+        self.assertIn("allowed:", str(caught.exception))
+        self.assertIn("through", str(caught.exception))
+        self.assertNotIn("private-value", str(caught.exception))
 
     def test_readonly_agent_tool_returns_evidence_over_mcp(self):
         self.log(reason="test failed")

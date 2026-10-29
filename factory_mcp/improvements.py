@@ -153,7 +153,7 @@ def run(foreman, at):
     from .outcomes import refresh
     refresh(foreman, at)
     latest = foreman.store.dreaming.latest()
-    if latest and latest["status"] in ("planned", "publishing"):
+    if latest and latest["status"] == "planned":
         return publish(foreman, latest)
     result = dream_model.reflect(foreman.store, foreman.config, at)
     latest = foreman.store.dreaming.latest()
