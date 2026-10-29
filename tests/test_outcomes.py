@@ -126,7 +126,8 @@ class OutcomesTest(unittest.TestCase):
         original = self.gh.changed_files
         def blocked(repo, base, head):
             entered.set()
-            resume.wait()
+            if not resume.wait(5):
+                raise TimeoutError("test did not resume the fake GitHub request")
             return original(repo, base, head)
         self.gh.changed_files = blocked
         errors = []

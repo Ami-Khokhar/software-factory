@@ -66,14 +66,10 @@ def refresh(foreman, at):
                 current = store.knowledge.search(config, {"repo": repo, "id": measurement["memoryId"]})["memories"]
                 if current and current[0]["status"] == "approved":
                     node = current[0]
-                    update = {key: node[key] for key in (
+                    # A concurrent validation must win before this versioned graph update.
+                    updated = store.knowledge.put(config, {key: node[key] for key in (
                         "repo", "projectId", "key", "kind", "text", "source", "version", "links")} | {
-                            "status": "candidate"}
-                    # The validation row may have changed during the GitHub reads above. Reuse
-                    # its captured version as the graph's optimistic version too, so a stale
-                    # refresh cannot demote a newer measurement before its row CAS fails.
-                    update["version"] = expected_version
-                    updated = store.knowledge.put(config, update, at.isoformat())
+                            "status": "candidate", "version": expected_version}, at.isoformat())
                     measurement["version"] = updated["version"]
                 measurement["direction"] = "needs_revalidation"
             save(store, record["fingerprint"], repo, {"checkedHead": head, "validation": measurement},
