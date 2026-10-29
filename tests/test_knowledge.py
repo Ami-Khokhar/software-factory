@@ -59,11 +59,29 @@ class KnowledgeTest(unittest.TestCase):
         self.assertTrue(self.agent["factory_memory_search"].listing()["annotations"]["readOnlyHint"])
 
     def test_token_cost_preferences_are_not_mistaken_for_credentials(self):
-        node = self.put(text="Prefer efficient token use, lower token costs and security token configuration",
-                        status="approved")
-        self.assertEqual(self.search(query="token costs", approvedOnly=True), [node])
+        for index, content in enumerate(("Prefer efficient token use, lower token costs and security token configuration",
+                "Store the token in the keychain, never in the repo", "Keep secrets out of logs",
+                "Rotate the password before the release", "FACTORY_WALL_MS=1200000 fixed the timeout",
+                "Rotate tokens quarterly", "Run factory auth for credentials")):
+            with self.subTest(content=content):
+                node = self.put(key=f"safe-{index}", text=content, status="approved")
+                self.assertEqual(self.search(id=node["id"], approvedOnly=True), [node])
+                if index == 0:
+                    self.assertEqual(self.search(query="token costs", approvedOnly=True), [node])
+
         config = self.put(key="runtime", text="FACTORY_WALL_MS=1200000", version=0)
         self.assertEqual(config["text"], "FACTORY_WALL_MS=1200000")
+
+    def test_a_valid_kind_change_is_refused_without_changing_the_record(self):
+        first = self.put()
+        with self.assertRaisesRegex(ToolError, "kind cannot change"):
+            self.put(version=1, kind="learning")
+        self.assertEqual(self.search(id=first["id"]), [first])
+
+    def test_preferences_precede_other_matching_knowledge(self):
+        decision = self.put(key="diagram-choice", kind="decision", text="Use diagrams")
+        preference = self.put(key="visual-style", text="Use diagrams")
+        self.assertEqual(self.search(query="diagrams"), [preference, decision])
 
     def test_project_read_cannot_see_sibling_memory_or_links(self):
         shared = self.put()
@@ -87,7 +105,16 @@ class KnowledgeTest(unittest.TestCase):
                         {"text": "ghp_" + "A" * 32}, {"text": "github_pat_" + "B" * 32},
                         {"text": "AKIA" + "C" * 16}, {"text": "PRIVATE_KEY=private-value"},
                         {"text": "AWS_SECRET_ACCESS_KEY=synthetic-value"},
+                        {"text": "secret_key: synthetic-value"},
+                        {"text": "aws_secret_access_key: synthetic-value"},
+                        {"text": "private_key_id: synthetic-value"},
+                        {"text": "access_token_v2: synthetic-value"},
+                        {"text": "password_hash: synthetic-value"},
+                        {"text": "aws_secret_access_key=synthetic-value"},
+                        {"text": "access_token=synthetic-value"}, {"text": "client_secret=synthetic-value"},
                         {"text": "DATABASE_URL=postgres://user:pass@host/db"},
+                        {"text": "Rotation policy for tokens: quarterly"},
+                        {"text": "credentials: run factory auth"},
                         {"source": "password=hidden"},
                         {"kind": "unknown"}, {"status": "unknown"}, {"version": True},
                         {"links": [{"id": "missing", "relation": "uses"}]}, {"text": "x" * 1001}):

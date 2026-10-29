@@ -330,7 +330,9 @@ for a decision `factory_resolve_human` makes, Day Desk's once per incident or th
   commit other than a worker's or the gate's merge of the base branch (ADR-0039), and a MERGE
   verdict on the merged head (`metrics.autonomy`). It is the project's measure of success.
 
+## Versioned context records
+
 `knowledge.py` keeps scoped graph nodes, links and immutable version history in the factory's
 SQLite file. Owner-only writes and read-only `factory_memory_search` expose the graph through
-MCP; Day Desk's owner tool profile includes the writer. Neither graph storage nor search changes
-worker dispatch or starts dreaming. See the versioned context contract in `contracts.md`.
+MCP; Day Desk's owner tool profile includes the writer. Storage and search make no model calls.
+Workers receive approved context through ADR-0117. See the versioned context contract in `contracts.md`.

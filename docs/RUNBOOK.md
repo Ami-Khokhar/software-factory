@@ -969,7 +969,7 @@ deployment record stays where it was. Set the list by hand, then run `factory up
 again, which verifies it by readback and discovery:
 
 ```bash
-hermes -p day-desk config set mcp_servers.factory.tools.include '["factory_bootstrap_repo", "factory_add_repo", "factory_approve_lesson", "factory_retire_lesson", "factory_approve_plan_allowance", "factory_authorize_setup_merge", "factory_revoke_setup_merge"]'
+hermes -p day-desk config set mcp_servers.factory.tools.include '["factory_bootstrap_repo", "factory_add_repo", "factory_approve_lesson", "factory_retire_lesson", "factory_memory_put", "factory_dream_run", "factory_improvement_validate", "factory_approve_plan_allowance", "factory_authorize_setup_merge", "factory_revoke_setup_merge"]'
 ```
 
 Keep the driving identity out of it: never add the approval tool, or any owner tool,
@@ -1009,13 +1009,14 @@ The same nightly script calls `factory_dream_run`. Configure `FACTORY_DREAM_URL`
 `FACTORY_DREAM_MODEL` and `FACTORY_DREAM_API_KEY` in the factory service's secure environment, permit
 that provider destination, restart factory-mcp, and verify one synthetic run before enabling cron.
 Do not commit the key or pass it as a CLI argument. The endpoint must include its chat completion
-path. Without endpoint/model the job skips. Repeated runs inside seven days skip; failures retain
-that cooldown. The reflection step saves a plan and candidate graph nodes; issue publication is
-handled by the next step. Actual provider access and deployment require separate validation.
+path. Without endpoint/model the job skips reflection but still records merge facts and revalidates
+measurements. Repeated runs inside seven days skip reflection; failures retain that cooldown.
+The same call saves candidate memories and a plan, then publishes its issues. Later calls resume
+pending publication without another model request. Provider access and deployment need separate checks.
 
 ### Improvement admission
 
-The admission step publishes saved plans as `factory:proposed` issues. Set `FACTORY_DREAM_AUTO_REPOS`
+The same call publishes saved plans as `factory:proposed` issues. Set `FACTORY_DREAM_AUTO_REPOS`
 to an explicit subset of `FACTORY_REPOS` only after validating proposed output and provider access.
 One eligible issue per dream may become `factory:ready` through normal trusted-author admission;
 normal ticks do the implementation and the gate does the merging. Existing fix-round allowances

@@ -14,15 +14,6 @@ CREDENTIAL = re.compile(
     r"(?i)\b(?:[a-z0-9_]*(?:api[_-]?key|token|password|passwd|passphrase|secret|credential|private[_-]?key)[a-z0-9_]*)"
     r"\s*[=:]\s*(?!<redacted>)\S+|\bBearer\s+(?!<redacted>)\S+"
     r"|\bgh[pousr]_[A-Za-z0-9]{6,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b|\bAKIA[0-9A-Z]{16}\b")
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS memory_nodes (
- id TEXT PRIMARY KEY, repo TEXT NOT NULL, project TEXT NOT NULL,
- version INTEGER NOT NULL, doc TEXT NOT NULL, search TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS memory_scope ON memory_nodes(repo, project);
-CREATE TABLE IF NOT EXISTS memory_versions (
- id TEXT NOT NULL, version INTEGER NOT NULL, doc TEXT NOT NULL,
- PRIMARY KEY(id, version));
-"""
 
 
 def tools(store, config, clock):
@@ -67,7 +58,6 @@ def record_id(repo, project, key):
 class Knowledge:
     def __init__(self, store):
         self.store = store
-        store._db.executescript(SCHEMA)
 
     def scope(self, config, args):
         repo = args.get("repo")

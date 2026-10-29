@@ -539,7 +539,10 @@ An owner retry does not replenish a member's shared Project budget or lifetime c
 (1–1000 characters) and `source` (1–500). Optional `projectId` must name a Project in that repo.
 Kinds: preference, decision, learning, blocker, fix, evidence. Status defaults to `candidate`;
 `approved`, `contradicted` and `retired` are explicit owner decisions. Source records provenance,
-not proof of correctness. Credential-shaped input is refused; this is not exhaustive PII scanning.
+not proof of correctness. Private-key/token shapes, credential assignments and authenticated URLs
+are refused; ordinary security prose and nonsecret configuration examples are allowed. This is not
+exhaustive PII scanning. Assignment-shaped credential labels are conservatively refused even when
+used as ordinary prose; rephrase guidance as sentences.
 The audit omits memory content/source; the graph itself retains them and needs private storage.
 
 `version` is 0 for creation, or the current version for an update; stale writes fail atomically.
@@ -550,9 +553,13 @@ project records. Versions and previous sources remain readable after an update.
 `factory_memory_search` is available to owner and driving tokens: `repo`, optional `projectId`,
 `query` (up to 200 characters), `limit` (1–20), `approvedOnly`, or `id` and historical `version`.
 Search requires all case-folded words, treats wildcards literally, and prefers preferences.
+The response is `{memories, hasMore}`; each memory contains `id`, `repo`, `projectId`, `key`,
+`kind`, `status`, `text`, `source`, `version`, `links` and `at`. `limit` defaults to 10.
+Contradicted measurements remain inspectable with history; `approvedOnly` and initial worker
+packets exclude them. Outcome reporting preserves the contrary evidence (ADR-0121).
 Repo-only queries omit project records. Project queries include shared repo records. Follow a
 returned link by ID with the same scope. Empty results do not distinguish hidden from absent IDs.
-These tools manage knowledge and provenance; dispatch attaches a small approved packet to worker prompts.
+These tools manage knowledge and provenance. Worker delivery is described below.
 
 ## Worker memory retrieval (ADR-0117)
 
