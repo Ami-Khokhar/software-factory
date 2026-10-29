@@ -59,7 +59,7 @@ class KnowledgeTest(unittest.TestCase):
         self.assertTrue(self.agent["factory_memory_search"].listing()["annotations"]["readOnlyHint"])
 
     def test_token_cost_preferences_are_not_mistaken_for_credentials(self):
-        for index, content in enumerate(("Prefer efficient token use and lower token costs",
+        for index, content in enumerate(("Prefer efficient token use, lower token costs and security token configuration",
                 "Store the token in the keychain, never in the repo", "Keep secrets out of logs",
                 "Rotate the password before the release", "FACTORY_WALL_MS=1200000 fixed the timeout")):
             node = self.put(key=f"safe-{index}", text=content, status="approved")
@@ -95,6 +95,8 @@ class KnowledgeTest(unittest.TestCase):
     def test_invalid_updates_rollback_and_secrets_are_refused(self):
         first = self.put()
         for changes in ({"text": "API_KEY=private-value"}, {"text": "sk-" + "a1B2" * 8},
+                        {"text": "ghp_" + "A" * 32}, {"text": "github_pat_" + "B" * 32},
+                        {"text": "AKIA" + "C" * 16}, {"text": "PRIVATE_KEY=private-value"},
                         {"source": "password=hidden"},
                         {"kind": "unknown"}, {"status": "unknown"}, {"version": True},
                         {"links": [{"id": "missing", "relation": "uses"}]}, {"text": "x" * 1001}):
