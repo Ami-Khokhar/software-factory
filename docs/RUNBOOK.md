@@ -990,8 +990,8 @@ and `orb` on PATH. No Docker socket is mounted into the sandbox.
 
 ### Dream eligibility schedule
 
-The profile's `scripts/factory-dream.sh` currently checks eligibility only, without an agent or
-model call. Install it in the profile before registering the job:
+The profile's `scripts/factory-dream.sh` runs the no-agent reflection check. Install it in the profile
+before registering the job:
 
 ```bash
 cp ~/.local/share/software-factory/tenant/hermes/scripts/factory-dream.sh ~/.hermes/profiles/day-desk/scripts/factory-dream.sh
@@ -1002,3 +1002,13 @@ Register it for 03:00 Asia/Kolkata in the profile's configured scheduling timezo
 `hermes -p day-desk cron create "0 3 * * *" --no-agent --script factory-dream.sh --name factory-dream`.
 Check the job's effective timezone with the installed Hermes version before enabling it; the cron
 expression alone does not encode IST. The check writes to the job log without nightly Telegram delivery.
+
+### Enable reflection
+
+The same nightly script calls `factory_dream_run`. Configure `FACTORY_DREAM_URL`,
+`FACTORY_DREAM_MODEL` and `FACTORY_DREAM_API_KEY` in the factory service's secure environment, permit
+that provider destination, restart factory-mcp, and verify one synthetic run before enabling cron.
+Do not commit the key or pass it as a CLI argument. The endpoint must include its chat completion
+path. Without endpoint/model the job skips. Repeated runs inside seven days skip; failures retain
+that cooldown. The reflection step saves a plan and candidate graph nodes; issue publication is
+handled by the next step. Actual provider access and deployment require separate validation.

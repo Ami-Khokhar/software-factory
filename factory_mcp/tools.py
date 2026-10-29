@@ -1,7 +1,7 @@
 """The factory tools that Day Desk (Hermes) and the factory CLI call. Each one declares its effect."""
 from datetime import datetime, timezone
 
-from . import docker, knowledge, lessons, memory, metrics, projects, repos, runtime, worker_ops
+from . import docker, dream_model, knowledge, lessons, memory, metrics, projects, repos, runtime, worker_ops
 from .store import now
 from .foreman import MAX_ALLOWANCE, MAX_PLAN_ISSUES, RECOVERY_ACTIONS, Foreman, agent_may_resolve, lead_may_act
 from .github import GitHubError
@@ -627,6 +627,10 @@ def build(store, foreman, agent=False):
                              "by": {"type": "string", "minLength": 1}}},
              "write", lambda args: {"workItem": foreman.use_allowance(
                  args["id"], args["planId"], args["action"], args["note"], args["by"])}),
+        Tool("factory_dream_run", "Owner: reflect once within the global seven-day cooldown. "
+             "Creates candidate knowledge and a saved plan; no automatic approvals or merges.",
+             {"type": "object", "additionalProperties": False}, "write",
+             lambda args: dream_model.reflect(store, foreman.config, datetime.now(timezone.utc))),
         Tool("factory_dream_status", "Check dreaming cooldown and pending evidence without a model call.",
              {"type": "object", "additionalProperties": False}, "read",
              lambda args: store.dreaming.status(foreman.config, datetime.now(timezone.utc))),

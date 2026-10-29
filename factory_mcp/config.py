@@ -1,6 +1,6 @@
 """Configuration, read from the environment and repos.json once at start."""
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import jev_rank
@@ -41,6 +41,9 @@ class Config:
     rank_lessons: bool = False  # Jev ranks the repo's lessons per dispatch (ADR-0058)
     jev_api_key: str = ""  # TYPESAFE_API_KEY: only jev_rank sends it, in one Authorization header
     jev_url: str = jev_rank.HOST  # the System One endpoint; tests point it at a local fake
+    dream_url: str = ""  # OpenAI-compatible chat-completions endpoint; empty disables reflection
+    dream_model: str = ""
+    dream_api_key: str = field(default="", repr=False)
 
     def listed(self, repo):
         """The allowlist's spelling of `repo`, or None. GitHub repo names ignore case."""
@@ -108,6 +111,9 @@ class Config:
             raise ValueError("FACTORY_JEV_LESSON_RANKING is on, but TYPESAFE_API_KEY is not set; "
                              "set the key in the factory service environment, or turn ranking off")
         return cls(
+            dream_url=env.get("FACTORY_DREAM_URL", ""),
+            dream_model=env.get("FACTORY_DREAM_MODEL", ""),
+            dream_api_key=env.get("FACTORY_DREAM_API_KEY", ""),
             mcp_token=token,
             repos=repos,
             db_path=env.get("FACTORY_DB") or defaults.db_path,

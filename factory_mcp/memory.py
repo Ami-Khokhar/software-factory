@@ -1,12 +1,17 @@
 """Bounded, repo-scoped evidence from durable audit records; no model calls."""
 from . import diagnostics
 from .mcp import ToolError
+from .knowledge import SECRET
 
 # Tool arguments, prompts and arbitrary Result payloads are deliberately not exposed.
 ACTIONS = ("dispatch", "attempt_failed", "result", "reconcile", "human_resolved",
            "worker_question", "question_answered")
 FIELDS = ("from", "to", "workOrder", "worker", "commitSha", "headSha", "cause",
-          "diagnosis", "reason", "verdict", "round", "note", "question")
+          "diagnosis", "reason", "verdict", "round", "note", "question", "questionText", "answerText")
+
+
+def clean(value, limit=300):
+    return "<redacted>" if SECRET.search(value) else diagnostics.sanitize(value, limit)
 
 
 def events(store, config, args):
@@ -34,9 +39,15 @@ def events(store, config, args):
         for key in FIELDS:
             value = row["detail"].get(key)
             if isinstance(value, str):
-                detail[key] = diagnostics.sanitize(value)
+                detail[key] = clean(value)
             elif type(value) in (int, bool):
                 detail[key] = value
+        blocking = row["detail"].get("blocking")
+        if isinstance(blocking, list):
+            problems = [clean(item["problem"], 100) for item in blocking[:3]
+                        if isinstance(item, dict) and isinstance(item.get("problem"), str)]
+            if problems:
+                detail["gateProblems"] = problems
         selected.append({"seq": row["seq"], "at": row["at"], "action": row["action"],
                          "workItemId": row["workItemId"], "detail": detail})
     return {"repo": repo, "events": selected, "through": through,

@@ -25,9 +25,14 @@ Events include dispatches, failed attempts, accepted Results, reconciliations, h
 and question/answer events already in the audit. They are joined to existing WorkItems in the
 requested repo. Global events, other repos and tool-argument records are excluded. Nested payloads
 and arbitrary keys are omitted; selected strings use diagnostic redaction and a 300-character cap.
+Reconcile events also project up to three blocking gate problem strings as `detail.gateProblems`,
+each capped at 100 characters and 300 characters total, with the same redaction. Other finding
+fields and nested data remain omitted.
 This is bounded internal evidence, not full transcripts, full findings or a guarantee that every
-kind of private text is removed. Question/answer events currently identify the question, not its
-full text. No memory graph, learned preferences or scheduled dreaming is enabled by this tool.
+kind of private text is removed. Question/answer events may include selected `questionText` and
+`answerText`, each sanitized and capped at 300 characters before the live WorkItem field clears.
+They remain selected text, not raw transcripts. No memory graph, learned preferences or scheduled
+dreaming is enabled by this tool.
 
 ## Worker health operations
 
@@ -584,3 +589,20 @@ repos. Collection takes turns across repos and rotates the starting repo between
 repo cannot monopolize the window. Each repo keeps a contiguous prefix. Only incorporated sequences advance after successful planning/completion; failures leave
 all evidence pending. This is an evidence window, not a sliding seven-day cutoff. Run history and
 cursors are additive SQLite tables; no WorkItem document changes. Claims do not create issues.
+
+## Bounded reflection (ADR-0119)
+
+Owner-only `factory_dream_run` uses `FACTORY_DREAM_URL` (full OpenAI-compatible chat-completions
+URL), `FACTORY_DREAM_MODEL`, and optional securely configured `FACTORY_DREAM_API_KEY`. Without
+endpoint/model it returns not_configured and consumes no cooldown. Only HTTPS is accepted except
+loopback test servers; redirects are refused. The request has at most 22,000 bytes and 2048 output
+tokens, one attempt, a 60-second socket timeout and a 64-KiB response bound. No raw provider error
+body is logged. The nightly no-agent script calls this tool; skipped checks make no model request.
+
+Output must contain at most three improvements and five learnings. Every candidate must cite real
+same-repo audit IDs. Improvements require bounded causes, file paths and acceptance checks; inferred
+preferences remain candidates. Evidence, blockers and learnings become linked graph records with
+source IDs. Prior repo context is included only within the input budget. Invalid output keeps the
+cooldown and unprocessed evidence. A valid plan is saved before later issue publication.
+Question/answer audit events now keep sanitized bounded text before the live question field clears.
+This is selected context, not a transcript archive or exhaustive private-data classification.
