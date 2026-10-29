@@ -2846,6 +2846,7 @@ would let a coding pass change factory policy or see unrelated project context.
 **Decision.** Persist a small approved context snapshot in each new WorkOrder. Add an HTTP reader
 that derives scope from the existing live pass capability, and ship factory-memory in the worker
 image. The reader logs record IDs/versions for exposure tracking and accepts no scope override.
+Invalid inputs return 400, inactive capabilities 403 and unexpected storage failures a generic 500.
 
 **Consequence.** Any harness in the image can search without a vendor-specific integration.
 Search may return labeled hypotheses; only approved records enter the initial packet. The normal
