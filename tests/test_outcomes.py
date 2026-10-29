@@ -1,4 +1,5 @@
 """Merge facts, measured effects, versioned corrections and exposure are distinct."""
+import threading
 import unittest
 from datetime import timedelta
 
@@ -117,3 +118,38 @@ class OutcomesTest(unittest.TestCase):
             improvements.save(self.store, self.record["fingerprint"], "o/r",
                               {"checkedHead": "old"}, expected_validation=0)
         self.assertIsNone(self.report().get("checkedHead"))
+
+    def test_stale_refresh_cannot_demote_a_concurrent_newer_measurement(self):
+        self.merged()
+        self.measure()
+        self.gh.branches[("o/r", "main")] = "c" * 40
+        self.gh.files[("o/r", "c" * 40)] = [{"filename": "worker/runner.py"}]
+        entered, resume = threading.Event(), threading.Event()
+        original = self.gh.changed_files
+        def blocked(repo, base, head):
+            entered.set()
+            if not resume.wait(5):
+                raise TimeoutError("test did not resume the fake GitHub request")
+            return original(repo, base, head)
+        self.gh.changed_files = blocked
+        errors = []
+        def refresh():
+            try:
+                outcomes.refresh(self.foreman, base.AT + timedelta(days=1))
+            except Exception as exc:
+                errors.append(exc)
+        thread = threading.Thread(target=refresh)
+        thread.start()
+        try:
+            self.assertTrue(entered.wait(5))
+            newer = self.measure(version=1, revision="c" * 40, recurrences=1)
+        finally:
+            resume.set()
+            thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(errors), 1)  # stale refresh loses its graph version check
+        self.assertIsInstance(errors[0], ToolError)
+        current = self.store.knowledge.search(self.config, {"repo": "o/r", "id": newer["memoryId"]})["memories"][0]
+        self.assertEqual((current["version"], current["status"]), (2, "approved"))
+        validation = self.report()["validation"]
+        self.assertEqual(validation["revision"], "c" * 40)

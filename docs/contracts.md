@@ -188,7 +188,7 @@ dispatch-preflight consumption of these records are separate operations.
   `FACTORY_ASK_URL`, `FACTORY_ASK_TOKEN` and `FACTORY_ASK_WAIT`; the image's `factory-ask` posts
   one question and blocks for the answer, then continues. The server accepts the token only while
   that WorkItem is `dispatching` or `implementing`, so a finished pass cannot ask, and the token
-  grants nothing but a question about its own pass. `WorkItem.question` holds
+  also grants scoped memory reads through `POST /worker/memory` (ADR-0117). `WorkItem.question` holds
   `{id, text, askedAt, answer, by, answeredAt}`: `factory_status` shows it while the answer is
   empty, and `factory_answer_question` writes the answer and wakes the waiting worker. A new
   dispatch clears the field. Older WorkOrders have no `ask`, and their passes cannot ask; no
@@ -566,6 +566,8 @@ Candidate, retired and contradicted records remain labeled as such when explicit
 they are data, not permission. Reads log returned memory IDs/versions, not query text or content.
 A completed pass loses access. This extends the per-pass capability beyond the ask route to
 scoped context reads; it still grants no owner tools or writes.
+The HTTP reader returns 400 for invalid arguments, 403 for an inactive capability and a generic
+500 for an internal failure, without exposing stored context.
 
 The image's `factory-memory 'query words'` and `factory-memory --id ID` use the same environment
 capability as factory-ask. Failed retrieval is explicit and exits nonzero; it does not invent
@@ -580,7 +582,8 @@ A failure or crashed claimant keeps that cooldown. No evidence means no claim. A
 run blocks another reflection until its publication is handled. Timestamps are UTC epoch seconds.
 
 Each claim contains at most 20 selected events per repo and 12,000 encoded event bytes across
-repos. Only incorporated sequences advance after successful planning/completion; failures leave
+repos. Collection takes turns across repos and rotates the starting repo between runs so a busy
+repo cannot monopolize the window. Each repo keeps a contiguous prefix. Only incorporated sequences advance after successful planning/completion; failures leave
 all evidence pending. This is an evidence window, not a sliding seven-day cutoff. Run history and
 cursors are additive SQLite tables; no WorkItem document changes. Claims do not create issues.
 

@@ -66,9 +66,10 @@ def refresh(foreman, at):
                 current = store.knowledge.search(config, {"repo": repo, "id": measurement["memoryId"]})["memories"]
                 if current and current[0]["status"] == "approved":
                     node = current[0]
+                    # A concurrent validation must win before this versioned graph update.
                     updated = store.knowledge.put(config, {key: node[key] for key in (
                         "repo", "projectId", "key", "kind", "text", "source", "version", "links")} | {
-                            "status": "candidate"}, at.isoformat())
+                            "status": "candidate", "version": expected_version}, at.isoformat())
                     measurement["version"] = updated["version"]
                 measurement["direction"] = "needs_revalidation"
             save(store, record["fingerprint"], repo, {"checkedHead": head, "validation": measurement},
@@ -110,7 +111,7 @@ def report(store, config, args):
             for h in histories[wid][first + 1:]) for wid, first in seen.items())
         row["effect"] = (row.get("validation") or {}).get("direction", "unknown")
     return {"improvements": rows, "limit": 100,
-            "note": "Failures after exposure are not proof of same-cause recurrence; zero exposure proves no improvement."}
+            "note": "Failures after exposure are not proof of same-cause recurrence; zero exposure leaves improvement unknown."}
 
 
 def validate(foreman, args, at):
