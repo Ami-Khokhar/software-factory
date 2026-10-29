@@ -1010,13 +1010,13 @@ The same nightly script calls `factory_dream_run`. Configure `FACTORY_DREAM_URL`
 that provider destination, restart factory-mcp, and verify one synthetic run before enabling cron.
 Do not commit the key or pass it as a CLI argument. The endpoint must include its chat completion
 path. Without endpoint/model the job skips reflection but still records merge facts and revalidates
-measurements. Repeated runs inside seven days skip; failures retain that cooldown. Reflection saves
-a plan and candidate graph nodes; issue publication is handled by the next step. Actual provider
-access and deployment require separate validation.
+measurements. Repeated runs inside seven days skip reflection; failures retain that cooldown.
+The same call saves candidate memories and a plan, then publishes its issues. Later calls resume
+pending publication without another model request. Provider access and deployment need separate checks.
 
 ### Improvement admission
 
-The admission step publishes saved plans as `factory:proposed` issues. Set `FACTORY_DREAM_AUTO_REPOS`
+The same call publishes saved plans as `factory:proposed` issues. Set `FACTORY_DREAM_AUTO_REPOS`
 to an explicit subset of `FACTORY_REPOS` only after validating proposed output and provider access.
 One eligible issue per dream may become `factory:ready` through normal trusted-author admission;
 normal ticks do the implementation and the gate does the merging. Existing fix-round allowances
