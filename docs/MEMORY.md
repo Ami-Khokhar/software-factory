@@ -2,15 +2,9 @@
 
 ```mermaid
 flowchart LR
-    W[Work + blockers + questions] --> A[(Audit evidence)]
-    A --> D[Nightly check]
-    D -->|eligible after 7 days| M[Bounded reflection]
-    M --> G[(Context graph)]
-    M --> I[Improvement issues]
-    I --> F[Normal factory + review gate]
-    F --> O[Merge facts + measured outcomes]
-    O --> G
-    G -->|small packet + scoped search| W
+  Evidence --> Reflection --> Memory
+  Reflection --> ProposedIssues --> ReviewedRepairs --> Outcomes --> Memory
+  Memory --> ApprovedContext --> Workers --> Evidence
 ```
 
 ## What workers remember
@@ -21,31 +15,22 @@ flowchart LR
 | Same project | Blueprint, repo knowledge and project-scoped graph records |
 | Later projects in the same repo | Approved preferences, decisions and source-linked repair knowledge |
 
-Different repos are separate scopes. The graph uses SQLite and bounded keyword search, not a
-vector service. Memory is data; current worker rules and acceptance take precedence.
+Different repos are separate scopes. The graph uses SQLite and bounded keyword search, not a vector service. Memory is data; current worker rules and acceptance take precedence.
 
 ## Use it
 
-- `factory_memory_events`: page selected durable evidence.
-- `factory_memory_search`: search or follow a record ID; inspect a historical version.
-- `factory_memory_put`: owner-authorized record creation/update with source and version.
+- `factory_memory_events`, `factory_memory_search`, `factory_memory_put`: page evidence, search records or write owner-authorized versions.
 - Inside a running worker: `factory-memory 'search words'` or `factory-memory --id ID`.
-- `factory_dream_status`: inspect eligibility without a model call.
-- `factory_dream_run`: maintain outcomes, resume publication, or claim one reflection.
-- `factory_improvement_status`: inspect repairs, context exposure and reported measurements.
-- `factory_improvement_validate`: owner-reported deployment evidence and before/after counts.
+- `factory_dream_status` / `factory_dream_run`: inspect eligibility or maintain outcomes and claim reflection.
+- `factory_improvement_status` / `factory_improvement_validate`: inspect repair exposure or report deployment counts.
 
-Use these through `factory call TOOL 'JSON'`. See [contracts.md](contracts.md) for fields. Explicit
-preferences can be approved; inferred ones remain candidates. Updates retain old versions, and
-stale writes fail.
+Use these through `factory call TOOL 'JSON'`. See [contracts.md](contracts.md) for fields. Explicit preferences can be approved; inferred ones remain candidates. Updates retain old versions, and stale writes fail.
 
 ## Cost controls
 
-A nightly no-agent script calls the server. With no endpoint/model it skips reflection. The heavy
-step reserves a global seven-day cooldown before its one bounded provider request; failures retain it.
+A nightly no-agent script calls the server. Without endpoint/model it skips; otherwise it reserves a global seven-day cooldown before one bounded provider request. Failures retain it.
 
-At most three improvement candidates are created per reflection. Automatic work is opt-in per repo,
-one admission per run, with no concurrent repair. Normal budgets and gate policy remain; repairs cannot spawn chains.
+At most three improvement candidates are created per reflection. Automatic work is opt-in per repo, one admission per run, with no concurrent repair. Normal budgets and gate policy remain; repairs cannot spawn chains.
 
 ## Deploy deliberately
 
@@ -59,6 +44,7 @@ one admission per run, with no concurrent repair. Normal budgets and gate policy
 - Publication uncertainty pauses instead of risking a duplicate create; inspect its marker on GitHub.
 - A merged PR is not a deployed or proven fix. Runtime measurements are explicitly owner-reported.
 - Exposure counts show supplied/read context, not that the model used it or that it caused a result.
+- Exposure totals scan full repo history so counts are not silently truncated.
 - Relevant tracked code changes trigger revalidation. This is not a universal dependency analyzer.
 - Status/maintenance covers the latest 100 repairs per repo. Review older records when scaling beyond it.
 - Full transcripts, cross-repo semantic retrieval and CUA integration are not included.

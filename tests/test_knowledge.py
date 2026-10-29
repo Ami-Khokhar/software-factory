@@ -65,6 +65,9 @@ class KnowledgeTest(unittest.TestCase):
             node = self.put(key=f"safe-{index}", text=content, status="approved")
             self.assertEqual(self.search(id=node["id"], approvedOnly=True), [node])
 
+        config = self.put(key="runtime", text="FACTORY_WALL_MS=1200000", version=0)
+        self.assertEqual(config["text"], "FACTORY_WALL_MS=1200000")
+
     def test_a_valid_kind_change_is_refused_without_changing_the_record(self):
         first = self.put()
         with self.assertRaisesRegex(ToolError, "kind cannot change"):
@@ -97,6 +100,8 @@ class KnowledgeTest(unittest.TestCase):
         for changes in ({"text": "API_KEY=private-value"}, {"text": "sk-" + "a1B2" * 8},
                         {"text": "ghp_" + "A" * 32}, {"text": "github_pat_" + "B" * 32},
                         {"text": "AKIA" + "C" * 16}, {"text": "PRIVATE_KEY=private-value"},
+                        {"text": "AWS_SECRET_ACCESS_KEY=synthetic-value"},
+                        {"text": "DATABASE_URL=postgres://user:pass@host/db"},
                         {"source": "password=hidden"},
                         {"kind": "unknown"}, {"status": "unknown"}, {"version": True},
                         {"links": [{"id": "missing", "relation": "uses"}]}, {"text": "x" * 1001}):
