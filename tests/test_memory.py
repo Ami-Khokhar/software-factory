@@ -80,6 +80,26 @@ class MemoryTest(unittest.TestCase):
         self.assertEqual(event["workItemId"], "o/r#1")
         self.assertIn("at", event)
 
+    def test_gate_problems_are_bounded_sanitized_summaries(self):
+        secret = "sk-" + "a" * 24
+        self.log(reason="selected scalar", blocking=[
+            {"problem": "First " + secret, "fingerprint": "hidden", "nested": {"private": "hidden"}},
+            {"problem": "b" * 120}, {"problem": "third"}, {"problem": "fourth"},
+            {"nested": {"problem": "malformed"}},
+        ])
+        event = self.read()["events"][0]
+        self.assertEqual(event["detail"]["reason"], "selected scalar")
+        problems = event["detail"]["gateProblems"]
+        self.assertEqual(len(problems), 3)
+        self.assertLessEqual(max(map(len, problems)), 100)
+        self.assertLessEqual(sum(map(len, problems)), 300)
+        self.assertEqual(problems[0], "<redacted>")
+        self.assertEqual(problems[1], "b" * 100)
+        self.assertNotIn("blocking", event["detail"])
+        encoded = json.dumps(event)
+        for hidden in (secret, "fingerprint", "nested", "private", "fourth", "malformed"):
+            self.assertNotIn(hidden, encoded)
+
     def test_empty_and_exactly_full_pages_finish_without_moving_cursor_backwards(self):
         self.assertEqual(self.read(after=20)["nextCursor"], 20)
         self.assertEqual(self.read(after=20)["through"], 20)

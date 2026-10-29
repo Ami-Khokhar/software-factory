@@ -25,6 +25,9 @@ Events include dispatches, failed attempts, accepted Results, reconciliations, h
 and question/answer events already in the audit. They are joined to existing WorkItems in the
 requested repo. Global events, other repos and tool-argument records are excluded. Nested payloads
 and arbitrary keys are omitted; selected strings use diagnostic redaction and a 300-character cap.
+Reconcile events also project up to three blocking gate problem strings as `detail.gateProblems`,
+each capped at 100 characters and 300 characters total, with the same redaction. Other finding
+fields and nested data remain omitted.
 This is bounded internal evidence, not full transcripts, full findings or a guarantee that every
 kind of private text is removed. Question/answer events currently identify the question, not its
 full text. No memory graph, learned preferences or scheduled dreaming is enabled by this tool.

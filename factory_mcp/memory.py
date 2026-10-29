@@ -40,6 +40,12 @@ def events(store, config, args):
                 detail[key] = clean(value)
             elif type(value) in (int, bool):
                 detail[key] = value
+        blocking = row["detail"].get("blocking")
+        if isinstance(blocking, list):
+            problems = [clean(item["problem"], 100) for item in blocking[:3]
+                        if isinstance(item, dict) and isinstance(item.get("problem"), str)]
+            if problems:
+                detail["gateProblems"] = problems
         selected.append({"seq": row["seq"], "at": row["at"], "action": row["action"],
                          "workItemId": row["workItemId"], "detail": detail})
     return {"repo": repo, "events": selected, "through": through,
