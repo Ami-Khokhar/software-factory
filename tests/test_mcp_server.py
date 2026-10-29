@@ -4,7 +4,9 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from dataclasses import replace
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from factory_mcp.config import Config
 from factory_mcp.server import make_server
@@ -69,6 +71,49 @@ class McpServerTest(unittest.TestCase):
         cooldown = json.loads(response["content"][0]["text"])
         self.assertEqual(cooldown["reason"], "cooldown")
         self.assertEqual(cooldown["nextEligibleAt"], claimed["nextEligibleAt"])
+
+    def test_owner_dream_run_uses_provider_and_persists_only_candidate_knowledge_over_http(self):
+        self.store.put(workitem())
+        self.store.log("attempt_failed", {"reason": "verification failed"}, "o/r#1")
+        events, _ = self.store.memory_events("o/r", ("attempt_failed",), 0, None, 1)
+        source = f"o/r@{events[0]['seq']}"
+        plan = {"improvements": [], "learnings": [{"repo": "o/r", "kind": "preference",
+                "text": "Use concise diagrams", "evidence": [source]}]}
+        requests = []
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args): pass
+            def do_POST(self):
+                requests.append(json.loads(self.rfile.read(int(self.headers["content-length"]))))
+                payload = json.dumps({"choices": [{"message": {"content": json.dumps(plan)}}]}).encode()
+                self.send_response(200)
+                self.send_header("content-length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+        provider = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=provider.serve_forever, daemon=True).start()
+        self.server.foreman.config = replace(self.server.foreman.config,
+            dream_url=f"http://127.0.0.1:{provider.server_port}/chat", dream_model="test-model")
+        try:
+            refused = self.rpc("tools/call", {"name": "factory_dream_run", "arguments": {}}, token=AGENT)
+            self.assertIn("error", refused)
+            result = self.rpc("tools/call", {"name": "factory_dream_run", "arguments": {}})["result"]
+            self.assertFalse(result["isError"])
+            self.assertEqual(json.loads(result["content"][0]["text"])["status"], "complete")
+            memories = self.store.knowledge.search(self.server.foreman.config, {"repo": "o/r", "limit": 20})["memories"]
+            learning = next(row for row in memories if row["kind"] == "preference")
+            evidence = next(row for row in memories if row["kind"] == "evidence")
+            self.assertEqual(learning["status"], "candidate")
+            self.assertEqual(learning["source"], f"audit:{source}")
+            self.assertEqual(learning["links"][0]["id"], evidence["id"])
+            self.assertEqual(evidence["source"], f"audit:{source}")
+            self.assertEqual(self.store.knowledge.search(self.server.foreman.config,
+                {"repo": "o/r", "approvedOnly": True})["memories"], [])
+            again = self.rpc("tools/call", {"name": "factory_dream_run", "arguments": {}})["result"]
+            self.assertEqual(json.loads(again["content"][0]["text"])["reason"], "cooldown")
+            self.assertEqual(len(requests), 1)
+        finally:
+            provider.shutdown()
+            provider.server_close()
 
     def test_memory_write_is_owner_only_and_audit_omits_content(self):
         args = {"repo": "o/r", "key": "presentation", "kind": "preference",
