@@ -1009,9 +1009,10 @@ The same nightly script calls `factory_dream_run`. Configure `FACTORY_DREAM_URL`
 `FACTORY_DREAM_MODEL` and `FACTORY_DREAM_API_KEY` in the factory service's secure environment, permit
 that provider destination, restart factory-mcp, and verify one synthetic run before enabling cron.
 Do not commit the key or pass it as a CLI argument. The endpoint must include its chat completion
-path. Without endpoint/model the job skips. Repeated runs inside seven days skip; failures retain
-that cooldown. The reflection step saves a plan and candidate graph nodes; issue publication is
-handled by the next step. Actual provider access and deployment require separate validation.
+path. Without endpoint/model the job skips reflection but still records merge facts and revalidates
+measurements. Repeated runs inside seven days skip; failures retain that cooldown. Reflection saves
+a plan and candidate graph nodes; issue publication is handled by the next step. Actual provider
+access and deployment require separate validation.
 
 ### Improvement admission
 

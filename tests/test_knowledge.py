@@ -61,7 +61,8 @@ class KnowledgeTest(unittest.TestCase):
     def test_token_cost_preferences_are_not_mistaken_for_credentials(self):
         for index, content in enumerate(("Prefer efficient token use, lower token costs and security token configuration",
                 "Store the token in the keychain, never in the repo", "Keep secrets out of logs",
-                "Rotate the password before the release", "FACTORY_WALL_MS=1200000 fixed the timeout")):
+                "Rotate the password before the release", "FACTORY_WALL_MS=1200000 fixed the timeout",
+                "Rotation policy for tokens: quarterly", "credentials: run factory auth")):
             node = self.put(key=f"safe-{index}", text=content, status="approved")
             self.assertEqual(self.search(id=node["id"], approvedOnly=True), [node])
 
@@ -101,6 +102,7 @@ class KnowledgeTest(unittest.TestCase):
                         {"text": "ghp_" + "A" * 32}, {"text": "github_pat_" + "B" * 32},
                         {"text": "AKIA" + "C" * 16}, {"text": "PRIVATE_KEY=private-value"},
                         {"text": "AWS_SECRET_ACCESS_KEY=synthetic-value"},
+                        {"text": "access_token=synthetic-value"}, {"text": "client_secret=synthetic-value"},
                         {"text": "DATABASE_URL=postgres://user:pass@host/db"},
                         {"source": "password=hidden"},
                         {"kind": "unknown"}, {"status": "unknown"}, {"version": True},
