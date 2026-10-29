@@ -1,6 +1,6 @@
 """Workers get bounded snapshots and use a pass-scoped HTTP reader."""
-import json
 import io
+import json
 import os
 import subprocess
 import sys
@@ -8,9 +8,8 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
-from contextlib import redirect_stderr
+from contextlib import contextmanager, redirect_stderr
 from pathlib import Path
-from contextlib import contextmanager
 
 from factory_mcp import documents
 from factory_mcp.config import Config
@@ -132,7 +131,7 @@ class WorkerMemoryTest(unittest.TestCase):
         self.assertEqual(done.returncode, 2)
         self.assertIn("no active factory capability", done.stderr)
 
-    def test_memory_route_reports_argument_and_storage_errors_as_json(self):
+    def test_memory_route_reports_argument_errors_as_json(self):
         token = self.start()["ask"]["token"]
         with self.serving() as base:
             for args in ({"query": "x" * 201}, {"limit": "many"}, {"repo": "other/r"}):
@@ -141,6 +140,10 @@ class WorkerMemoryTest(unittest.TestCase):
                     urllib.request.urlopen(request, timeout=5)
                 self.assertEqual(caught.exception.code, 400)
                 self.assertIn("error", json.load(caught.exception))
+
+    def test_memory_route_logs_storage_failure_without_leaking_request_data(self):
+        token = self.start()["ask"]["token"]
+        with self.serving() as base:
             self.store.close()  # Real SQLite failure: no mock of the controller or search.
             payload = {"token": token, "query": "credential-like-marker-should-not-leak"}
             request = urllib.request.Request(base + "memory", json.dumps(payload).encode())
@@ -149,6 +152,19 @@ class WorkerMemoryTest(unittest.TestCase):
                 urllib.request.urlopen(request, timeout=5)
             self.assertEqual(caught.exception.code, 500)
             self.assertEqual(json.load(caught.exception), {"error": "memory retrieval failed"})
-            self.assertEqual(diagnostic.getvalue(), "factory-mcp worker memory failed (ProgrammingError)\n")
+            self.assertIn("factory-mcp worker memory failed (ProgrammingError); check factory database and server logs",
+                          diagnostic.getvalue())
             self.assertNotIn(token, diagnostic.getvalue())
             self.assertNotIn("credential-like-marker-should-not-leak", diagnostic.getvalue())
+
+    def test_closed_stderr_does_not_interrupt_memory_error_response(self):
+        token = self.start()["ask"]["token"]
+        with self.serving() as base:
+            self.store.close()  # Real SQLite failure reaches the route over HTTP.
+            diagnostic = io.StringIO()
+            diagnostic.close()
+            request = urllib.request.Request(base + "memory", json.dumps({"token": token}).encode())
+            with redirect_stderr(diagnostic), self.assertRaises(urllib.error.HTTPError) as caught:
+                urllib.request.urlopen(request, timeout=5)
+            self.assertEqual(caught.exception.code, 500)
+            self.assertEqual(json.load(caught.exception), {"error": "memory retrieval failed"})

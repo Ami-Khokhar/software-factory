@@ -90,7 +90,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, {"error": str(exc)})
         except Exception as exc:  # the worker gets a response without exposing stored context
             kind = re.sub(r"[^A-Za-z0-9_]", "", type(exc).__name__)[:80] or "Exception"
-            print(f"factory-mcp worker memory failed ({kind})", file=sys.stderr, flush=True)
+            try:
+                print(f"factory-mcp worker memory failed ({kind}); check factory database and server logs",
+                      file=sys.stderr, flush=True)
+            except (OSError, ValueError):
+                pass
             return self._send(500, {"error": "memory retrieval failed"})
         self._send(200, result)
 
