@@ -230,6 +230,38 @@ pass gets the command. `factory-ask` lives in the worker image, and a change to 
 alone does not change `worker/Dockerfile`, so `factory update` does not rebuild the image; rebuild
 it with `docker build -t factory-worker:latest worker/` after such a change.
 
+### Runner startup directory failures (#423)
+
+The factory submits `Config.checkout(repo)` as the relay task's `cwd` when
+`FACTORY_CHECKOUT_ROOT` is configured (`Foreman.submit`, `Relay.submit`). The relay
+selects task cwd, else registered agent cwd, else its inherited process directory.
+The service installer also supplies a launchd `WorkingDirectory`. These are source
+contracts, not evidence of the failed Mac process's actual selection. WorkOrder v1
+and runner arguments supply no explicit checkout directory. The runner uses the
+process cwd selected by the relay and never guesses a fallback. An invalid relay
+selection may prevent process launch entirely, before the runner can report a Result.
+
+After parsing task identity, the runner resolves and checks its cwd inside its
+handler. EPERM or ENOENT produces one failed Result with the original WorkOrder ID,
+a `preparation` phase, errno and a bounded explanation. Paths, exception messages,
+environment values and task command payload are omitted. No git checkout, Docker
+or coding process starts on this failure. The runner does not retry or change any
+budget. Retain the relay task IDs and factory attempt history for recovery.
+
+For agent-relay#128, the reported live revision f8e36c4 called `os.getcwd()` before
+Result initialization and its handler. This explains the unstructured startup
+failure. The underlying Mac policy/filesystem cause remains unknown. Isolated tests
+do not reproduce or repair that host problem. No #128 retry or live job is part of
+this change. Before any separately approved host repair, collect read-only evidence:
+
+- The selected launch directory and whether it came from task, agent or service inheritance.
+- Directory and ancestor existence/search access under the actual service identity.
+- Relevant OS denial logs if needed to distinguish access policy from filesystem faults.
+- After an approved repair, verify runner startup under that same identity and directory.
+
+Do not infer privacy denial, ACL trouble or deletion from EPERM alone. Do not
+retrieve credentials, full environments, command arguments or WorkOrder payloads.
+
 ### Worker memory
 
 After deploying the memory reader, rebuild the worker image with the normal pinned worker build

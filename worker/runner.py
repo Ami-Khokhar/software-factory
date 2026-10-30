@@ -20,12 +20,14 @@ the harness's work and computing the patch happen in the sandbox, and so does th
 `verify` command, so the evidence is not the model's claim. factory-mcp pushes the patch.
 """
 import argparse
+import errno
 import fcntl
 import json
 import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -608,11 +610,9 @@ def main(argv=None):
     if len(rest) < 2:
         parser.error("expected <harness argv...> <task input>")
     harness, text = rest[:-1], rest[-1]
-    cwd = os.getcwd()
     result = {"schemaVersion": "factory.result/v1", "workOrderId": None, "status": "failed",
               "evidence": [], "startedAt": now()}
-    scratch = tempfile.mkdtemp(prefix="factory-run-")
-    work = os.path.join(scratch, "work")
+    scratch = None
     started = time.monotonic()
     phases, secrets, echoed = [], set(), ""
 
@@ -632,6 +632,21 @@ def main(argv=None):
         text, ask = ask_channel_from(text)
         order = workorder_from(text)
         result["workOrderId"] = order["id"]
+        directory_start = time.monotonic()
+        try:
+            cwd = os.getcwd()
+            if not stat.S_ISDIR(os.stat(cwd).st_mode):
+                raise NotADirectoryError(errno.ENOTDIR, "startup directory is unavailable")
+        except OSError as exc:
+            # Exception messages can contain paths or task input. Keep only OS metadata.
+            detail = (f"startup working directory: source=process cwd "
+                      f"(relay task/agent/inherited unresolved); {type(exc).__name__}; "
+                      f"errno={exc.errno}; no coding started; inspect the relay launch directory "
+                      "under its service identity")
+            record("preparation", directory_start, exc.errno or 1, detail)
+            raise WorkerError(detail) from None
+        scratch = tempfile.mkdtemp(prefix="factory-run-")
+        work = os.path.join(scratch, "work")
         repo = origin_repo(cwd)
         if repo != order["repo"]:
             raise WorkerError(f"the checkout {cwd} is {repo}, not {order['repo']}")
@@ -726,7 +741,8 @@ def main(argv=None):
     except Exception as exc:  # noqa: BLE001 - any failure must still end in a Result line
         result["error"] = f"runner failed: {type(exc).__name__}: {exc}"
     finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+        if scratch is not None:
+            shutil.rmtree(scratch, ignore_errors=True)
     diagnostics = {"elapsedMs": max(0, int((time.monotonic() - started) * 1000))}
     if phases:
         diagnostics["phases"] = phases
