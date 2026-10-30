@@ -129,6 +129,9 @@ class GitHub:
         """The open PRs into `base`."""
         return self._get_all(f"/repos/{repo}/pulls", state="open", base=base)
 
+    def issue_timeline(self, repo, number):
+        return self._get_all(f"/repos/{repo}/issues/{number}/timeline")
+
     def comments(self, repo, number):
         return self._get_all(f"/repos/{repo}/issues/{number}/comments")
 

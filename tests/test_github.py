@@ -37,9 +37,10 @@ class Api(BaseHTTPRequestHandler):
             body, link = {"number": int(self.path.rsplit("/", 1)[-1])}, ""
         elif self.path.startswith("/repos/o/r/issues?"):
             body, link = [{"number": 1, "state": "closed"}, {"number": 2, "pull_request": {}}], ""
-        elif self.path.startswith("/repos/o/r/issues/5/comments"):
+        elif self.path.startswith(("/repos/o/r/issues/5/comments", "/repos/o/r/issues/5/timeline")):
             page = 2 if "page=2" in self.path else 1
-            body, link = ([{"id": page}], f'<{base}/repos/o/r/issues/5/comments?page=2>; rel="next"'
+            endpoint = self.path.split("?", 1)[0]
+            body, link = ([{"id": page}], f'<{base}{endpoint}?page=2>; rel="next"'
                           if page == 1 else "")
         elif self.path.startswith("/search/issues?"):
             page = 2 if "page=2" in self.path else 1
@@ -119,6 +120,11 @@ class GitHubClientTest(unittest.TestCase):
         self.assertEqual(len(Api.seen), 2)
         self.assertTrue(all(auth == "Bearer tok" for _, auth in Api.seen))
         self.assertIn("per_page=100", Api.seen[0][0])
+
+    def test_timeline_provenance_reads_all_pages_with_authentication(self):
+        self.assertEqual(self.github.issue_timeline("o/r", 5), [{"id": 1}, {"id": 2}])
+        self.assertEqual(len(Api.seen), 2)
+        self.assertTrue(all(auth == "Bearer tok" for _, auth in Api.seen))
 
     def test_issues_by_an_author_and_label_come_from_every_repo_with_their_repo_named(self):
         found = self.github.labelled_issues_by("amteshwar", "factory:ready")
