@@ -2920,3 +2920,20 @@ tool calls in the global audit and continue omitting memory text/source from wri
 
 **Consequence.** Existing graph rows and version history remain unchanged; future table upgrades
 belong to Store's migration path. Owner/agent memory reads remain visible in the global tool trail.
+
+## ADR-0123 — Owner approval binds original gate follow-ups to GitHub provenance
+
+**Context.** The owner could not approve an original gate follow-up because the
+Actions bot is not a trusted issue author. Trusting that bot globally would let
+unrelated automation admit work. The legacy producer writes no signed issue receipt.
+
+**Decision.** Keep ordinary author checks. Permit an owner-token approval with an
+exact content digest only when GitHub's creation cross-reference, merged source PR,
+reviewed MERGE comment and successful SHA-pinned gate workflow run uniquely agree.
+Record the approver and evidence in the existing audit store. Revalidate before
+admission and dispatch. The agent token cannot grant this exception.
+
+**Consequence.** Original issues retain their identity without global bot trust.
+Missing or ambiguous historical evidence fails closed. An approval-store loss
+requires renewed approval. Content drift stops new coding and cannot silently
+expand a WorkItem. Readiness, worker isolation, budgets and gate merge authority stay.

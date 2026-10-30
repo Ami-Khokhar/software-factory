@@ -31,6 +31,7 @@ class FakeGitHub:
     def __init__(self):
         self.on_merge = None  # a test's stand-in for the content a merge puts on the default branch
         self.issues, self.pulls, self.issue_comments, self.runs = {}, [], {}, {}
+        self.timelines = {}
         self.workflow_run_list = {}  # (repo, sha) -> the gate's workflow runs, newest first
         self.posted = []  # (repo, number, body) of every comment the Foreman wrote
         self.branches, self.files = {}, {}  # (repo, branch) -> sha; (repo, sha) -> changed files
@@ -104,6 +105,9 @@ class FakeGitHub:
 
     def open_pulls(self, repo, base):
         return [p for p in self.pulls if p["repo"] == repo and p["state"] == "open" and p["base"]["ref"] == base]
+
+    def issue_timeline(self, repo, number):
+        return list(self.timelines.get((repo, number), []))
 
     def comments(self, repo, number):
         return list(self.issue_comments.get((repo, number), []))

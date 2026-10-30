@@ -1038,3 +1038,48 @@ Relevant tracked code changes mark advice for revalidation on nightly maintenanc
 maintenance window covers the latest 100 repairs per repo; review older records explicitly when
 operating beyond that window. All cooldown and admission coordination assumes one shared factory
 SQLite database; independent database copies are independent factories, not an HA coordinator.
+
+### Approving an original gate follow-up (#422)
+
+Ordinary admission still requires a trusted original author. Do not add
+`github-actions[bot]` to `FACTORY_TRUSTED_AUTHORS`. For an authentic original gate
+follow-up, use `factory_approve_issue` with the **owner token**, `by` equal to
+`FACTORY_OWNER` (the repo owner login by default), `sourcePr` and `issueDigest`.
+The agent token cannot grant this exception, even if it supplies the owner's name.
+No new owner configuration is needed. This is a content-specific approval, not bot trust.
+
+First review the issue's complete title and body, including worker/path directives.
+Add checkable `## Acceptance` bullets to the original issue if they are missing,
+then review again. Acceptance and repo readiness remain required. Compute the digest
+from the GitHub issue object using Python's default JSON separators:
+
+```python
+content = [issue.get("id"), issue["number"], issue.get("title"), issue.get("body"),
+           (issue.get("user") or {}).get("id")]
+issueDigest = hashlib.sha256(json.dumps(content, ensure_ascii=True).encode()).hexdigest()
+```
+
+The factory verifies GitHub's original bot creation cross-reference to `sourcePr`,
+a merged same-repo PR merged by the gate identity, and exactly one reviewed MERGE
+comment on that head. Reviewed non-blocking findings must appear in the issue.
+It also requires exactly one successful `pull_request` run of the installed gate
+workflow on that head, covering the review and issue creation, with GitHub's
+`referenced_workflows` identifying a SHA-pinned reusable workflow from
+`Ami-Khokhar/pr-gatekeeper-workflow`. Missing/expired, ambiguous or mismatched
+records refuse approval. A copied marker, title or ready label is insufficient.
+This uses the existing gate identity plus trusted GitHub workflow/timeline records.
+It does not attest to arbitrary workflows that share the Actions bot login.
+Historical/manual-dispatch runs without these records remain unsupported and fail closed.
+
+Approval records the owner-token authority, approver, original issue ID, digest,
+source PR, review ID/head, workflow run ID/pin and validation result in the audit.
+Refusals record a validation outcome. Repeating approval retains one WorkItem.
+Admission and dispatch recheck content/provenance. An edit after approval stops new
+coding in `human_waiting`; restore the approved content before recovery. Approval
+cannot expand an existing WorkItem's scope. A lost audit store requires renewed
+owner approval. This neither interrupts an already running worker nor grants a
+retry, extra pass, protected-path exception or merge authority.
+
+For agent-relay#60 the original author check explains the reported refusal. Its
+original body also lacks factory Acceptance bullets, so provenance alone is not
+permission to dispatch it. This change does not edit or retry that issue.

@@ -650,3 +650,17 @@ current default-branch comparison. Changed/renamed paths, a comparison at GitHub
 missing path metadata or unavailable comparison require revalidation and demote approved measured
 advice to candidate. Merge facts remain facts. Checks are bounded to the status window and are
 conservative; this is not a general dependency analyzer for all graph records.
+
+### Owner approval of gate follow-ups (#422)
+
+`factory_approve_issue` retains its repo/issue/by inputs and accepts optional
+`sourcePr` and `issueDigest`. Supplying either selects the guarded owner-token
+path. `by` must match the configured owner or default repo owner. Both inputs are
+required for success. The digest is SHA256 of the default Python JSON encoding
+(`ensure_ascii=True`) of `[GitHub issue id, number, title, complete body, author id]`.
+GitHub timeline, merged PR, reviewed gate comment and pinned reusable workflow run
+records must uniquely corroborate original creation and reviewed non-blocking work.
+Acceptance remains mandatory. Approval is stored in audit records, not WorkItem
+fields. No schema or stored WorkItem migration is required. The digest and source
+records are checked again before dispatch and submission. Lost approval records
+fail closed. See RUNBOOK for supported provenance and failure recovery.

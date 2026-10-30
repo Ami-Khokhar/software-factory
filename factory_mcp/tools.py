@@ -283,13 +283,17 @@ def build(store, foreman, agent=False):
              "write", lambda args: {"workItem": foreman.intake(args["repo"], args["issue"])}),
         Tool("factory_approve_issue",
              "A person's go on an issue: label it factory:ready and take it in, so the factory starts "
-             "work on it. The issue must be open, opened by a trusted author, and have an "
+             "work on it. A gate follow-up instead needs owner-token sourcePr and issueDigest approval. "
+             "The issue must be open and have an "
              "'## Acceptance' list of '- <claim> — done when: <check>' bullets. Idempotent.",
              {"type": "object", "required": ["repo", "issue", "by"], "additionalProperties": False,
               "properties": {"repo": {"type": "string", "description": "owner/repo"},
                              "issue": {"type": "integer", "minimum": 1},
-                             "by": {"type": "string", "minLength": 1, "description": "who approved"}}},
-             "write", lambda args: {"workItem": foreman.approve_issue(args["repo"], args["issue"], args["by"])}),
+                             "by": {"type": "string", "minLength": 1, "description": "who approved"},
+                             "sourcePr": {"type": "integer", "minimum": 1},
+                             "issueDigest": {"type": "string", "description": "SHA256 of JSON identity/title/body/author ID as documented"}}},
+             "write", lambda args: {"workItem": foreman.approve_issue(
+                 args["repo"], args["issue"], args["by"], args.get("sourcePr"), args.get("issueDigest"), agent=agent)}),
         Tool("factory_tick",
              "Reconcile one WorkItem against GitHub and take the one legal next action. Without an "
              "id, first adopt open 'factory:ready' issues, then tick every live WorkItem. Idempotent.",

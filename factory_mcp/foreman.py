@@ -177,24 +177,75 @@ class Foreman:
                 raise ToolError(f"{repo}#{number} does not exist") from None
             raise
 
+    def _followup_approval(self, repo, issue):
+        from . import followups
+        records = [h["detail"] for h in self.store.history(workitem.workitem_id(repo, issue["number"]))
+                   if h["action"] == "gate_followup_approved"]
+        if not records:
+            return False
+        if records[-1]["digest"] != followups.digest(issue):
+            raise ToolError("gate follow-up content changed after approval; "
+                            "restore the approved content before retrying")
+        proof = followups.validate(self.github, repo, issue, records[-1]["sourcePr"])
+        if any(proof[key] != records[-1].get(key) for key in proof):
+            raise ToolError("gate follow-up provenance changed after approval")
+        return True
+
+    def _guard_followup(self, wi):
+        if any(h["action"] == "gate_followup_approved" for h in self.store.history(wi["id"])):
+            try:
+                issue = self._issue(wi["repo"], wi["issueNumber"])
+                self._followup_approval(wi["repo"], issue)
+                workitem.intake(wi["repo"], issue)
+            except (ToolError, ValueError) as exc:
+                return self._write(wi, dict(wi, state="human_waiting"),
+                                   "approval_invalid", reason=str(exc))
+        return None
+
     def _admit(self, repo, issue):
         """The new WorkItem for `issue`, or a ToolError saying why the factory may not take it."""
         author = (issue.get("user") or {}).get("login")
-        if not self.config.trusts(repo, author):
+        if not self.config.trusts(repo, author) and not self._followup_approval(repo, issue):
             raise ToolError(f"{repo}#{issue['number']} was opened by {author}, who is not a trusted "
-                            "author (FACTORY_TRUSTED_AUTHORS); a trusted person must open the issue")
+                            "author (FACTORY_TRUSTED_AUTHORS); a trusted person must open the issue, or the owner "
+                            "may approve an authentic gate follow-up with sourcePr and issueDigest")
         try:
             return workitem.intake(repo, issue)
         except ValueError as exc:
             raise ToolError(str(exc)) from None
 
-    def approve_issue(self, repo, number, by):
+    def approve_issue(self, repo, number, by, source_pr=None, issue_digest=None, agent=False):
         """A person's go on an issue: label it factory:ready and take it in. Idempotent."""
+        if (source_pr is not None or issue_digest is not None) and (
+                agent or not isinstance(by, str)
+                or by.lower() != (self.config.owner or repo.split("/")[0]).lower()):
+            self.store.log("gate_followup_refused", {"validation": "unauthorized",
+                                                   "authority": "agent token" if agent else "owner token"},
+                           workitem.workitem_id(repo, number))
+            raise ToolError("gate follow-up approval requires the owner token and owner identity")
         repo = self._enabled(repo, by)
         existing = self.store.get(workitem.workitem_id(repo, number))
         if existing and existing["state"] in workitem.TERMINAL:
             raise ToolError(f"{existing['id']} is {existing['state']}; open a new issue for more work")
         issue = self._issue(repo, number)
+        if source_pr is not None or issue_digest is not None:
+            from . import followups
+            identity = workitem.workitem_id(repo, number)
+            try:
+                if issue_digest != followups.digest(issue):
+                    raise ToolError("issueDigest must match the reviewed issue content")
+                if existing:
+                    self._followup_approval(repo, issue)  # an existing approval cannot expand its scope
+                workitem.intake(repo, issue)  # readiness/acceptance still apply before any write
+                proof = followups.validate(self.github, repo, issue, source_pr)
+            except (ToolError, ValueError) as exc:
+                self.store.log("gate_followup_refused", {"by": by, "validation": "refused"}, identity)
+                raise ToolError(str(exc)) from None
+            except GitHubError as exc:
+                self.store.log("gate_followup_refused", {"by": by, "validation": "unavailable",
+                                                        "status": exc.status}, identity)
+                raise ToolError("gate follow-up provenance records unavailable; check GitHub access") from None
+            self.store.log("gate_followup_approved", dict(proof, by=by, authority="owner token"), identity)
         self._admit(repo, issue)  # refuse before labelling: a rebuild adopts any factory:ready issue
         if workitem.READY not in workitem.labels(issue):
             self.github.add_labels(repo, number, [workitem.READY])
@@ -843,6 +894,9 @@ class Foreman:
         # Up to passes_per_repo passes of one repo run at once, and the runner gives them the shared
         # checkout in turns (ADR-0036). The rest wait. Two ticks at once may each start one, so the
         # limit is soft; the runner's lock is what keeps the checkout safe.
+        refused = self._guard_followup(wi)
+        if refused is not None:
+            return refused
         paused = self._barrier(wi)
         if paused:  # fail-closed for the held graph; a release lets the next tick dispatch (#234)
             self.store.log("dispatch_paused", {"pausedBy": [row["requestId"] for row in paused]},
@@ -955,6 +1009,9 @@ class Foreman:
         return self.submit(wi, order)
 
     def submit(self, wi, order):
+        refused = self._guard_followup(wi)
+        if refused is not None:
+            return refused
         paused = self._barrier(wi)  # the race guard: rechecked immediately before the worker runs (#234)
         if paused:  # the intent was written (state dispatching); a released barrier resumes it
             self.store.log("submit_paused", {"order": order["id"],
