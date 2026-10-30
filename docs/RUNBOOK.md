@@ -250,9 +250,25 @@ budget. Retain the relay task IDs and factory attempt history for recovery.
 
 For agent-relay#128, the reported live revision f8e36c4 called `os.getcwd()` before
 Result initialization and its handler. This explains the unstructured startup
-failure. The underlying Mac policy/filesystem cause remains unknown. Isolated tests
-do not reproduce or repair that host problem. No #128 retry or live job is part of
-this change. Before any separately approved host repair, collect read-only evidence:
+failure. Subsequent read-only checks on the local Mac found supporting policy-denial
+evidence. Kernel logs for 31 October 2026, 00:30–00:40 IST, filtered to System Policy
+file-read denials mentioning the configured factory-work checkout, contain four
+records: Python denied checkout/parent reads at 00:31:47 and 00:34:17 IST. Factory
+audit records for exact WorkItem agent-relay#128 in that window (six dispatch,
+submitted and attempt_failed rows, no joins) place its submissions at 00:31:46 and
+00:34:17 IST. This is time correlation, not an established task-to-PID join.
+TCC attribution for the first denied Python PID links by msgID to AllFiles and
+DocumentsFolder authorization requests. The policy responsible and application
+attribution requiring repair remain unresolved. No privacy grant or permission
+change follows from this evidence alone.
+
+The current launchd configuration and cwd records agree on the relay's service
+directory. Registry and factory settings select a checkout under factory-work.
+The checkout and ancestors exist and are searchable from Codex under the service's
+user account. This does not prove access under the service's responsible-process
+context. Isolated tests do not reproduce or repair the host problem. No #128 retry
+or live job is part of this change. Before any separately approved host repair,
+collect the remaining read-only evidence:
 
 - The selected launch directory and whether it came from task, agent or service inheritance.
 - Directory and ancestor existence/search access under the actual service identity.
