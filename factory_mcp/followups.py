@@ -74,12 +74,18 @@ def validate(github, repo, issue, source_pr):
     if len(reviews) != 1:
         refuse()
     comment, marker = reviews[0]
+    # Trust the caller pinned on the source PR's base, never a pin supplied by the issue/PR head.
+    caller = github.file(repo, ".github/workflows/pr-gatekeeper.yml", pr["base"]["sha"]) or ""
+    pins = re.findall(r"^\s*uses:\s*Ami-Khokhar/pr-gatekeeper-workflow/\.github/workflows/"
+                      r"gatekeeper\.yml@([0-9a-f]{40})\s*(?:#.*)?$", caller, re.M)
+    if len(pins) != 1:
+        refuse()
     runs = []
     for run in github.workflow_runs(repo, pr["head"]["sha"]):
         refs = run.get("referenced_workflows") or []
         trusted = [ref for ref in refs if re.fullmatch(
             r"Ami-Khokhar/pr-gatekeeper-workflow/\.github/workflows/gatekeeper\.yml@[0-9a-f]{40}",
-            ref.get("path", "")) and ref["path"].endswith("@" + ref.get("sha", "missing"))]
+            ref.get("path", "")) and ref["path"].endswith("@" + ref.get("sha", "missing")) and ref.get("sha") == pins[0]]
         if (run.get("path") == ".github/workflows/pr-gatekeeper.yml"
                 and run.get("head_sha") == pr["head"]["sha"]
                 and run.get("event") == "pull_request" and run.get("conclusion") == "success"
@@ -100,5 +106,6 @@ def validate(github, repo, issue, source_pr):
                        and f.get("fix") and f["fix"] in body for f in residuals)):
         refuse()
     return {"runId": run["id"], "workflowSha": workflow_sha, "sourcePr": source_pr,
-            "reviewId": comment["id"], "headSha": pr["head"]["sha"],
+            "reviewId": comment["id"], "reviewDigest": hashlib.sha256(comment["body"].encode()).hexdigest(),
+            "headSha": pr["head"]["sha"],
             "issueId": issue["id"], "digest": digest(issue), "validation": "verified"}

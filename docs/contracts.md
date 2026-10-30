@@ -661,6 +661,7 @@ required for success. The digest is SHA256 of the default Python JSON encoding
 GitHub timeline, merged PR, reviewed gate comment and pinned reusable workflow run
 records must uniquely corroborate original creation and reviewed non-blocking work.
 Acceptance remains mandatory. Approval is stored in audit records, not WorkItem
-fields. No schema or stored WorkItem migration is required. The digest and source
+fields. The source review body digest also binds provenance against later comment edits.
+No schema or stored WorkItem migration is required. The digest and source
 records are checked again before dispatch and submission. Lost approval records
 fail closed. See RUNBOOK for supported provenance and failure recovery.

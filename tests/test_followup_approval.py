@@ -40,6 +40,8 @@ class FollowupApprovalTest(unittest.TestCase):
                     "referenced_workflows": [{"sha": "a" * 40, "path":
                         "Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "a" * 40}]}
         self.github.workflow_run_list[(REPO, "head")] = [self.run]
+        self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")] = (
+            "uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "a" * 40)
         self.args = {"repo": REPO, "issue": 60, "by": "o", "sourcePr": 58,
                      "issueDigest": followups.digest(self.issue)}
 
@@ -84,7 +86,7 @@ class FollowupApprovalTest(unittest.TestCase):
         for flaw in ("no link", "duplicate link", "wrong actor", "wrong issue", "human marker",
                      "wrong head", "not merged", "wrong merge actor", "no review", "duplicate review",
                      "unrelated body", "unrelated bot", "no workflow", "wrong workflow",
-                     "duplicate workflow", "outside run", "wrong reusable workflow"):
+                     "duplicate workflow", "outside run", "wrong reusable workflow", "base pin mismatch"):
             with self.subTest(flaw=flaw):
                 self.setUp()
                 if flaw == "no link": self.github.timelines[(REPO, 58)] = []
@@ -101,6 +103,8 @@ class FollowupApprovalTest(unittest.TestCase):
                 if flaw == "wrong workflow": self.run["path"] = ".github/workflows/unrelated.yml"
                 if flaw == "duplicate workflow": self.github.workflow_run_list[(REPO, "head")].append(copy.deepcopy(self.run))
                 if flaw == "outside run": self.run["updated_at"] = "2026-10-17T08:52:26Z"
+                if flaw == "base pin mismatch": self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")] = (
+                    "uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "b" * 40)
                 if flaw == "wrong reusable workflow": self.run["referenced_workflows"][0]["path"] = "forged"
                 if flaw == "unrelated body": self.issue["body"] = ISSUE_BODY
                 if flaw == "unrelated bot": self.issue["user"] = {"login": "other[bot]", "id": 1}
@@ -132,6 +136,15 @@ class FollowupApprovalTest(unittest.TestCase):
         self.f.tick("o/r#60")
         self.assertEqual(self.relay.tasks, {})
         self.assertEqual(self.f.store.get("o/r#60")["state"], "human_waiting")
+
+    def test_edited_source_review_invalidates_the_recorded_provenance(self):
+        self.assertFalse(self.call()[0])
+        # Still a syntactically valid residual, also present in the issue, on the same head.
+        self.review["body"] = self.review["body"].replace('"fix": "fix the defect"', '"fix": "fix"')
+        self.f.tick("o/r#60")
+        self.assertEqual(self.relay.tasks, {})
+        self.assertEqual(self.f.store.get("o/r#60")["state"], "human_waiting")
+        self.assertIn("provenance changed", self.f.store.history("o/r#60")[-1]["detail"]["reason"])
 
     def test_changed_provenance_cannot_dispatch(self):
         self.assertFalse(self.call()[0])

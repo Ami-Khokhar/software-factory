@@ -1065,14 +1065,15 @@ comment on that head. Reviewed non-blocking findings must appear in the issue.
 It also requires exactly one successful `pull_request` run of the installed gate
 workflow on that head, covering the review and issue creation, with GitHub's
 `referenced_workflows` identifying a SHA-pinned reusable workflow from
-`Ami-Khokhar/pr-gatekeeper-workflow`. Missing/expired, ambiguous or mismatched
+`Ami-Khokhar/pr-gatekeeper-workflow`, matching the caller pin on the source PR base.
+Missing/expired, ambiguous or mismatched
 records refuse approval. A copied marker, title or ready label is insufficient.
 This uses the existing gate identity plus trusted GitHub workflow/timeline records.
 It does not attest to arbitrary workflows that share the Actions bot login.
 Historical/manual-dispatch runs without these records remain unsupported and fail closed.
 
 Approval records the owner-token authority, approver, original issue ID, digest,
-source PR, review ID/head, workflow run ID/pin and validation result in the audit.
+source PR, review ID/content digest/head, workflow run ID/pin and validation result in the audit.
 Refusals record a validation outcome. Repeating approval retains one WorkItem.
 Admission and dispatch recheck content/provenance. An edit after approval stops new
 coding in `human_waiting`; restore the approved content before recovery. Approval
