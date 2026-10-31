@@ -241,8 +241,8 @@ At 15:41 IST `brew cleanup -s --prune=all` autoremoved it, and `python3` resolve
 
 Rule: on macOS keep `FACTORY_CHECKOUT_ROOT` outside `~/Documents`, `~/Desktop`, `~/Downloads`
 and iCloud (`~/Library/Mobile Documents`, `~/Library/CloudStorage`); factory-mcp refuses to start
-otherwise (#428). In `agents.json`, name the interpreter by absolute path: a bare `python3`
-resolves through launchd's PATH and changes when Homebrew adds or removes a Python.
+otherwise (#428). Outside those folders no interpreter needs a privacy grant, so the bare
+`python3` the worker agents run is safe whichever binary launchd's PATH finds.
 
 The runner starts no git, Docker or coding process on this failure. It prints one failed Result
 with the original WorkOrder ID, a `preparation` phase, the errno, and a bounded detail with no
@@ -254,7 +254,8 @@ Repair: move the checkouts, for example to `~/.local/share/factory-work`; update
 `~/.config/agent-relay/agents.json`; restart the relay and factory-mcp; then `factory retry`.
 
 Check the repair with a one-shot launchd job that runs the agents' interpreter in the checkout.
-Put the checkout path in place of `CHECKOUT`. `last exit code = 0` means it can read the
+Put the interpreter launchd's PATH finds for `python3` (`PATH=<the relay plist's PATH> command -v
+python3`) in place of `INTERPRETER`, and the checkout path in place of `CHECKOUT`. `last exit code = 0` means it can read the
 checkout; `1` means macOS denied it, and `log show --last 5m --predicate 'eventMessage CONTAINS
 "deny(1) file-read-data"'` names the folder:
 
@@ -262,7 +263,7 @@ checkout; `1` means macOS denied it, and `log show --last 5m --predicate 'eventM
 cat > /tmp/tcc-check.plist <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict><key>Label</key><string>tcc-check</string><key>RunAtLoad</key><true/>
-<key>ProgramArguments</key><array><string>/usr/bin/python3</string><string>-c</string>
+<key>ProgramArguments</key><array><string>INTERPRETER</string><string>-c</string>
 <string>import os,sys; os.chdir(sys.argv[1]); os.getcwd(); os.listdir(".")</string>
 <string>CHECKOUT</string></array></dict></plist>
 PLIST
@@ -286,16 +287,14 @@ An agent registered before #98 must add its `--credential` and
 `--env` flags: without them the runner mounts no login and the harness fails on its first call.
 Register each worker in `~/.config/agent-relay/agents.json`
 (replace the host paths), list it in `FACTORY_WORKERS` (preferred first, `:local` or `:hosted`),
-restart factory-mcp, and reload agent-relay's registry if it is already running. Name each
-worker's interpreter by absolute path, because a bare `python3` resolves through launchd's PATH
-and changes when Homebrew adds or removes a Python. Two that passed a
+restart factory-mcp, and reload agent-relay's registry if it is already running. Two that passed a
 live pass on 2026-10-01, both GLM 5.3 Flash through OpenCode Go:
 
 ```json
 {
   "id": "pi-glm-factory",
   "name": "pi (GLM 5.3 Flash), sandboxed factory worker",
-  "command": "/usr/bin/python3",
+  "command": "python3",
   "args": ["/absolute/path/to/software-factory/worker/runner.py",
            "--credential", "/Users/you/.pi/agent/auth.json:/home/node/.pi/agent",
            "--env", "PI_CODING_AGENT_DIR=/home/node/.pi/agent", "--",
@@ -316,7 +315,7 @@ WorkOrder is dispatched to DeepSeek until its pilot (below) is green:
 {
   "id": "pi-deepseek-factory",
   "name": "pi (DeepSeek V4.1 Flash), sandboxed factory worker",
-  "command": "/usr/bin/python3",
+  "command": "python3",
   "args": ["/absolute/path/to/software-factory/worker/runner.py",
            "--credential", "/Users/you/.pi/agent/auth.json:/home/node/.pi/agent",
            "--env", "PI_CODING_AGENT_DIR=/home/node/.pi/agent", "--",
@@ -348,7 +347,7 @@ template to `~/.config/agent-relay/agents.json` once, by hand as above (replace 
 {
   "id": "opencode-mimo-factory",
   "name": "opencode (mimo-v2.6-flash-free), sandboxed factory worker",
-  "command": "/usr/bin/python3",
+  "command": "python3",
   "args": ["/absolute/path/to/software-factory/worker/runner.py",
            "--credential", "/Users/you/.local/share/opencode/auth.json:/tmp/factory-home/.local/share/opencode",
            "--", "opencode", "run", "--model", "opencode/mimo-v2.6-flash-free"],

@@ -2952,8 +2952,8 @@ logged `Platform binary prompting is 'Deny'`.
 checkouts live outside them, for example under `~/.local/share/factory-work`. The config resolves
 symlinks first, because macOS checks the folder a link leads to, and ignores case, as APFS does.
 The runner's startup failure names the macOS privacy cause without printing a path. Worker agents
-name their interpreter by absolute path in `agents.json`, because a bare `python3` changes with
-Homebrew.
+keep the bare `python3` the registry, runtime status and health pilot require: outside protected
+folders, which binary it names no longer decides access.
 
 **Consequence.** A worker checkout the relay's interpreter cannot read is refused at start rather
 than failing every pass. Linux and non-protected macOS roots load unchanged. Moving a checkout

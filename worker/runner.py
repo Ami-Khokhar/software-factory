@@ -647,13 +647,14 @@ def main(argv=None):
                            "and iCloud (RUNBOOK)")
             record("preparation", directory_start, exc.errno or 1, detail)
             raise WorkerError(detail) from None
+        temp_start = time.monotonic()
         try:
             scratch = tempfile.mkdtemp(prefix="factory-run-")
         except OSError as exc:
             # A failing tempdir is preparation too: one bounded Result, no path, no message.
             detail = (f"startup temp directory: {type(exc).__name__}; errno={exc.errno}; "
                       "no coding started; inspect the relay service's TMPDIR")
-            record("preparation", directory_start, exc.errno or 1, detail)
+            record("preparation", temp_start, exc.errno or 1, detail)
             raise WorkerError(detail) from None
         work = os.path.join(scratch, "work")
         repo = origin_repo(cwd)
