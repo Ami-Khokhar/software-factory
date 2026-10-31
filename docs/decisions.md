@@ -2977,3 +2977,28 @@ separate owner-reviewed PRs. Never silently delete custom protections during boo
 **Consequence.** Instruction changes can ship without filename-only escalation after activation.
 They do not authorise themselves, weaken review, or bypass a blocking finding. Existing orders
 retain their original fences. docs/RUNBOOK.md records migration and live acceptance.
+
+
+## ADR-0126 — Owner-approved, health-bound worker membership
+
+**Context.** The registered DeepSeek Pi template used three fixed isolation switches that the
+health validator rejected. Registration and relay reload could not complete an owner-approved
+activation because neither changed the factory allowlist (#435). #283 covers older pilot
+reporting and unproven alias claims, not this missing control.
+
+**Decision.** Admit only Pi's fixed no-extensions, no-skills and no-prompt-templates switches.
+Report unsupported flag names with bounded diagnostics and omit argument values. Add
+`factory_set_worker_enabled`, owner-authorized directly or via Day Desk's existing ownerAsked
+convention with quoted approval. Store membership overrides and authorization audit atomically
+in SQLite rather than rewriting host environment files. Enabling requires fresh successful
+health bound to config, image identity and credential metadata. Require an id matching the model
+family. Preserve baseline membership/order and append new workers as hosted. Check drift during
+routing and again after relay reload before submission, retaining independent-review exclusions.
+
+**Consequence.** Registration, health, reload, activation and selection are distinct. Overrides
+survive restart, and an empty new table preserves existing deployments. Disabling needs no new
+probe and prevents future submissions without cancelling running tasks. Activation never retries
+items or replenishes passes. Health expires for activation after 15 minutes; an active membership
+remains valid after that interval while its binding and healthy status hold. Runtime eligibility
+fails closed on drift or quarantine. A successful synthetic provider response is still required
+before claiming live readiness. This amends ADR-0077's manual allowlist promotion path.

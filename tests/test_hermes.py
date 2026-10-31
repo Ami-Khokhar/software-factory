@@ -48,7 +48,7 @@ class ProfileTest(unittest.TestCase):
         timeout = driving["factory_set_timeout"].listing()
         self.assertFalse(timeout["annotations"]["readOnlyHint"])
         self.assertFalse(timeout["inputSchema"]["additionalProperties"])
-        for name in ("factory_check_worker", "factory_reload_workers"):
+        for name in ("factory_check_worker", "factory_reload_workers", "factory_set_worker_enabled"):
             listing = driving[name].listing()
             self.assertFalse(listing["annotations"]["readOnlyHint"])
             self.assertFalse(listing["inputSchema"]["additionalProperties"])

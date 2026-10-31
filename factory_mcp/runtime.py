@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 
 from .github import GitHubError
+from . import worker_ops
 from .mcp import ToolError
 from .relay import RelayError
 from .verdict import verdicts
@@ -111,7 +112,7 @@ def report(foreman, schemas, workitem_id=None):
     config = foreman.config
     result = {'checkedAtIST': datetime.now(timezone(timedelta(hours=5, minutes=30))).isoformat(),
               'revision': _read(['git', 'rev-parse', 'HEAD']), 'factoryResponding': True,
-              'globalWallMs': config.wall_ms, 'workerOrder': [name for name, _ in config.workers],
+              'globalWallMs': config.wall_ms, 'workerOrder': [name for name, _ in worker_ops.effective_workers(foreman.store, config)],
               'workers': [], 'discovery': _discovery(schemas)}
     try:
         rows = json.loads(Path(config.agents_file).read_text())['agents']

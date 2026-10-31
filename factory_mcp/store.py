@@ -91,6 +91,11 @@ CREATE TABLE IF NOT EXISTS setup_merges (
   approved_by TEXT NOT NULL,
   approved_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS worker_activations (
+  worker_id TEXT PRIMARY KEY,
+  enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+  binding TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS worker_health (
   worker_id TEXT PRIMARY KEY,
   binding TEXT NOT NULL,
@@ -482,6 +487,21 @@ class Store:
                 "ORDER BY started_at, request_id").fetchall()
         return [dict(zip(("requestId", "operation", "inputsFingerprint", "phase"), row))
                 for row in rows]
+
+    def set_worker_activation(self, worker_id, enabled, binding, detail):
+        """Commit membership and its authorization audit together, including on existing stores."""
+        with self._lock, self._transaction():
+            self._db.execute("INSERT INTO worker_activations VALUES (?, ?, ?) "
+                             "ON CONFLICT(worker_id) DO UPDATE SET enabled=excluded.enabled, "
+                             "binding=excluded.binding", (worker_id, int(enabled), binding))
+            self._db.execute("INSERT INTO audit (at, workitem_id, action, detail) VALUES (?, ?, ?, ?)",
+                             (now(), None, "worker_activation_changed", json.dumps(detail, sort_keys=True)))
+
+    def worker_activations(self):
+        with self._lock:
+            rows = self._db.execute("SELECT worker_id, enabled, binding FROM worker_activations "
+                                    "ORDER BY rowid").fetchall()
+        return [dict(zip(("worker", "enabled", "binding"), row)) for row in rows]
 
     def put_worker_health(self, worker_id, binding, status, checked_at, valid_until, report):
         """Store only the sanitized health document and its configuration binding."""

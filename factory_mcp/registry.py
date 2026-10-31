@@ -11,8 +11,8 @@ anything a factory worker could not already reach. A template must run `worker/r
 `python3` itself, so no discovered, unsandboxed relay agent can be copied. The model may name its
 provider (`opencode/mimo-v2.6-flash-free`) or omit it, but it must land under the template's own
 provider — a change of provider is a different approval (ADR-0076). It never touches
-FACTORY_WORKERS, so a registered worker receives no WorkOrder until the owner lists it there and
-its provider-health pilot is green (ADR-0076, ADR-0077).
+FACTORY_WORKERS. A registered worker needs successful health and owner-approved activation
+through factory_set_worker_enabled (ADR-0126) before receiving a WorkOrder.
 """
 import json
 import os

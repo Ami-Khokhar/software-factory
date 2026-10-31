@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime
 
 from . import (diagnostics, documents, gate_secrets, jev_rank, lessons, memory, patches, projects, registry,
-               repos, routing, setup_merge, sizing, workitem)
+               repos, routing, setup_merge, sizing, worker_ops, workitem)
 from .github import GitHubError
 from .mcp import ToolError
 from .relay import RelayError, RelayLimitError
@@ -931,7 +931,8 @@ class Foreman:
                 return self._write(wi, dict(wi, state="exhausted", recovery=None, terminalReason=(
                     f"{used} worker passes used; FACTORY_MAX_PASSES is {self.config.max_passes}")),
                     "exhausted")
-        named, unknown = self._allowed_named(named)
+        workers = worker_ops.effective_workers(self.store, self.config)
+        named, unknown = self._allowed_named(named, workers)
         failed = {h["detail"].get("worker") for h in self.store.history(wi["id"])
                   if h["action"] == "attempt_failed"}
         # After a timeout-class failure the next attempt prefers another model family (ADR-0081): the
@@ -939,12 +940,12 @@ class Foreman:
         # two-strike block ever sees the case. The gate reviewer's family is excluded outright (ADR-0085).
         avoid, from_worker, category = self._timeout_causes(wi)
         excluded = self._reviewer_families(wi["repo"])
-        worker = routing.route(self.config.workers, self.config.local_only(wi["repo"]), failed, named,
+        worker = routing.route(workers, self.config.local_only(wi["repo"]), failed, named,
                                avoid_families=avoid, exclude_families=excluded)
         if worker is None:
             self._finish_recovery(wi, False)  # no attempt will run, so the open recovery finds no outcome
             local_only = self.config.local_only(wi["repo"])
-            candidates = [agent for agent, place in self.config.workers
+            candidates = [agent for agent, place in workers
                           if (place == "local" or not local_only) and (not named or agent in named)]
             # A dropped Worker: pin names itself in the reason and in the audit row, so the person
             # sees why no worker fit even though the issue asked for one (ADR-0110).
@@ -1025,6 +1026,12 @@ class Foreman:
             self.store.log("submit_paused", {"order": order["id"],
                                              "pausedBy": [row["requestId"] for row in paused]}, wi["id"])
             return wi
+        if any(row["worker"] == wi["worker"] for row in self.store.worker_activations()):
+            # Reload before a controlled worker runs, then recheck disk/image/credential drift.
+            self.relay.reload()
+            if (wi["worker"] not in dict(worker_ops.effective_workers(self.store, self.config))
+                    or routing.family(wi["worker"]) in self._reviewer_families(wi["repo"])):
+                raise ToolError("worker activation changed or drifted; recheck health and activation")
         task = self.relay.submit(wi["worker"], documents.worker_input(order, wi["branch"]),
                                  order["idempotencyKey"], order["budget"]["wallMs"],
                                  cwd=self.config.checkout(wi["repo"]))
@@ -1533,8 +1540,9 @@ class Foreman:
                   if h["action"] == "attempt_failed"}
         failed.add(wi.get("worker"))  # this very attempt just failed, whatever the audit has logged
         failed.discard(None)
-        worker = routing.route(self.config.workers, self.config.local_only(wi["repo"]), failed,
-                               self._allowed_named(workitem.workers_named(issue.get("body")))[0],
+        workers = worker_ops.effective_workers(self.store, self.config)
+        worker = routing.route(workers, self.config.local_only(wi["repo"]), failed,
+                               self._allowed_named(workitem.workers_named(issue.get("body")), workers)[0],
                                avoid_families=families,
                                exclude_families=self._reviewer_families(wi["repo"]))
         if worker is None or worker in failed:
@@ -2232,12 +2240,13 @@ class Foreman:
         finally:
             self.store.release(workitem_id, self.holder)
 
-    def _allowed_named(self, named):
+    def _allowed_named(self, named, workers=None):
         """Split an issue's `Worker:` names into those in FACTORY_WORKERS and the rest (ADR-0110).
         A stale pin must not cost the owner an answer, so routing uses only the allowed names, or every
         allowed worker when none is left; the relay also holds agents with no sandbox, which an issue
         must never reach."""
-        allowed = {agent for agent, _ in self.config.workers}
+        allowed = {agent for agent, _ in (workers if workers is not None else
+                                         worker_ops.effective_workers(self.store, self.config))}
         return ([agent for agent in named if agent in allowed],
                 [agent for agent in named if agent not in allowed])
 
@@ -2250,7 +2259,7 @@ class Foreman:
         attempts, which is how an owner or Day Desk steers a retry to another model."""
         if not isinstance(by, str) or not by.strip():
             raise ToolError("choosing a worker needs the name of the person who asked")
-        allowed = [agent_id for agent_id, _ in self.config.workers]
+        allowed = [agent_id for agent_id, _ in worker_ops.effective_workers(self.store, self.config)]
         if not isinstance(workers, list) or any(not isinstance(a, str) or not a for a in workers):
             raise ToolError(f"workers is a list of relay agent ids from FACTORY_WORKERS "
                             f"({', '.join(allowed)}), like [\"pi-deepseek-factory\"]; [] falls back "
@@ -2295,8 +2304,8 @@ class Foreman:
         could. An unsandboxed, unknown or cross-provider template is refused before the registry is
         touched. The registry is the relay's own agents.json, which the relay has no API to write,
         so this edits that file and reloads the relay. It never touches FACTORY_WORKERS: a
-        registered worker receives no WorkOrder until the owner lists it there and its
-        provider-health pilot is green. Returns the new agent and whether the running relay
+        registered worker receives no WorkOrder until factory_check_worker succeeds and
+        the owner enables it through factory_set_worker_enabled (ADR-0126). Returns the new agent and whether the running relay
         reloaded it."""
         if not isinstance(by, str) or not by.strip():
             raise ToolError("registering a worker needs the name of the person who asked")
@@ -2322,7 +2331,7 @@ class Foreman:
                                              **({"agent": True} if agent else {})})
         return {"agent": agent_def, "reloaded": reloaded,
                 "note": note or (f"{worker_id} is registered but NOT in FACTORY_WORKERS; add it "
-                                 f"there and run scripts/provider_health.py before any WorkOrder "
+                                 f"via factory_set_worker_enabled after factory_check_worker before any WorkOrder "
                                  f"goes to it")}
 
     def _split_keeps_acceptance(self, wi, replacements):

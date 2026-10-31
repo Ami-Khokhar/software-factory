@@ -12,7 +12,7 @@ from .mcp import Tool, ToolError
 AGENT_TOOLS = frozenset({"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons",
                          "factory_report", "factory_memory_events", "factory_memory_search", "factory_dream_status",
                          "factory_improvement_status",
-                         "factory_check_worker", "factory_reload_workers",
+                         "factory_check_worker", "factory_reload_workers", "factory_set_worker_enabled",
                          "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
                          "factory_start_project",
                          "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
@@ -487,7 +487,7 @@ def build(store, foreman, agent=False):
              "`template` picks which approved sandboxed template to copy (default "
              "FACTORY_WORKER_TEMPLATE); an unsandboxed, unknown or cross-provider template is "
              "refused before anything is written. It is NOT added to FACTORY_WORKERS, so it runs "
-             "nothing until the owner lists it there and its provider-health pilot is green. The "
+             "nothing until factory_check_worker succeeds and the owner enables it with factory_set_worker_enabled. The "
              "registry is the relay's agents.json; the relay is reloaded when it answers. Returns "
              "the new agent and whether the running relay reloaded it.",
              {"type": "object", "required": ["worker", "model", "by"], "additionalProperties": False,
@@ -502,6 +502,20 @@ def build(store, foreman, agent=False):
              "write", lambda args: foreman.register_worker(
                  args["worker"], args["model"], args["by"], template=args.get("template"),
                  agent=agent)),
+        Tool("factory_set_worker_enabled",
+             "Enable or disable one registered worker without retrying or dispatching work. "
+             "Requires the owner token, or Day Desk ownerAsked true with quoted approval in note. "
+             "Enabling requires fresh successful config/image-bound health. Existing membership "
+             "is preserved. Durable overrides apply to routing and runtime status, not host env files.",
+             {"type": "object", "required": ["worker", "enabled", "by", "note"],
+              "additionalProperties": False, "properties": {
+                  "worker": {"type": "string", "minLength": 1}, "enabled": {"type": "boolean"},
+                  "by": {"type": "string", "minLength": 1},
+                  "note": {"type": "string", "minLength": 1, "maxLength": 1000},
+                  "ownerAsked": {"type": "boolean"}}}, "write",
+             lambda args: worker_ops.set_enabled(store, foreman.config, args["worker"],
+                 args["enabled"], args["by"], args["note"], agent=agent,
+                 owner_asked=args.get("ownerAsked", False))),
         Tool("factory_check_worker",
              "Run one bounded synthetic provider-health check for a registered sandboxed worker. "
              "Uses only the worker's existing pinned model, credential mounts, safe environment, "
