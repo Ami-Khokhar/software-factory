@@ -2968,8 +2968,8 @@ the Foreman records it as `checkout or setup` and pauses the WorkItem for the en
 **Context.** Filename-only AGENTS.md rejection prevented an authorised plan from opening any
 issue. Root instructions are security-sensitive content, but a filename is not a finding.
 
-**Decision.** Supersede the AGENTS.md filename ban in ADR-0015, ADR-0024 and the Day Desk owner
-routing policy. Use normal verification and independent gate review unless an explicit repository
+**Decision.** Supersede the AGENTS.md filename ban in ADR-0015, ADR-0024, ADR-0021 shell limits and
+the Day Desk owner routing policy. Use normal verification and independent gate review unless an explicit repository
 protection applies. Union base-commit custom protections into each WorkOrder. Keep actual workflow,
 credential and permission controls protected. Review installation migrations under base rules in
 separate owner-reviewed PRs. Never silently delete custom protections during bootstrap.

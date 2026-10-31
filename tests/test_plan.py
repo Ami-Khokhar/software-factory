@@ -108,7 +108,9 @@ class StartPlanTest(unittest.TestCase):
     def test_only_a_whole_protected_path_word_refuses_a_plan(self):
         cases = [("raw.githubusercontent.com", True), ("AGENTS.mdx", True),
                  ("edit .github/workflows/ci.yml", False), ("keep `AGENTS.md`.", True),
-                 ("docs/AGENTS.md", True)]
+                 ("docs/AGENTS.md", True), (".env.example", True),
+                 ("src/secrets/handler.py", True), ("docs/secrets.md", True),
+                 (".env", False), (".env.local", False), ("secrets/keys", False)]
         for mention, accepted in cases:
             with self.subTest(mention):
                 self.setUp()

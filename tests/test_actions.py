@@ -135,6 +135,16 @@ class ActionsTest(unittest.TestCase):
         self.assertEqual(self.relay.tasks, {})
         self.assertEqual(self.foreman.store.workorders(ID), [])
 
+    def test_nested_credentials_use_explicit_base_protections(self):
+        self.github.contents[(REPO, ".github/pr-gatekeeper.json", "base0")] = json.dumps(
+            {"protected_paths": ["worker/.env"]})
+        wi, task = self.dispatched()
+        self.git.files = (("worker/.env", 1, 0),)
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
+        wi = self.tick()
+        self.assertEqual(wi["state"], "ready")
+        self.assertIn("changes protected path worker/.env", wi["attempts"][0])
+
     def test_control_and_credential_results_remain_protected(self):
         for path in (".github/workflows/ci.yml", ".env", "secrets/key", ".claude/settings.json"):
             with self.subTest(path=path):

@@ -991,7 +991,9 @@ class Foreman:
             order["constraints"]["protectedPaths"] = repos.protected_paths(
                 self.github, wi["repo"], base, self.config.protected_paths)
         except ValueError as exc:
-            return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=str(exc)),
+            self._finish_recovery(dict(wi, recovery=recovery), False)
+            reason = f"{exc}. Fix that file in the base branch, then retry this WorkItem."
+            return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=reason),
                                "invalid_protections")
         order["ask"] = {"url": self.config.ask_url, "token": secrets.token_hex(16)}  # ADR-0098
         packet = self.store.knowledge.packet(self.config, wi)
@@ -2735,9 +2737,10 @@ class Foreman:
             return ("needs an '## Acceptance' list of '- <claim> — done when: <check>' bullets. "
                     "Without a check: " + ("; ".join(missing) or "no bullets found"))
         text = f"{item['title']}\n{item['body']}".lower()  # code cannot tell a request from a mention
-        # a whole path word only: raw.githubusercontent.com or AGENTS.mdx names no protected path
+        # Match repository-root path tokens, with the same directory prefixes as the patch guard.
         named = [path for path in self.config.protected_paths
-                 if re.search(rf"(?<![\w.-]){re.escape(path.rstrip('/').lower())}(?![\w-])", text)]
+                 if re.search(rf"(?<![\w./-]){re.escape(path.lower())}"
+                              + (r"(?![\w./-])" if not path.endswith("/") else ""), text)]
         if named:
             return f"names {', '.join(named)}, which only a person changes; leave it out of the plan"
         if not workitem.paths_listed(item["body"]):
