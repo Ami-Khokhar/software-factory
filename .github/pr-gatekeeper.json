@@ -30,7 +30,7 @@
   "reviewer_model": "deepseek-v4.1-flash",
   "verifier_model": "glm-5.3-flash",
   "merge_method": "squash",
-  "notify": "",
+  "notify": "@Ami-Khokhar",
   "supported_platforms": [],
   "strong_reviewer_model": "",
   "sensitive_paths": [
