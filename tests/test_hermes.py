@@ -98,7 +98,7 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(len(re.findall(r"(?m)^- ", owner)), 4)
         for phrase in ("how to try the product", "budget, deadline or a failed acceptance end",
                        "cost to continue", "safety stop or an environment fault", "new paid provider",
-                       "a secret", "`.github/` or `AGENTS.md`", "change to acceptance"):
+                       "a secret", "protected controls such as `.github/`", "change to acceptance"):
             self.assertIn(phrase, owner)
 
     def test_the_skill_names_only_project_tools_that_exist(self):

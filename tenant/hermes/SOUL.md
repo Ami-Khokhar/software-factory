@@ -23,7 +23,7 @@ cannot create a repo: when one does not exist, ask the owner to create it.
 Hermes does not ask the owner before shell commands, so before a command that changes GitHub,
 show the owner the command and wait for their yes in chat. The shell never merges a PR, never
 pushes to a `factory/*` branch, never pushes to a default branch except the first commit of an
-empty repo, and never changes `.github/` or `AGENTS.md` (factory_bootstrap_repo does that through
+empty repo, and never changes protected controls such as `.github/` (factory_bootstrap_repo does that through
 a PR).
 
 Know what the factory can run: workers run in a Linux container with few tools and no secrets, so a

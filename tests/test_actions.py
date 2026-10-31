@@ -98,6 +98,7 @@ class ActionsTest(unittest.TestCase):
         self.assertEqual(len(self.relay.tasks), 1)
 
     def test_renaming_a_protected_path_fails_the_result(self):
+        self.foreman.config = dataclasses.replace(self.foreman.config, protected_paths=(".github/", "AGENTS.md"))
         wi, task = self.dispatched()
         self.git.files = ({"filename": "docs/agents.md", "previous_filename": "AGENTS.md", "status": "renamed",
                            "additions": 0, "deletions": 0},)
@@ -105,6 +106,55 @@ class ActionsTest(unittest.TestCase):
         wi = self.tick()
         self.assertEqual(wi["state"], "ready")
         self.assertIn("changes protected path AGENTS.md", wi["attempts"][0])
+
+    def test_documentation_result_opens_a_pr_with_base_protections(self):
+        self.github.contents[(REPO, ".github/pr-gatekeeper.json", "base0")] = json.dumps(
+            {"protected_paths": [".github/", "private-controls/"]})
+        wi, task = self.dispatched()
+        order = self.foreman.store.workorders(ID)[0]
+        self.assertIn("private-controls/", order["constraints"]["protectedPaths"])
+        self.assertNotIn("AGENTS.md", order["constraints"]["protectedPaths"])
+        self.git.files = (("AGENTS.md", 2, 1), ("docs/guide.md", 1, 0))
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
+        self.assertEqual(self.tick()["state"], "pr_open")
+
+    def test_repository_custom_protection_rejects_worker_result(self):
+        self.github.contents[(REPO, ".github/pr-gatekeeper.json", "base0")] = json.dumps(
+            {"protected_paths": ["AGENTS.md", "permissions/"]})
+        wi, task = self.dispatched()
+        self.git.files = (("permissions/roles.json", 1, 0),)
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
+        wi = self.tick()
+        self.assertEqual(wi["state"], "ready")
+        self.assertIn("changes protected path permissions/roles.json", wi["attempts"][0])
+
+    def test_bad_base_protection_list_stops_before_worker_dispatch(self):
+        self.github.contents[(REPO, ".github/pr-gatekeeper.json", "base0")] = '{"protected_paths": "none"}'
+        wi = self.tick()
+        self.assertEqual(wi["state"], "human_waiting")
+        self.assertEqual(self.relay.tasks, {})
+        self.assertEqual(self.foreman.store.workorders(ID), [])
+
+    def test_nested_credentials_use_explicit_base_protections(self):
+        self.github.contents[(REPO, ".github/pr-gatekeeper.json", "base0")] = json.dumps(
+            {"protected_paths": ["worker/.env"]})
+        wi, task = self.dispatched()
+        self.git.files = (("worker/.env", 1, 0),)
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
+        wi = self.tick()
+        self.assertEqual(wi["state"], "ready")
+        self.assertIn("changes protected path worker/.env", wi["attempts"][0])
+
+    def test_control_and_credential_results_remain_protected(self):
+        for path in (".github/workflows/ci.yml", ".env", "secrets/key", ".claude/settings.json"):
+            with self.subTest(path=path):
+                self.setUp()
+                wi, task = self.dispatched()
+                self.git.files = ((path, 1, 0),)
+                self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
+                wi = self.tick()
+                self.assertEqual(wi["state"], "ready")
+                self.assertIn("changes protected path", wi["attempts"][0])
 
     def test_a_change_must_fit_one_pr(self):
         """ADR-0070 over ADR-0002: the line count is a small-PR target, not a wall — a whole-PR

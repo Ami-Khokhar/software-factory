@@ -4,7 +4,7 @@ How to work in this repo. Coding agents and people read it before they change an
 
 <!-- For a new factory repo: copy this file to the repo root, replace each <angle-bracket> part,
      and keep the factory-standard block exactly as it is. software-factory checks the block
-     (factory_repo_check). AGENTS.md is a protected path, so a person merges the PR that adds it. -->
+     (factory_repo_check). AGENTS.md follows normal verification and independent review unless explicitly protected by the repo. -->
 
 ## What this repo is
 
@@ -28,8 +28,8 @@ invariants. Delete this section if there is nothing to add.>
 
 pr-gatekeeper reviews every pull request, and merges it when it decides MERGE. The body format is
 in the standard below. After CHANGES, fix every blocking finding on the same branch and push. After
-HUMAN, a person must look: do not retry blindly. `.github/` and `AGENTS.md` are protected paths, so
-a pull request that touches them always goes to a person.
+HUMAN, a person must look: do not retry blindly. Control paths such as `.github/` stay protected. AGENTS.md and ordinary documentation follow
+verification and independent review unless the base configuration explicitly protects them.
 
 <!-- factory-standard:begin -->
 ## The factory standard
