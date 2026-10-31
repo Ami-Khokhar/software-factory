@@ -9,6 +9,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+from factory_mcp import diagnostics
 from factory_mcp import documents
 from factory_mcp.config import Config
 from tests.fakes import workitem
@@ -86,3 +87,42 @@ class RunnerStartupTest(unittest.TestCase):
             finally:
                 os.fchdir(previous)
                 os.close(previous)
+
+    def test_darwin_permission_error_names_the_privacy_hint_without_a_path(self):
+        denied = PermissionError(errno.EPERM, "denied", "/some/secret/path")
+        with mock.patch.object(runner.os, "getcwd", side_effect=denied), \
+                mock.patch.object(runner.sys, "platform", "darwin"), \
+                mock.patch.object(runner.subprocess, "run") as process:
+            result = self.invoke()
+            process.assert_not_called()
+        self.assertIn("macOS privacy controls may block this folder", result["error"])
+        self.assertIn("FACTORY_CHECKOUT_ROOT outside ~/Documents", result["error"])
+        self.assertNotIn("/some/secret/path", json.dumps(result))
+        self.assertNotIn("denied", result["error"])
+
+    def test_linux_permission_error_has_no_privacy_hint(self):
+        with mock.patch.object(runner.os, "getcwd",
+                               side_effect=PermissionError(errno.EPERM, "denied")), \
+                mock.patch.object(runner.sys, "platform", "linux"):
+            result = self.invoke()
+        self.assertNotIn("macOS privacy controls", result["error"])
+
+    def test_temp_directory_failure_is_one_bounded_result_without_a_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(runner.os, "getcwd", return_value=directory), \
+                    mock.patch.object(runner.tempfile, "mkdtemp",
+                                      side_effect=PermissionError(errno.EACCES, "denied",
+                                                                  "/some/secret/path")), \
+                    mock.patch.object(runner.subprocess, "run") as process:
+                result = self.invoke()
+                process.assert_not_called()
+        phase = result["diagnostics"]["phases"][0]
+        self.assertEqual((phase["phase"], phase["exitCode"]), ("preparation", errno.EACCES))
+        self.assertNotIn("/some/secret/path", json.dumps(result))
+        self.assertNotIn("denied", result["error"])
+
+    def test_a_cwd_failure_is_diagnosed_as_checkout_or_setup(self):
+        with mock.patch.object(runner.os, "getcwd",
+                               side_effect=PermissionError(errno.EPERM, "denied")):
+            result = self.invoke()
+        self.assertEqual(diagnostics.diagnose(self.order, result)["cause"], "checkout or setup")
