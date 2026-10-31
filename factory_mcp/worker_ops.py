@@ -2,7 +2,7 @@
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
 import signal
@@ -12,6 +12,7 @@ import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
 
+from . import routing
 from .mcp import ToolError
 from .relay import RelayError
 
@@ -30,7 +31,8 @@ SAFE_ENV_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)?\Z")
 HARNESS_FLAGS = {
     "pi": {"--print": False, "--provider": True, "--model": True, "--models": True,
-           "--thinking": True, "--no-session": False},
+           "--thinking": True, "--no-session": False, "--no-extensions": False,
+           "--no-skills": False, "--no-prompt-templates": False},
     "codex": {"exec": False, "--model": True, "--skip-git-repo-check": False},
     "opencode": {"run": False, "--model": True},
 }
@@ -111,6 +113,11 @@ def _candidate(config, worker_id):
             host, separator, target = value.rpartition(":")
             if not separator or not host or "\0" in host or not target.startswith("/"):
                 raise ToolError("worker has an invalid credential mount")
+            mount = PurePosixPath("/" + target.lstrip("/"))
+            if (".." in mount.parts or str(mount) == "/" or any(
+                    str(mount) == root or str(mount).startswith(root + "/")
+                    for root in ("/work", "/proc", "/sys", "/dev", "/etc", "/usr", "/bin", "/sbin", "/lib", "/run"))):
+                raise ToolError("worker credential mount overlaps a protected container path")
             credentials.append((os.path.expanduser(host), target))
         else:
             key, separator, _ = value.partition("=")
@@ -129,7 +136,10 @@ def _candidate(config, worker_id):
         flag = harness[index]
         if flag not in flags or flags[flag] and (index + 1 >= len(harness)
                                                   or harness[index + 1].startswith("-")):
-            raise ToolError("worker harness uses an unsupported option")
+            # Only flag names are diagnostic data. Values, positional text and =payload stay private.
+            name = flag if re.fullmatch(r"--[a-z][a-z-]{0,39}", flag) else "[redacted]"
+            raise ToolError(f"worker harness uses an unsupported option {name}; "
+                            "use the approved registered template flags with required values")
         if flags[flag]:
             value = harness[index + 1]
             if flag in ("--model", "--models") and (
@@ -214,7 +224,7 @@ def _safe_report(stdout, returncode, harness):
             if key in clean and (type(clean[key]) is not int or clean[key] < 0):
                 clean[key] = 0
         events.append(clean)
-    has_probe = any(event.get("event") == "probe" for event in events)
+    has_probe = any(event.get("event") == "probe" and event.get("status") == "ok" for event in events)
     status = (raw["status"] if returncode == 0 or raw["status"] != "ok" else "unavailable")
     if status == "ok" and (not has_probe or not any(
             event.get("event") == "preflight" and event.get("status") == "ok" for event in events)):
@@ -330,3 +340,61 @@ def reload(store, relay, by, *, agent=False):
     store.log("worker_registry_reload", {"status": "reloaded", "by": by,
                                          **({"agent": True} if agent else {})})
     return {"status": "reloaded"}
+
+
+def current_binding(config, worker_id):
+    candidate = _candidate(config, worker_id)
+    image_id = _image_id(candidate["image"])
+    if image_id is None:
+        raise ToolError("worker image is unavailable; repair it and rerun factory_check_worker")
+    return _binding(candidate, _credential_metadata(candidate["credentials"]), image_id)
+
+
+def set_enabled(store, config, worker_id, enabled, by, note, *, agent=False, owner_asked=False):
+    if agent and owner_asked is not True:
+        raise ToolError("worker activation needs owner approval; quote it in note and set ownerAsked true")
+    if owner_asked and not agent:
+        raise ToolError("ownerAsked is Day Desk's flag; use the owner token directly without it")
+    if (type(enabled) is not bool or not isinstance(by, str) or not by.strip()
+            or not isinstance(note, str) or not note.strip() or len(note) > 1000):
+        raise ToolError("worker activation needs enabled boolean, by, and an approval note up to 1000 characters")
+    if not isinstance(worker_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,99}", worker_id):
+        raise ToolError("worker must name a registered relay agent")
+    binding = ""
+    if enabled:
+        candidate = _candidate(config, worker_id)
+        # Routing's independent-review guard reads the id. Do not admit a misleading alias.
+        if routing.family(worker_id) != routing.family(candidate["model"].split("/")[-1]):
+            raise ToolError("worker id must name its pinned model family before activation")
+        binding = current_binding(config, worker_id)
+        health = store.worker_health(worker_id)
+        now = _stamp(_now())
+        if (not health or health["status"] != "healthy" or health["binding"] != binding
+                or not health["checkedAt"] <= now < health["validUntil"]):
+            raise ToolError("worker needs fresh successful health for this config/image; run factory_check_worker")
+    elif (worker_id not in dict(config.workers)
+          and worker_id not in {row["worker"] for row in store.worker_activations()}):
+        _candidate(config, worker_id)  # disabling remains possible after an active registry entry breaks
+    store.set_worker_activation(worker_id, enabled, binding,
+                                {"worker": worker_id, "enabled": enabled, "binding": binding,
+                                 "by": by, "note": note, "agent": agent, "ownerAsked": owner_asked})
+    return {"worker": worker_id, "enabled": enabled}
+
+
+def effective_workers(store, config):
+    workers = dict(config.workers)
+    for row in store.worker_activations():
+        worker_id = row["worker"]
+        workers.pop(worker_id, None)
+        if row["enabled"]:
+            try:
+                binding = current_binding(config, worker_id)
+            except ToolError:
+                continue
+            health = store.worker_health(worker_id)
+            if (binding == row["binding"] and health and health["status"] == "healthy"
+                    and health["binding"] == binding):
+                workers[worker_id] = dict(config.workers).get(worker_id, "hosted")
+    # Retain the configured preference order, appending newly activated hosted workers.
+    order = dict.fromkeys([*(name for name, _ in config.workers), *workers])
+    return tuple((name, workers[name]) for name in order if name in workers)

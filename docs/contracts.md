@@ -55,8 +55,29 @@ status of `ok` proves the synthetic response was received.
 
 `factory_reload_workers` accepts only the caller name and invokes agent-relay's fixed
 `POST /v1/admin/reload` operation. It does not edit the relay registry, change `FACTORY_WORKERS`,
-start a task or retry work. Both operations are driving-token writes. Worker activation and
-dispatch-preflight consumption of these records are separate operations.
+start a task or retry work. Both operations are driving-token writes.
+
+`factory_set_worker_enabled` takes `worker`, boolean `enabled`, `by`, and `note` (1–1000
+characters). The owner token authorizes it directly. Day Desk must set `ownerAsked: true`
+and quote the owner's approval in `note`; the flag is refused on the owner token. Enabling
+requires a current successful health record with matching configuration, credential metadata
+and Docker image identity. The worker id must match the pinned model family so routing cannot
+hide a reviewer conflict. Newly enabled workers are hosted workers, appended after existing
+members. Registration, health, reload, activation and per-item selection remain separate.
+
+SQLite `worker_activations(worker_id, enabled, binding)` stores durable overrides to the startup
+`FACTORY_WORKERS` list. Membership and the `worker_activation_changed` audit commit together.
+Existing databases gain the empty table on open, leaving their memberships unchanged. Disabling
+can retire a broken entry without requiring another probe. No WorkItem, pass budget or WorkOrder
+changes. Runtime status and selection use effective membership. After activation the health TTL
+is not a running lease, but changed config, credential metadata, image or quarantine removes the
+worker from eligibility. Pending submissions reload the relay and recheck membership and reviewer
+family immediately before submit. Repair requires another health check and explicit reactivation.
+
+Pi's fixed `--no-extensions`, `--no-skills` and `--no-prompt-templates` switches are supported.
+Unsupported harness diagnostics expose only bounded flag names, never values or positional text,
+and direct the caller to the approved template. Credential mounts over container system paths or
+`/work` are refused.
 
 ## The four documents
 

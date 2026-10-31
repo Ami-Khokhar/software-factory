@@ -176,6 +176,227 @@ class WorkerOpsTest(unittest.TestCase):
                          "label=factory-worker=health-" + "d" * 32)
         self.assertEqual(run.call_args_list[1].args[0], ["docker", "stop", "--time", "5", container])
 
+    def activation_tools(self, agent=False):
+        from factory_mcp.foreman import Foreman
+        from factory_mcp import tools
+        from tests.fakes import FakeGitHub
+        foreman = Foreman(self.store, FakeGitHub(), self.config, self.relay)
+        return tools.build(self.store, foreman, agent=agent)
+
+    def activate(self, enabled=True, agent=False, **extra):
+        return self.activation_tools(agent)["factory_set_worker_enabled"].fn({
+            "worker": self.agent["id"], "enabled": enabled, "by": "owner",
+            "note": "Enable the registered worker", **extra})
+
+    def probe_processes(self):
+        from contextlib import ExitStack
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(mock.patch.object(worker_ops.subprocess, "run", return_value=
+            subprocess.CompletedProcess([], 0, "sha256:" + "a" * 64, "")))
+        process = mock.Mock(returncode=0)
+        process.communicate.return_value = (json.dumps(self.health), "")
+        popen = stack.enter_context(mock.patch.object(worker_ops.subprocess, "Popen", return_value=process))
+        return popen
+
+    def test_registered_deepseek_template_flags_pass_the_public_health_operation(self):
+        self.agent["id"] = "pi-deepseek-factory"
+        self.agent["args"][self.agent["args"].index("--") + 1:] = [
+            "pi", "--print", "--provider", "opencode-go", "--model", "deepseek-v4.1-flash",
+            "--models", "opencode-go/deepseek-v4.1-flash", "--thinking", "high", "--no-session",
+            "--no-extensions", "--no-skills", "--no-prompt-templates"]
+        self.registry.write_text(json.dumps({"agents": [self.agent]}))
+        popen = self.probe_processes()
+        result = self.activation_tools()["factory_check_worker"].fn({"worker": self.agent["id"], "by": "owner"})
+        self.assertEqual(result["recordStatus"], "healthy")
+        self.activate()
+        self.assertIn((self.agent["id"], "hosted"), worker_ops.effective_workers(self.store, self.config))
+        self.assertEqual(popen.call_count, 1)
+        self.assertEqual(self.store.all_workorders(), [])
+
+    def test_rejected_option_names_are_bounded_and_never_return_option_values(self):
+        original = list(self.agent["args"])
+        for option, diagnostic in (("--api-key", "--api-key"),
+                                   ("--api-key=CANARY", "[redacted]"),
+                                   ("CANARY-PAYLOAD", "[redacted]"),
+                                   ("--" + "x" * 1000, "[redacted]")):
+            self.agent["args"] = original + [option, "CANARY-SECRET"]
+            self.registry.write_text(json.dumps({"agents": [self.agent]}))
+            with self.assertRaises(ToolError) as error:
+                self.activation_tools()["factory_check_worker"].fn({"worker": self.agent["id"], "by": "owner"})
+            message = str(error.exception)
+            self.assertIn(diagnostic, message)
+            self.assertIn("approved registered template", message)
+            self.assertNotIn("CANARY", message)
+            self.assertLess(len(message), 220)
+
+    def test_activation_requires_approval_and_current_healthy_binding(self):
+        self.probe_processes()
+        with self.assertRaisesRegex(ToolError, "owner approval"):
+            self.activate(agent=True)
+        with self.assertRaisesRegex(ToolError, "Day Desk"):
+            self.activate(ownerAsked=True)
+        with self.assertRaisesRegex(ToolError, "fresh successful"):
+            self.activate()
+        self.activation_tools()["factory_check_worker"].fn({"worker": self.agent["id"], "by": "owner"})
+        healthy = self.store.worker_health(self.agent["id"])
+        for changes in ({"status": "quarantined"}, {"validUntil": "2000-01-01T00:00:00Z"},
+                        {"binding": "drifted"}, {"checkedAt": "2999-01-01T00:00:00Z"}):
+            row = dict(healthy, **changes)
+            self.store.put_worker_health(row["worker"], row["binding"], row["status"], row["checkedAt"],
+                                         row["validUntil"], row["report"])
+            with self.assertRaisesRegex(ToolError, "fresh successful"):
+                self.activate()
+        self.assertEqual(self.store.worker_activations(), [])
+
+    def test_activation_preserves_membership_and_audits_without_touching_work(self):
+        popen = self.probe_processes()
+        self.activation_tools()["factory_check_worker"].fn({"worker": self.agent["id"], "by": "owner"})
+        result = self.activate(agent=True, ownerAsked=True)
+        self.assertTrue(result["enabled"])
+        self.assertEqual(worker_ops.effective_workers(self.store, self.config),
+                         (*self.config.workers, (self.agent["id"], "hosted")))
+        detail = self.store.global_history()[-1]["detail"]
+        self.assertEqual((detail["by"], detail["ownerAsked"], detail["note"]),
+                         ("owner", True, "Enable the registered worker"))
+        self.activate(False)
+        self.assertEqual(worker_ops.effective_workers(self.store, self.config), self.config.workers)
+        self.assertEqual(popen.call_count, 1)
+        self.assertEqual(self.store.all_workorders(), [])
+        self.assertEqual(self.relay.tasks, {})
+
+    def test_active_membership_fails_closed_after_config_image_or_credential_drift(self):
+        self.probe_processes()
+        self.activation_tools()["factory_check_worker"].fn({"worker": self.agent["id"], "by": "owner"})
+        self.activate()
+        original = self.registry.read_text()
+        self.agent["timeoutMs"] += 1
+        self.registry.write_text(json.dumps({"agents": [self.agent]}))
+        self.assertEqual(worker_ops.effective_workers(self.store, self.config), self.config.workers)
+        self.registry.write_text(original)
+        with mock.patch.object(worker_ops.subprocess, "run", return_value=
+                subprocess.CompletedProcess([], 0, "sha256:" + "b" * 64, "")):
+            self.assertEqual(worker_ops.effective_workers(self.store, self.config), self.config.workers)
+        self.credential.write_text("changed credential size")
+        self.assertEqual(worker_ops.effective_workers(self.store, self.config), self.config.workers)
+        self.registry.write_text("broken registry")
+        self.activate(False)  # deactivation remains available when repair is needed
+
+    def test_health_for_a_changed_configuration_requires_explicit_reactivation(self):
+        self.probe_processes()
+        check = self.activation_tools()["factory_check_worker"]
+        check.fn({"worker": self.agent["id"], "by": "owner"})
+        self.activate()
+        self.agent["timeoutMs"] += 1
+        self.registry.write_text(json.dumps({"agents": [self.agent]}))
+        check.fn({"worker": self.agent["id"], "by": "owner"})
+        self.assertEqual(worker_ops.effective_workers(self.store, self.config), self.config.workers)
+        self.activate()
+        self.assertIn(self.agent["id"], dict(worker_ops.effective_workers(self.store, self.config)))
+
+    def test_activation_cannot_hide_the_pinned_reviewer_family_in_a_worker_alias(self):
+        self.agent["args"][-1] = "opencode/deepseek-v4.1-flash"
+        self.registry.write_text(json.dumps({"agents": [self.agent]}))
+        with self.assertRaisesRegex(ToolError, "model family"):
+            self.activate()
+
+    def test_durable_override_can_disable_a_configured_worker_after_restart(self):
+        path = str(self.root / "activation.sqlite3")
+        self.store.close()
+        self.store = Store(path)
+        self.activation_tools()["factory_set_worker_enabled"].fn({
+            "worker": "codex", "enabled": False, "by": "owner", "note": "Disable codex"})
+        self.store.close()
+        self.store = Store(path)
+        self.addCleanup(self.store.close)
+        self.assertEqual(worker_ops.effective_workers(self.store, self.config), ())
+        self.assertEqual(self.store.global_history()[-1]["action"], "worker_activation_changed")
+
+    def test_an_unsuccessful_probe_event_cannot_authorize_activation(self):
+        self.health["events"][1]["status"] = "provider_auth"
+        self.probe_processes()
+        result = self.activation_tools()["factory_check_worker"].fn({"worker": self.agent["id"], "by": "owner"})
+        self.assertEqual(result["recordStatus"], "quarantined")
+        with self.assertRaisesRegex(ToolError, "fresh successful"):
+            self.activate()
+
+    def test_unsafe_commands_mounts_and_options_never_start_a_probe(self):
+        original = list(self.agent["args"])
+        popen = self.probe_processes()
+        for args in (["/bin/sh", "-c", "CANARY"],
+                     [str(worker_ops.RUNNER), "--volume", "/:/host", "--", "pi"],
+                     [str(worker_ops.RUNNER), "--credential", f"{self.credential}:/work", *original[3:]],
+                     [str(worker_ops.RUNNER), "--credential", f"{self.credential}://work", *original[3:]],
+                     [*original, "--extension", "CANARY"]):
+            self.agent["args"] = args
+            self.registry.write_text(json.dumps({"agents": [self.agent]}))
+            with self.assertRaises(ToolError):
+                self.activation_tools()["factory_check_worker"].fn({"worker": self.agent["id"], "by": "owner"})
+        popen.assert_not_called()
+
+    def test_activated_worker_routes_only_after_an_explicit_tick_and_keeps_reviewer_exclusion(self):
+        from dataclasses import replace
+        from factory_mcp.foreman import Foreman
+        from tests.fakes import FakeGitHub
+        self.probe_processes()
+        self.activation_tools()["factory_check_worker"].fn({"worker": self.agent["id"], "by": "owner"})
+        self.activate()
+        github = FakeGitHub()
+        github.add_issue("o/r", 7)
+        foreman = Foreman(self.store, github, replace(self.config, repos=frozenset({"o/r"})), self.relay)
+        foreman.intake("o/r", 7)
+        before = self.store.get("o/r#7")
+        foreman.set_worker("o/r#7", [self.agent["id"]], "owner")
+        self.assertEqual(self.store.get("o/r#7"), before)
+        self.assertEqual(self.relay.tasks, {})
+        # A matching reviewer family still prevents dispatch for an activated worker.
+        github.contents[("o/r", ".github/pr-gatekeeper.json")] = json.dumps({"reviewer_model": "mimo-v2"})
+        wi = foreman.tick("o/r#7")["workItem"]
+        self.assertEqual(wi["state"], "human_waiting")
+        self.assertIn("reviewer family", wi["blockedOn"])
+        self.assertEqual(self.relay.tasks, {})
+
+    def test_activation_reaches_the_relay_only_when_the_owner_ticks_work(self):
+        from dataclasses import replace
+        from factory_mcp.foreman import Foreman
+        from tests.fakes import FakeGitHub
+        self.probe_processes()
+        self.activation_tools()["factory_check_worker"].fn({"worker": self.agent["id"], "by": "owner"})
+        self.activate()
+        github = FakeGitHub()
+        github.add_issue("o/r", 7)
+        foreman = Foreman(self.store, github, replace(self.config, repos=frozenset({"o/r"})), self.relay)
+        foreman.intake("o/r", 7)
+        foreman.set_worker("o/r#7", [self.agent["id"]], "owner")
+        self.assertEqual(self.relay.tasks, {})
+        wi = foreman.tick("o/r#7")["workItem"]
+        self.assertEqual((wi["state"], wi["worker"]), ("implementing", self.agent["id"]))
+        self.assertEqual(len(self.relay.tasks), 1)
+        self.assertEqual(self.relay.reloads, 1)
+
+    def test_deactivation_blocks_a_pending_submission_without_buying_another_pass(self):
+        from dataclasses import replace
+        from factory_mcp.foreman import Foreman
+        from tests.fakes import FakeGitHub
+        self.probe_processes()
+        self.activation_tools()["factory_check_worker"].fn({"worker": self.agent["id"], "by": "owner"})
+        self.activate()
+        github = FakeGitHub()
+        github.add_issue("o/r", 7)
+        foreman = Foreman(self.store, github, replace(self.config, repos=frozenset({"o/r"})), self.relay)
+        foreman.intake("o/r", 7)
+        foreman.set_worker("o/r#7", [self.agent["id"]], "owner")
+        self.relay.down = True
+        wi = foreman.tick("o/r#7")["workItem"]
+        self.assertEqual(wi["state"], "dispatching")
+        order = self.store.workorders("o/r#7")[0]
+        self.relay.down = False
+        self.activate(False)
+        with self.assertRaisesRegex(ToolError, "activation changed"):
+            foreman.submit(wi, order)
+        self.assertEqual(len(self.store.workorders("o/r#7")), 1)
+        self.assertEqual(self.relay.tasks, {})
+
 
 if __name__ == "__main__":
     unittest.main()

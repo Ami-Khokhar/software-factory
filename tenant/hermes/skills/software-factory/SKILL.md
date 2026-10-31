@@ -219,8 +219,12 @@ standard in the repo's AGENTS.md ask:
   owner names which approved sandboxed template to copy (default pi-glm-factory, for example the
   OpenCode opencode-mimo-factory). It copies that template and pins only the model; an unsandboxed,
   unknown or cross-provider template is refused. The new worker is NOT in
-  FACTORY_WORKERS and runs nothing until the owner lists it there and its provider-health pilot
-  passes. Tell the owner both steps are theirs.
+  FACTORY_WORKERS and runs nothing until checked and activated. After explicit owner approval,
+  run factory_check_worker, then factory_set_worker_enabled with `worker`, `enabled: true`,
+  the owner's name in `by`, quoted approval in `note`, and `ownerAsked: true`. Health must be
+  fresh and match config/image. Use `enabled: false` to deactivate on approval. Never edit host
+  environment files to bypass this control. Activation changes no items or budgets; the normal
+  ticker may subsequently run eligible work. Reviewer-family exclusions still apply.
 - Before you say a registered worker is ready to use, call factory_check_worker with its id and
   `day-desk` as `by`. Report only its sanitized status. A healthy record lasts 15 minutes and is
   tied to the current config, credential-file metadata and image. This checks the synthetic probe

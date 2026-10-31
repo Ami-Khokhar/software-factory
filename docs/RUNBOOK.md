@@ -332,8 +332,7 @@ The model ID is the provider-verified one: `deepseek-flash`, pi's official direc
 DeepSeek V4.1 Flash. Do not reuse the same ID through another provider — verify each one's exact
 name with its own provider first.
 
-After registering an agent in `agents.json` (and only once its pilot has passed), add the agent
-before its more proven peers in `FACTORY_WORKERS`, for example
+The startup baseline can be configured in `FACTORY_WORKERS`, for example
 `pi-deepseek-factory:local,pi-glm-factory:local`, restart factory-mcp, and reload agent-relay's
 registry if it is already running. Deploying this configuration is a step on the host, separate
 from the implementation that lands in this repository; the existing GLM workers stay, so a
@@ -413,11 +412,9 @@ Day Desk steers worker and timeout decisions within the same allowlist and crede
   template, an unsafe model name, and every attempt to change the credential, image or env
   boundary are refused before the registry is written; the write stays duplicate-checked and
   atomic. It needs `FACTORY_AGENTS_FILE` set to the relay's registry path, and it never adds the
-  worker to `FACTORY_WORKERS` — the steps stay separate: this tool only registers, the deploy
-  above puts the file on the host, the pilot (below) is the health check, listing the id in
-  `FACTORY_WORKERS` is the promotion, and only a real pilot line proves execution — the tests run
-  this against fixture registries and claim no live pass. Worker-management tools are write tools
-  on Day Desk's driving token, so Hermes asks you before each call.
+  worker to `FACTORY_WORKERS`. Registration, health and guarded activation stay separate. Only a
+  real pilot line proves execution; the tests use fixture registries and claim no live pass. Worker-management tools are write tools
+  on Day Desk's driving token. Authorization is enforced by factory-mcp.
 
 - `factory_check_worker` (`worker`, `by`) runs one fresh synthetic probe for a registered agent.
   It accepts only Python 3 on this deployment's exact `worker/runner.py`, a pinned model, a
@@ -429,8 +426,25 @@ Day Desk steers worker and timeout decisions within the same allowlist and crede
   confirms the synthetic response. The probe does not start OrbStack when Docker is stopped.
 - `factory_reload_workers` (`by`) calls agent-relay's fixed registry reload endpoint. It edits no
   file and does not change `FACTORY_WORKERS`, start a task or retry an issue. These two driving
-  writes let Day Desk check and reload a registered worker; activation remains a separate owner
-  operation.
+  writes let Day Desk check and reload a registered worker.
+- `factory_set_worker_enabled` (`worker`, `enabled`, `by`, `note`, optional `ownerAsked`)
+  enables or disables one worker through a durable SQLite override, preserving other members.
+  Use the owner token directly, or have Day Desk quote approval in `note` and set `ownerAsked`
+  true. Run `factory_check_worker` first. Activation requires healthy proof less than 15 minutes
+  old matching the current config, image and credential metadata. New members append as hosted
+  workers. Startup `FACTORY_WORKERS` remains the baseline. Disabling stops future submissions,
+  including pending ones, and leaves running tasks alone. Config/image/credential drift or a
+  quarantined health record blocks the activated member until repaired and reactivated.
+  Registration copies a template, reload refreshes relay memory, activation grants membership,
+  and `factory_set_worker` selects a member for an item. None retries an item or buys passes.
+  The normal ticker can subsequently dispatch eligible work. Reviewer-family exclusions still
+  apply, including to named workers. A DeepSeek worker cannot implement against a DeepSeek gate.
+  Claim live readiness only after a real `factory.health/v1` response with status `ok`.
+
+For the DeepSeek template, Pi's fixed `--no-extensions`, `--no-skills` and
+`--no-prompt-templates` switches are admitted. An unsupported option returns a bounded flag name
+and template correction, with values omitted. Fix the registered template through the approved
+operational process. Do not infer an auth or quota problem from harness validation failure.
 
 The timeout check reads `GET /healthz` -> `limits.maxTimeoutMs` from agent-relay (verified
 against relay revision `3ecf6b72973a5d9dbebb92bb8bfeb9a90f41802c` in the real rehearsal).

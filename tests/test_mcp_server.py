@@ -173,7 +173,7 @@ class McpServerTest(unittest.TestCase):
                                   "factory_use_allowance", "factory_queue_retry", "factory_authorize_setup_merge",
                                   "factory_revoke_setup_merge", "factory_merge_setup_pr",
                                   "factory_set_worker", "factory_register_worker", "factory_set_timeout",
-                                  "factory_check_worker", "factory_reload_workers"})
+                                  "factory_check_worker", "factory_reload_workers", "factory_set_worker_enabled"})
         self.assertTrue(all(t["inputSchema"]["type"] == "object" for t in tools))
 
     def test_the_agent_timeout_tool_persists_without_starting_a_worker(self):
@@ -210,7 +210,7 @@ class McpServerTest(unittest.TestCase):
                                   "factory_use_allowance", "factory_queue_retry", "factory_merge_setup_pr",
                                   "factory_docker_status", "factory_docker_control",
                                   "factory_set_worker", "factory_register_worker", "factory_set_timeout",
-                                  "factory_check_worker", "factory_reload_workers",
+                                  "factory_check_worker", "factory_reload_workers", "factory_set_worker_enabled",
                                   "factory_project_status"})
         refused = self.rpc("tools/call", {"name": "factory_bootstrap_repo",
                                           "arguments": {"repo": "o/r", "by": "day-desk"}}, token=AGENT)
@@ -232,6 +232,27 @@ class McpServerTest(unittest.TestCase):
         self.assertFalse(result["isError"])
         self.assertEqual(self.server.foreman.relay.reloads, 1)
         self.assertEqual(self.server.foreman.relay.tasks, {})
+
+    def test_worker_membership_authorization_and_audit_over_real_http(self):
+        from tests.fakes import FakeRelay
+        self.server.foreman.relay = FakeRelay()
+        before = self.store.put(workitem())
+        arguments = {"worker": "codex", "enabled": False, "by": "owner", "note": "Disable codex"}
+        refused = self.rpc("tools/call", {"name": "factory_set_worker_enabled",
+                                          "arguments": arguments}, token=AGENT)["result"]
+        self.assertTrue(refused["isError"])
+        self.assertEqual(self.store.worker_activations(), [])
+        accepted = self.rpc("tools/call", {"name": "factory_set_worker_enabled",
+            "arguments": dict(arguments, ownerAsked=True)}, token=AGENT)["result"]
+        self.assertFalse(accepted["isError"])
+        self.assertEqual(self.store.worker_activations()[0]["enabled"], 0)
+        runtime = self.rpc("tools/call", {"name": "factory_runtime_status"})["result"]
+        self.assertEqual(json.loads(runtime["content"][0]["text"])["workerOrder"], [])
+        self.assertEqual(self.store.get(before["id"]), before)
+        self.assertEqual(self.store.all_workorders(), [])
+        self.assertEqual(self.server.foreman.relay.tasks, {})
+        decisions = [row for row in self.store.global_history() if row["action"] == "worker_activation_changed"]
+        self.assertEqual(decisions[-1]["detail"]["note"], "Disable codex")
 
     def test_a_call_with_the_agent_token_is_audited_as_the_agents(self):
         self.store.put(workitem())
