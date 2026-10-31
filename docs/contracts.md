@@ -58,8 +58,10 @@ status of `ok` proves the synthetic response was received.
 start a task or retry work. Both operations are driving-token writes.
 
 `factory_set_worker_enabled` takes `worker`, boolean `enabled`, `by`, and `note` (1–1000
-characters). The owner token authorizes it directly. Day Desk must set `ownerAsked: true`
-and quote the owner's approval in `note`; the flag is refused on the owner token. Enabling
+characters). Both owner and driving tokens authorize it. Day Desk may register, check, enable
+and disable workers autonomously; `by` identifies the actor and `note` records its reason.
+`ownerAsked` remains optional attribution for older callers, not an activation requirement;
+it is still refused on the owner token. Enabling
 requires a current successful health record with matching configuration, credential metadata
 and Docker image identity. The worker id must match the pinned model family so routing cannot
 hide a reviewer conflict. Newly enabled workers are hosted workers, appended after existing

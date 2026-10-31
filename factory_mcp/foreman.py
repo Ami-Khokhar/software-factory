@@ -2305,7 +2305,7 @@ class Foreman:
         touched. The registry is the relay's own agents.json, which the relay has no API to write,
         so this edits that file and reloads the relay. It never touches FACTORY_WORKERS: a
         registered worker receives no WorkOrder until factory_check_worker succeeds and
-        the owner enables it through factory_set_worker_enabled (ADR-0126). Returns the new agent and whether the running relay
+        Day Desk or the owner enables it through factory_set_worker_enabled (ADR-0127). Returns the new agent and whether the running relay
         reloaded it."""
         if not isinstance(by, str) or not by.strip():
             raise ToolError("registering a worker needs the name of the person who asked")

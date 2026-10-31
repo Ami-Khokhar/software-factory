@@ -2981,6 +2981,8 @@ retain their original fences. docs/RUNBOOK.md records migration and live accepta
 
 ## ADR-0126 — Owner-approved, health-bound worker membership
 
+Amended by ADR-0127: Day Desk may make health-bound membership decisions autonomously.
+
 **Context.** The registered DeepSeek Pi template used three fixed isolation switches that the
 health validator rejected. Registration and relay reload could not complete an owner-approved
 activation because neither changed the factory allowlist (#435). #283 covers older pilot
@@ -3002,3 +3004,20 @@ items or replenishes passes. Health expires for activation after 15 minutes; an 
 remains valid after that interval while its binding and healthy status hold. Runtime eligibility
 fails closed on drift or quarantine. A successful synthetic provider response is still required
 before claiming live readiness. This amends ADR-0077's manual allowlist promotion path.
+
+
+## ADR-0127 — Day Desk manages healthy workers autonomously
+
+**Context.** Day Desk could register sandboxed workers but could not finish enabling one without
+claiming a new owner approval. The owner requested autonomous registration and startup (#438).
+
+**Decision.** Amend ADR-0097's worker-activation ownership and ADR-0126's per-worker approval requirement. The driving token may register,
+health-check, enable, disable and select workers on Day Desk's own judgment. Keep `by` and `note`
+and audit the agent identity. Retain optional `ownerAsked` for legacy attribution without requiring
+it. Existing template, provider/model, credential, fresh bound-health, configuration drift and
+reviewer-family checks remain unchanged. New credential/provider boundaries still need the owner.
+
+**Consequence.** Day Desk can finish the worker lifecycle through existing tools without editing
+host environment files or pretending the owner approved each choice. Enabling makes a worker
+eligible for the normal ticker; it does not directly dispatch a WorkOrder, retry an exhausted item,
+increase time limits, replenish passes or change independent gate merge control.
