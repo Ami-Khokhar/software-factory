@@ -77,6 +77,20 @@ class DreamModelTest(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ToolError):
                 dream_model.validate(plan, evidence)
 
+    def test_a_documentation_proposal_validates_with_its_own_check(self):
+        evidence, _ = self.store.dreaming.collect(self.config)
+        plan = self.plan()
+        plan["improvements"][0].update(
+            cause="Workers re-learn the same instruction", summary="Say it once in docs/trouble.md",
+            paths=["docs/trouble.md"],
+            checks=[{"claim": "docs/trouble.md names the rule",
+                     "command": "grep -c 'report the failure once' docs/trouble.md"}])
+        saved = dream_model.validate(plan, evidence)
+        self.assertEqual(saved["improvements"][0]["paths"], ["docs/trouble.md"])
+        # The prompt is what allows reflection to propose a documentation change at all.
+        self.assertIn(".md", dream_model.PROMPT)
+        self.assertIn("documentation", dream_model.PROMPT)
+
     def test_real_http_client_sets_output_budget_and_reads_structured_response(self):
         received = []
         plan = self.plan()
