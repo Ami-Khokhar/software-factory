@@ -352,8 +352,9 @@ def build(store, foreman, agent=False):
              "whole number before it and not repeated; omitted keeps the chain, and `after: []` "
              "lets it start at once. First checks every issue: "
              f"1 to {MAX_PLAN_ISSUES} issues, each body with an '## Acceptance' list of "
-             "'- <claim> — done when: <check>' bullets, and no title or body that names .github/ or "
-             "AGENTS.md. If one check fails, opens no issue. A second call opens the issues again.",
+             "'- <claim> — done when: <check>' bullets, and no title or body that names a protected "
+             "control path such as .github/. If one check fails, opens no issue. A second call opens "
+             "the issues again.",
              {"type": "object", "required": ["repo", "issues", "by"], "additionalProperties": False,
               "properties": {"repo": {"type": "string", "description": "owner/repo"},
                              "issues": {"type": "array", "minItems": 1, "maxItems": MAX_PLAN_ISSUES,

@@ -210,6 +210,18 @@ class WorkerFailoverTest(ForemanCase):
         self.assertIsNone(decision["succeeded"])
         self.assertIsNone(decision["escalationAvoided"])
 
+    def test_bad_base_protections_close_a_new_swap_before_dispatch(self):
+        self.relay_timeout()
+        self.github.contents[(REPO, ".github/pr-gatekeeper.json", "base0")] = '{"protected_paths": "bad"}'
+        wi = self.tick()
+        self.assertEqual(wi["state"], "human_waiting")
+        self.assertIn("Fix that file in the base branch, then retry", wi["blockedOn"])
+        result, = self.results()
+        self.assertEqual((result["action"], result["succeeded"], result["escalationAvoided"]),
+                         ("worker_swap", False, False))
+        self.assertEqual(result["recoveryId"], self.recoveries("worker_swap")[0]["recoveryId"])
+        self.assertEqual(len(self.foreman.store.workorders(ID)), 1)
+
     def test_the_outcome_of_a_swap_is_recorded_when_its_attempt_concludes(self):
         self.relay_timeout()  # pi-glm-factory
         wi, task = self.dispatch()  # pi-deepseek-factory, the swap

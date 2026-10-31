@@ -124,7 +124,7 @@ crosses 1001 (a `human_waiting` WorkItem whose `blockedOn` names the decompositi
 |---|---|---|
 | Worker (any relay agent: pi, Codex, OpenCode, ...) | Edit and commit in a throwaway container that holds a fresh copy of one repo and a copy of its harness's login files | Push, open PRs, read your files, or use your GitHub account: it has no GitHub credential, and its copy has no remote |
 | worker/runner.py | Run the repo's gate `verify` command from the base commit, in the same sandbox | Accept a patch whose tests fail |
-| factory-mcp | Push `factory/<issue>` and open the PR. It refuses a patch that touches a protected path (`.github/`, `AGENTS.md`) or takes the PR over the file-count limit before the push (a lines exceedance warns instead, ADR-0070), then checks the pushed branch and the size again | Merge. There is no merge tool |
+| factory-mcp | Push `factory/<issue>` and open the PR. It refuses a patch that touches a protected path (controls such as `.github/`, credentials, and explicit repository protections) or takes the PR over the file-count limit before the push (a lines exceedance warns instead, ADR-0070), then checks the pushed branch and the size again | Merge. There is no merge tool |
 | pr-gatekeeper | Review and merge, or ask for changes, or send the PR to a person (HUMAN) | Be bypassed by the factory: a HUMAN verdict waits for you |
 
 Limits: a WorkItem gets at most 4 worker passes (then `exhausted`); your `retry` gives it 4 more, also from
@@ -502,7 +502,8 @@ run spends real worker passes and gate reviews, so start one when you want a mea
 
 The repo needs pr-gatekeeper with working secrets, a `.github/pr-gatekeeper.json` with a `verify`
 command, and an `AGENTS.md` that carries the factory standard (ADR-0015). For manual setup, copy
-`templates/AGENTS.md` into the target repo and merge that PR yourself; `AGENTS.md` is protected.
+`templates/AGENTS.md` into the target repo. Setup control changes still need owner review.
+AGENTS.md-only changes use normal verification and independent gate review after policy migration.
 
 Day Desk can prepare that one-time setup PR. Ask it to check the repo, then to prepare the
 bootstrap PR; approve the `factory_bootstrap_repo` tool call in Telegram. If the gate config is
@@ -1126,3 +1127,24 @@ retry, extra pass, protected-path exception or merge authority.
 For agent-relay#60 the original author check explains the reported refusal. Its
 original body also lacks factory Acceptance bullets, so provenance alone is not
 permission to dispatch it. This change does not edit or retry that issue.
+
+## Migrating documentation review
+
+Deploy the factory code only after its PR is reviewed and merged. It removes AGENTS.md from
+factory defaults, while every new WorkOrder unions the factory control floor with the explicit
+protected_paths in the repository's base-commit gate configuration. Existing WorkOrders keep
+their recorded constraints. Finish or cancel and redispatch them through the existing owner tools.
+Do not rewrite stored WorkOrders to bypass their fences.
+
+Migrate each installation through a separate owner-reviewed configuration PR following
+pr-gatekeeper's docs/documentation-policy-migration.md. Remove only the specifically approved
+AGENTS.md entry. Keep custom directories, permission files, credentials, models, budgets and
+verification commands. Pin the reviewed gate revision only after it merges. Base-branch rules
+review the migration PR. Bootstrap never rewrites an existing protection list to adopt this policy.
+Recheck readiness after any prerequisite setup PR, including pr-gatekeeper#75. The current
+agent-relay factory-standard block already meets readiness. Its conflicting #42 is not required.
+
+After activation, create one small documentation-only issue through factory_start_plan, record its
+WorkOrder protections, worker result, successful configured verification, independent review and
+bot merge. Report merged code, deployed factory/gate pins, migrated settings, and verified-in-use
+proof separately. A local test or green code PR does not establish activation.
