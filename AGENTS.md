@@ -61,7 +61,7 @@ review works:
   `\u003e`, which a JSON parser decodes.
 - `MERGE`: the gate squash-merges. `CHANGES`: fix every blocking finding on the same branch, update
   the body, and push. `HUMAN`: a person must look; do not retry blindly.
-- A pull request goes to a person when it touches `.github/` or `AGENTS.md`, or after three rounds
+- A pull request goes to a person when it touches protected controls such as `.github/`, or after three rounds
   that end in `CHANGES`. It must stay within 600 changed lines and 20 files.
 - In GitHub Actions, a push made with `GITHUB_TOKEN` does not start the gate: end the run with
   `gh workflow run pr-gatekeeper.yml -f pr=<N>`.
