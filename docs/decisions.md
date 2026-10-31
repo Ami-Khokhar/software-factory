@@ -2937,3 +2937,27 @@ admission and dispatch. The agent token cannot grant this exception.
 Missing or ambiguous historical evidence fails closed. An approval-store loss
 requires renewed approval. Content drift stops new coding and cannot silently
 expand a WorkItem. Readiness, worker isolation, budgets and gate merge authority stay.
+
+## ADR-0124 — Worker checkouts live outside macOS privacy-protected folders
+
+**Context.** agent-relay#128 failed six passes at `os.getcwd()` with `PermissionError: [Errno 1]`
+before coding. The checkout was under `~/Documents`, a macOS privacy-protected (TCC) folder. The
+relay started the runner with a bare `python3`, resolved through launchd's `PATH`: Homebrew's
+python@3.14 held a Documents grant until `brew cleanup` autoremoved it on 2026-10-30 15:41 IST.
+Apple's `/usr/bin/python3` then took over, and macOS never prompts for a platform binary; tccd
+logged `Platform binary prompting is 'Deny'`.
+
+**Decision.** factory-mcp refuses to start when `FACTORY_CHECKOUT_ROOT` is inside `~/Documents`,
+`~/Desktop`, `~/Downloads`, `~/Library/Mobile Documents` or `~/Library/CloudStorage` on macOS. Worker
+checkouts live outside them, for example under `~/.local/share/factory-work`. The config resolves
+symlinks first, because macOS checks the folder a link leads to, and ignores case, as APFS does.
+The runner's startup failure names the macOS privacy cause without printing a path. Worker agents
+name their interpreter by absolute path in `agents.json`, because a bare `python3` changes with
+Homebrew.
+
+**Consequence.** A worker checkout the relay's interpreter cannot read is refused at start rather
+than failing every pass. Linux and non-protected macOS roots load unchanged. Moving a checkout
+requires the repair in the RUNBOOK: update `FACTORY_CHECKOUT_ROOT` and the agents' `cwd` and
+`allowedRoots`, then restart the relay and factory-mcp. A `preparation` failure is a setup phase:
+the Foreman records it as `checkout or setup` and pauses the WorkItem for the environment
+(ADR-0051), so the operator repairs the host and retries rather than spending passes on it.

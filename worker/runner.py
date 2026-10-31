@@ -27,7 +27,6 @@ import os
 import re
 import shutil
 import signal
-import stat
 import subprocess
 import sys
 import tempfile
@@ -635,17 +634,27 @@ def main(argv=None):
         directory_start = time.monotonic()
         try:
             cwd = os.getcwd()
-            if not stat.S_ISDIR(os.stat(cwd).st_mode):
-                raise NotADirectoryError(errno.ENOTDIR, "startup directory is unavailable")
+            os.stat(cwd)
         except OSError as exc:
             # Exception messages can contain paths or task input. Keep only OS metadata.
             detail = (f"startup working directory: source=process cwd "
                       f"(relay task/agent/inherited unresolved); {type(exc).__name__}; "
                       f"errno={exc.errno}; no coding started; inspect the relay launch directory "
                       "under its service identity")
+            if exc.errno == errno.EPERM and sys.platform == "darwin":
+                detail += ("; macOS privacy controls may block this folder: keep "
+                           "FACTORY_CHECKOUT_ROOT outside ~/Documents, ~/Desktop, ~/Downloads "
+                           "and iCloud (RUNBOOK)")
             record("preparation", directory_start, exc.errno or 1, detail)
             raise WorkerError(detail) from None
-        scratch = tempfile.mkdtemp(prefix="factory-run-")
+        try:
+            scratch = tempfile.mkdtemp(prefix="factory-run-")
+        except OSError as exc:
+            # A failing tempdir is preparation too: one bounded Result, no path, no message.
+            detail = (f"startup temp directory: {type(exc).__name__}; errno={exc.errno}; "
+                      "no coding started; inspect the relay service's TMPDIR")
+            record("preparation", directory_start, exc.errno or 1, detail)
+            raise WorkerError(detail) from None
         work = os.path.join(scratch, "work")
         repo = origin_repo(cwd)
         if repo != order["repo"]:

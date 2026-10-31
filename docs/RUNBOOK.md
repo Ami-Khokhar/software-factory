@@ -232,51 +232,44 @@ it with `docker build -t factory-worker:latest worker/` after such a change.
 
 ### Runner startup directory failures (#423)
 
-The factory submits `Config.checkout(repo)` as the relay task's `cwd` when
-`FACTORY_CHECKOUT_ROOT` is configured (`Foreman.submit`, `Relay.submit`). The relay
-selects task cwd, else registered agent cwd, else its inherited process directory.
-The service installer also supplies a launchd `WorkingDirectory`. These are source
-contracts, not evidence of the failed Mac process's actual selection. WorkOrder v1
-and runner arguments supply no explicit checkout directory. The runner uses the
-process cwd selected by the relay and never guesses a fallback. An invalid relay
-selection may prevent process launch entirely, before the runner can report a Result.
+A worker checkout inside a macOS privacy-protected folder fails before coding. The relay starts
+the runner with a bare `python3`, resolved through launchd's `PATH`, and macOS decides Documents
+access per binary. Until 2026-10-30 that was Homebrew's python@3.14, which held a Documents grant.
+At 15:41 IST `brew cleanup -s --prune=all` autoremoved it, and `python3` resolved to Apple's
+`/usr/bin/python3`: a platform binary that macOS never prompts for and denies. tccd logged
+`Platform binary prompting is 'Deny'`; the runner's `os.getcwd()` raised EPERM (#128, #423).
 
-After parsing task identity, the runner resolves and checks its cwd inside its
-handler. EPERM or ENOENT produces one failed Result with the original WorkOrder ID,
-a `preparation` phase, errno and a bounded explanation. Paths, exception messages,
-environment values and task command payload are omitted. No git checkout, Docker
-or coding process starts on this failure. The runner does not retry or change any
-budget. Retain the relay task IDs and factory attempt history for recovery.
+Rule: on macOS keep `FACTORY_CHECKOUT_ROOT` outside `~/Documents`, `~/Desktop`, `~/Downloads`
+and iCloud (`~/Library/Mobile Documents`, `~/Library/CloudStorage`); factory-mcp refuses to start
+otherwise (#428). In `agents.json`, name the interpreter by absolute path: a bare `python3`
+resolves through launchd's PATH and changes when Homebrew adds or removes a Python.
 
-For agent-relay#128, the reported live revision f8e36c4 called `os.getcwd()` before
-Result initialization and its handler. This explains the unstructured startup
-failure. Subsequent read-only checks on the local Mac found supporting policy-denial
-evidence. Kernel logs for 31 October 2026, 00:30–00:40 IST, filtered to System Policy
-file-read denials mentioning the configured factory-work checkout, contain four
-records: Python denied checkout/parent reads at 00:31:47 and 00:34:17 IST. Factory
-audit records for exact WorkItem agent-relay#128 in that window (six dispatch,
-submitted and attempt_failed rows, no joins) place its submissions at 00:31:46 and
-00:34:17 IST. This is time correlation, not an established task-to-PID join.
-TCC attribution for the first denied Python PID links by msgID to AllFiles and
-DocumentsFolder authorization requests. The policy responsible and application
-attribution requiring repair remain unresolved. No privacy grant or permission
-change follows from this evidence alone.
+The runner starts no git, Docker or coding process on this failure. It prints one failed Result
+with the original WorkOrder ID, a `preparation` phase, the errno, and a bounded detail with no
+path. Because `preparation` is a setup phase, the Foreman records the attempt as
+`checkout or setup` and pauses the WorkItem as `human_waiting` on the first attempt (ADR-0051).
 
-The current launchd configuration and cwd records agree on the relay's service
-directory. Registry and factory settings select a checkout under factory-work.
-The checkout and ancestors exist and are searchable from Codex under the service's
-user account. This does not prove access under the service's responsible-process
-context. Isolated tests do not reproduce or repair the host problem. No #128 retry
-or live job is part of this change. Before any separately approved host repair,
-collect the remaining read-only evidence:
+Repair: move the checkouts, for example to `~/.local/share/factory-work`; update
+`FACTORY_CHECKOUT_ROOT` and the worker agents' `cwd` and `allowedRoots` in
+`~/.config/agent-relay/agents.json`; restart the relay and factory-mcp; then `factory retry`.
 
-- The selected launch directory and whether it came from task, agent or service inheritance.
-- Directory and ancestor existence/search access under the actual service identity.
-- Relevant OS denial logs if needed to distinguish access policy from filesystem faults.
-- After an approved repair, verify runner startup under that same identity and directory.
+Check the repair with a one-shot launchd job that runs the agents' interpreter in the checkout.
+Put the checkout path in place of `CHECKOUT`. `last exit code = 0` means it can read the
+checkout; `1` means macOS denied it, and `log show --last 5m --predicate 'eventMessage CONTAINS
+"deny(1) file-read-data"'` names the folder:
 
-Do not infer privacy denial, ACL trouble or deletion from EPERM alone. Do not
-retrieve credentials, full environments, command arguments or WorkOrder payloads.
+```bash
+cat > /tmp/tcc-check.plist <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>Label</key><string>tcc-check</string><key>RunAtLoad</key><true/>
+<key>ProgramArguments</key><array><string>/usr/bin/python3</string><string>-c</string>
+<string>import os,sys; os.chdir(sys.argv[1]); os.getcwd(); os.listdir(".")</string>
+<string>CHECKOUT</string></array></dict></plist>
+PLIST
+launchctl bootstrap gui/$(id -u) /tmp/tcc-check.plist; sleep 2
+launchctl print gui/$(id -u)/tcc-check | grep "last exit code"
+launchctl bootout gui/$(id -u)/tcc-check; rm /tmp/tcc-check.plist
+```
 
 ### Worker memory
 
@@ -293,14 +286,16 @@ An agent registered before #98 must add its `--credential` and
 `--env` flags: without them the runner mounts no login and the harness fails on its first call.
 Register each worker in `~/.config/agent-relay/agents.json`
 (replace the host paths), list it in `FACTORY_WORKERS` (preferred first, `:local` or `:hosted`),
-restart factory-mcp, and reload agent-relay's registry if it is already running. Two that passed a
+restart factory-mcp, and reload agent-relay's registry if it is already running. Name each
+worker's interpreter by absolute path, because a bare `python3` resolves through launchd's PATH
+and changes when Homebrew adds or removes a Python. Two that passed a
 live pass on 2026-10-01, both GLM 5.3 Flash through OpenCode Go:
 
 ```json
 {
   "id": "pi-glm-factory",
   "name": "pi (GLM 5.3 Flash), sandboxed factory worker",
-  "command": "python3",
+  "command": "/usr/bin/python3",
   "args": ["/absolute/path/to/software-factory/worker/runner.py",
            "--credential", "/Users/you/.pi/agent/auth.json:/home/node/.pi/agent",
            "--env", "PI_CODING_AGENT_DIR=/home/node/.pi/agent", "--",
@@ -321,7 +316,7 @@ WorkOrder is dispatched to DeepSeek until its pilot (below) is green:
 {
   "id": "pi-deepseek-factory",
   "name": "pi (DeepSeek V4.1 Flash), sandboxed factory worker",
-  "command": "python3",
+  "command": "/usr/bin/python3",
   "args": ["/absolute/path/to/software-factory/worker/runner.py",
            "--credential", "/Users/you/.pi/agent/auth.json:/home/node/.pi/agent",
            "--env", "PI_CODING_AGENT_DIR=/home/node/.pi/agent", "--",
@@ -353,7 +348,7 @@ template to `~/.config/agent-relay/agents.json` once, by hand as above (replace 
 {
   "id": "opencode-mimo-factory",
   "name": "opencode (mimo-v2.6-flash-free), sandboxed factory worker",
-  "command": "python3",
+  "command": "/usr/bin/python3",
   "args": ["/absolute/path/to/software-factory/worker/runner.py",
            "--credential", "/Users/you/.local/share/opencode/auth.json:/tmp/factory-home/.local/share/opencode",
            "--", "opencode", "run", "--model", "opencode/mimo-v2.6-flash-free"],

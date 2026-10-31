@@ -1,10 +1,32 @@
 """Configuration, read from the environment and repos.json once at start."""
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import jev_rank
 from . import repos as manifest
+
+# macOS privacy-protected (TCC) folders under the home directory, as path components. A worker
+# checkout inside one may be unreadable to the relay's interpreter (#428).
+PROTECTED_FOLDERS = (("Documents",), ("Desktop",), ("Downloads",),
+                     ("Library", "Mobile Documents"), ("Library", "CloudStorage"))
+
+
+def protected_folder(path, home, platform):
+    """The macOS protected folder under `home` that contains `path`, as text like "~/Documents",
+    or None. Symlinks are resolved, because macOS checks the folder a link leads to; realpath
+    never raises, so a path it cannot read stays as written. Case is ignored, as on APFS."""
+    if platform != "darwin" or not path or not home:
+        return None
+    target = os.path.realpath(path).casefold().split(os.sep)
+    base = os.path.realpath(home).casefold().split(os.sep)
+    if target[:len(base)] != base:
+        return None
+    for parts in PROTECTED_FOLDERS:
+        if target[len(base):len(base) + len(parts)] == [part.casefold() for part in parts]:
+            return "~/" + "/".join(parts)
+    return None
 
 
 @dataclass(frozen=True)
@@ -111,6 +133,15 @@ class Config:
             # A flag without a key would rank nothing on every dispatch: say what is missing.
             raise ValueError("FACTORY_JEV_LESSON_RANKING is on, but TYPESAFE_API_KEY is not set; "
                              "set the key in the factory service environment, or turn ranking off")
+        checkout_root = env.get("FACTORY_CHECKOUT_ROOT", "")
+        protected = protected_folder(checkout_root, env.get("HOME") or str(Path.home()), sys.platform)
+        if protected:
+            raise ValueError(
+                f"FACTORY_CHECKOUT_ROOT is inside {protected}. macOS privacy controls (TCC) can "
+                "block the relay's interpreter from reading it, and the worker runner then fails "
+                "before coding (#428). Move the checkouts outside ~/Documents, ~/Desktop, "
+                "~/Downloads and iCloud (for example ~/.local/share/factory-work), point the relay "
+                "worker agents' cwd and allowedRoots there, and restart (RUNBOOK).")
         return cls(
             dream_url=env.get("FACTORY_DREAM_URL", ""),
             dream_model=env.get("FACTORY_DREAM_MODEL", ""),
@@ -139,7 +170,7 @@ class Config:
             wall_ms=int(env.get("FACTORY_WALL_MS") or defaults.wall_ms),
             source_target=source_target,
             source_ceiling=source_ceiling,
-            checkout_root=env.get("FACTORY_CHECKOUT_ROOT", ""),
+            checkout_root=checkout_root,
             trusted_authors=frozenset(a.strip() for a in env.get("FACTORY_TRUSTED_AUTHORS", "").split(",")
                                       if a.strip()),
             repos_file=repos_file,
