@@ -665,3 +665,11 @@ fields. The source review body digest also binds provenance against later commen
 No schema or stored WorkItem migration is required. The digest and source
 records are checked again before dispatch and submission. Lost approval records
 fail closed. See RUNBOOK for supported provenance and failure recovery.
+
+## Documentation protection policy
+
+WorkOrder.constraints.protectedPaths is the union of factory control defaults and the explicit
+protected_paths from .github/pr-gatekeeper.json at the WorkOrder baseSha. Malformed protection
+settings stop dispatch before any worker or pass charge. AGENTS.md and ordinary documentation
+are eligible unless explicitly protected. The same stored list drives worker instructions, the
+pre-push patch guard and the post-result check. Changing settings in a patch cannot change it.

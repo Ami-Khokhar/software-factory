@@ -54,8 +54,6 @@ class StartPlanTest(unittest.TestCase):
             ("a workflow change", REPO, plan("One", "Two") + [{"title": "Edit .github/workflows/ci.yml",
                                                              "body": ISSUE_BODY}],
              "issue 3 of the plan names .github/, which only a person changes"),
-            ("AGENTS.md named", REPO, [{"title": "One", "body": ISSUE_BODY + NOT_TO_CHANGE}],
-             "issue 1 of the plan names AGENTS.md"),
             ("no title", REPO, [{"title": " ", "body": ISSUE_BODY}], "issue 1 of the plan needs a title and a body"),
             ("11 issues", REPO, plan(*(f"T{n}" for n in range(11))), "a plan has 1 to 10 issues"),
             ("no issues", REPO, [], "a plan has 1 to 10 issues"),
@@ -67,6 +65,17 @@ class StartPlanTest(unittest.TestCase):
         with self.assertRaisesRegex(ToolError, "needs the name of the person who approved it"):
             self.foreman.start_plan(REPO, plan("One"), " ")
         self.assertEqual((self.github.issues, self.foreman.store.all()), ({}, []))
+
+    def test_agents_plan_enters_normal_ready_flow(self):
+        made = self.foreman.start_plan(REPO, [{"title": "Update AGENTS.md", "body": FENCED + NOT_TO_CHANGE}],
+                                       "amteshwar")
+        self.assertEqual(self.foreman.store.get(f"{REPO}#{made['issues'][0]['issue']}")["state"], "ready")
+
+    def test_custom_agents_protection_still_refuses_the_plan(self):
+        self.foreman.config = dataclasses.replace(self.foreman.config, protected_paths=(".github/", "AGENTS.md"))
+        with self.assertRaisesRegex(ToolError, "names AGENTS.md"):
+            self.foreman.start_plan(REPO, [{"title": "Update AGENTS.md", "body": FENCED}], "amteshwar")
+        self.assertEqual(self.github.issues, {})
 
     def test_an_item_without_a_paths_line_is_refused_and_opens_nothing(self):
         with self.assertRaisesRegex(ToolError, "issue 1 of the plan needs a 'Paths: <glob>, <glob>'"):
@@ -98,8 +107,8 @@ class StartPlanTest(unittest.TestCase):
 
     def test_only_a_whole_protected_path_word_refuses_a_plan(self):
         cases = [("raw.githubusercontent.com", True), ("AGENTS.mdx", True),
-                 ("edit .github/workflows/ci.yml", False), ("keep `AGENTS.md`.", False),
-                 ("docs/AGENTS.md", False)]
+                 ("edit .github/workflows/ci.yml", False), ("keep `AGENTS.md`.", True),
+                 ("docs/AGENTS.md", True)]
         for mention, accepted in cases:
             with self.subTest(mention):
                 self.setUp()

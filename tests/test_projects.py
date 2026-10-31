@@ -226,17 +226,17 @@ class StartProjectTest(unittest.TestCase):
         self.assertEqual(lines[at + 1:at + 6], rules)
 
     def test_a_non_member_workorder_has_no_project_key(self):
-        """Guard: the whole task stays byte-for-byte equal to the pre-blueprint task text."""
+        """Guard: non-member tasks retain the worker contract, including normal documentation review."""
         self.github.add_issue(REPO, 300)
         self.foreman.intake(REPO, 300)
         wi = self.foreman.tick(f"{REPO}#300")["workItem"]
         order = self.foreman.store.workorders(wi["id"])[0]
         self.assertNotIn("project", order)
         text = self.foreman.relay.tasks[wi["providerTaskId"]]["input"]
-        # Captured before WO-06, normalizing only the clock and per-pass credential.
+        # Snapshot updated for the documentation-review policy, normalizing clock and ask token.
         text = text.replace(order["createdAt"], "<createdAt>").replace(order["ask"]["token"], "<ask-token>")
         self.assertEqual(hashlib.sha256(text.encode()).hexdigest(),
-                         "cd4730f8c1af32bedbb39829240a98e82a1e9f1990fa052c5e1ea723c50df656")
+                         "d38a20dbbad5aa73988f8ec16481b41028936e659b8039c08b96c94861167df1")
 
     def test_start_project_opens_the_plan_and_makes_each_issue_a_member(self):
         made = self.foreman.start_project(self.lead_fields(), self.plan("One", "Two", "Three"),
@@ -653,8 +653,8 @@ class AcceptanceTest(unittest.TestCase):
         self.assertEqual(self.foreman.store.project(project["id"])["state"], "done")
 
     def test_a_protected_path_in_acceptance_explains_how_to_reword_it_and_opens_nothing(self):
-        for over in ({"title": "Fix AGENTS.md onboarding"},
-                     {"doneWhen": [{"claim": "AGENTS.md stays current", "command": "python3 check.py"}]}):
+        for over in ({"title": "Fix .github/workflows/ci.yml"},
+                     {"doneWhen": [{"claim": ".github/workflows/ci.yml stays current", "command": "python3 check.py"}]}):
             with self.subTest(over), self.assertRaisesRegex(
                     ToolError, "acceptance issue.*rename the Project or reword the check.*No issue was opened"):
                 self.foreman.start_project(self.lead_fields(**over), self.plan("One"),

@@ -2961,3 +2961,19 @@ requires the repair in the RUNBOOK: update `FACTORY_CHECKOUT_ROOT` and the agent
 `allowedRoots`, then restart the relay and factory-mcp. A `preparation` failure is a setup phase:
 the Foreman records it as `checkout or setup` and pauses the WorkItem for the environment
 (ADR-0051), so the operator repairs the host and retries rather than spending passes on it.
+
+
+## ADR-0125 — Normal review for documentation and agent instructions
+
+**Context.** Filename-only AGENTS.md rejection prevented an authorised plan from opening any
+issue. Root instructions are security-sensitive content, but a filename is not a finding.
+
+**Decision.** Supersede the AGENTS.md filename ban in ADR-0015, ADR-0024 and the Day Desk owner
+routing policy. Use normal verification and independent gate review unless an explicit repository
+protection applies. Union base-commit custom protections into each WorkOrder. Keep actual workflow,
+credential and permission controls protected. Review installation migrations under base rules in
+separate owner-reviewed PRs. Never silently delete custom protections during bootstrap.
+
+**Consequence.** Instruction changes can ship without filename-only escalation after activation.
+They do not authorise themselves, weaken review, or bypass a blocking finding. Existing orders
+retain their original fences. docs/RUNBOOK.md records migration and live acceptance.

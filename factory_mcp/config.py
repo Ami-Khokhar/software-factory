@@ -51,7 +51,7 @@ class Config:
     wall_ms: int = 20 * 60 * 1000
     source_target: int = 700  # source-only small-PR target (ADR-0079)
     source_ceiling: int = 1000  # source-only reviewable ceiling; over it: decomposition, not a wall
-    protected_paths: tuple = (".github/", "AGENTS.md")
+    protected_paths: tuple = (".github/", ".env", ".env.local", "secrets/", ".claude/settings.json", ".codex/config.toml")
     checkout_root: str = ""  # worker checkouts live at <root>/<owner>/<repo>; empty: the agent's cwd
     trusted_authors: frozenset = frozenset()  # issue authors a worker may act for; empty: repo owner
     repos_file: str = ""  # repos.json (ADR-0014); empty: FACTORY_REPOS is the whole allowlist

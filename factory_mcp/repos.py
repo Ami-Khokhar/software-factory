@@ -31,6 +31,21 @@ GATE_USES = re.compile(r"(uses:\s*\S+/\.github/workflows/gatekeeper\.yml@)([0-9a
 GATE_REF = re.compile(r"(gatekeeper_ref:\s*)([0-9a-fA-F]{40})")
 
 
+def protected_paths(github, repo, base_sha, required):
+    """Carry explicit base-branch protections into each WorkOrder, without weakening our floor."""
+    text = github.file(repo, GATE_CONFIG, ref=base_sha)
+    if text is None:
+        return list(required)
+    try:
+        raw = json.loads(text)
+    except ValueError as exc:
+        raise ValueError(f"{GATE_CONFIG} on the base is invalid JSON: {exc}") from None
+    paths = raw.get("protected_paths", []) if isinstance(raw, dict) else None
+    if not isinstance(paths, list) or any(not isinstance(p, str) or not p for p in paths):
+        raise ValueError(f"{GATE_CONFIG} on the base needs a protected_paths list of nonempty strings")
+    return list(dict.fromkeys([*required, *paths]))
+
+
 def standard_blocks(text):
     """The factory-standard blocks in an AGENTS.md text."""
     return STANDARD.findall((text or "").replace("\r\n", "\n"))

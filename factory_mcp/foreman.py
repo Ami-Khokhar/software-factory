@@ -987,6 +987,12 @@ class Foreman:
                                     self._lessons(wi, findings),
                                     continuation.get("sha") if continuation else None,
                                     project=self.store.project(wi["projectId"]) if wi.get("projectId") else None)
+        try:
+            order["constraints"]["protectedPaths"] = repos.protected_paths(
+                self.github, wi["repo"], base, self.config.protected_paths)
+        except ValueError as exc:
+            return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=str(exc)),
+                               "invalid_protections")
         order["ask"] = {"url": self.config.ask_url, "token": secrets.token_hex(16)}  # ADR-0098
         packet = self.store.knowledge.packet(self.config, wi)
         if packet:
