@@ -122,7 +122,7 @@ class RegistryUnitTest(unittest.TestCase):
 
 class RegisterWorkerTest(unittest.TestCase):
     """factory_register_worker through the Foreman: the registry write, the refusals, and the
-    guarantee that a registered worker is not dispatchable until the owner promotes it."""
+    guarantee that a registered worker is not dispatchable until its health is checked and it is enabled."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -147,6 +147,20 @@ class RegisterWorkerTest(unittest.TestCase):
     def read_registry(self):
         with open(self.agents_file) as handle:
             return json.load(handle)["agents"]
+
+    def test_day_desk_registers_without_approval_or_implicit_activation(self):
+        from factory_mcp import tools
+        before = self.foreman.store.get(ID)
+        tool = tools.build(self.foreman.store, self.foreman, agent=True)["factory_register_worker"]
+        result = tool.fn({"worker": "pi-qwen-factory", "model": "qwen-3-max", "by": "day-desk"})
+        self.assertEqual(result["agent"]["id"], "pi-qwen-factory")
+        self.assertTrue(result["reloaded"])
+        self.assertEqual(self.read_registry()[-1]["id"], "pi-qwen-factory")
+        self.assertEqual(self.foreman.store.worker_activations(), [])
+        self.assertEqual(self.foreman.store.get(ID), before)
+        self.assertEqual(self.foreman.store.all_workorders(), [])
+        self.assertEqual(self.relay.tasks, {})
+        self.assertTrue(self.foreman.store.global_history()[-1]["detail"]["agent"])
 
     def test_register_writes_the_agent_and_reloads_the_relay(self):
         result = self.foreman.register_worker("pi-qwen-factory", "qwen-3-max", "day-desk")

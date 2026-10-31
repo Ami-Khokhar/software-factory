@@ -230,9 +230,9 @@ class WorkerOpsTest(unittest.TestCase):
             self.assertNotIn("CANARY", message)
             self.assertLess(len(message), 220)
 
-    def test_activation_requires_approval_and_current_healthy_binding(self):
+    def test_agent_activation_still_requires_current_healthy_binding(self):
         self.probe_processes()
-        with self.assertRaisesRegex(ToolError, "owner approval"):
+        with self.assertRaisesRegex(ToolError, "fresh successful"):
             self.activate(agent=True)
         with self.assertRaisesRegex(ToolError, "Day Desk"):
             self.activate(ownerAsked=True)
@@ -246,20 +246,21 @@ class WorkerOpsTest(unittest.TestCase):
             self.store.put_worker_health(row["worker"], row["binding"], row["status"], row["checkedAt"],
                                          row["validUntil"], row["report"])
             with self.assertRaisesRegex(ToolError, "fresh successful"):
-                self.activate()
+                self.activate(agent=True)
         self.assertEqual(self.store.worker_activations(), [])
 
     def test_activation_preserves_membership_and_audits_without_touching_work(self):
         popen = self.probe_processes()
         self.activation_tools()["factory_check_worker"].fn({"worker": self.agent["id"], "by": "owner"})
-        result = self.activate(agent=True, ownerAsked=True)
+        result = self.activate(agent=True, by="day-desk")
         self.assertTrue(result["enabled"])
         self.assertEqual(worker_ops.effective_workers(self.store, self.config),
                          (*self.config.workers, (self.agent["id"], "hosted")))
         detail = self.store.global_history()[-1]["detail"]
         self.assertEqual((detail["by"], detail["ownerAsked"], detail["note"]),
-                         ("owner", True, "Enable the registered worker"))
-        self.activate(False)
+                         ("day-desk", False, "Enable the registered worker"))
+        self.assertTrue(detail["agent"])
+        self.activate(False, agent=True, by="day-desk")
         self.assertEqual(worker_ops.effective_workers(self.store, self.config), self.config.workers)
         self.assertEqual(popen.call_count, 1)
         self.assertEqual(self.store.all_workorders(), [])

@@ -429,8 +429,9 @@ Day Desk steers worker and timeout decisions within the same allowlist and crede
   writes let Day Desk check and reload a registered worker.
 - `factory_set_worker_enabled` (`worker`, `enabled`, `by`, `note`, optional `ownerAsked`)
   enables or disables one worker through a durable SQLite override, preserving other members.
-  Use the owner token directly, or have Day Desk quote approval in `note` and set `ownerAsked`
-  true. Run `factory_check_worker` first. Activation requires healthy proof less than 15 minutes
+  Day Desk may decide on its driving token without asking the owner. Set `by` to `day-desk`
+  and explain the reason in `note`. `ownerAsked` is optional legacy attribution, not required.
+  Run `factory_check_worker` first. Activation requires healthy proof less than 15 minutes
   old matching the current config, image and credential metadata. New members append as hosted
   workers. Startup `FACTORY_WORKERS` remains the baseline. Disabling stops future submissions,
   including pending ones, and leaves running tasks alone. Config/image/credential drift or a

@@ -46,7 +46,7 @@ FACTORY_MCP_TOKEN=<secret> FACTORY_REPOS=owner/repo FACTORY_GITHUB_TOKEN=<token>
 | `AGENT_RELAY_TOKEN` | agent-relay's API token, sent as `Authorization: Bearer` on every relay call. Unset: the file at `AGENT_RELAY_TOKEN_FILE` (default `~/.config/agent-relay/token`, which the relay writes on its first start), read on each call. With neither, no token is sent |
 | `FACTORY_DB` | SQLite path, default `~/.local/state/factory-mcp/factory.sqlite3` |
 | `FACTORY_PORT` | The port on 127.0.0.1, default 43125. factory-mcp speaks plain HTTP, so it listens on loopback only |
-| `FACTORY_WORKERS` | Startup worker membership/order with locality, e.g. `pi-glm-factory:local`. Owner-approved `factory_set_worker_enabled` overrides persist in SQLite (RUNBOOK) |
+| `FACTORY_WORKERS` | Startup worker membership/order with locality, e.g. `pi-glm-factory:local`. Guarded `factory_set_worker_enabled` overrides persist in SQLite (RUNBOOK) |
 | `FACTORY_AGENTS_FILE` | The relay's `agents.json`; set, `factory_register_worker` may add a worker by copying the template (ADR-0077). Empty: that tool is refused |
 | `FACTORY_WORKER_TEMPLATE` | The agent `factory_register_worker` copies, default `pi-glm-factory` |
 | `FACTORY_LOCAL_ONLY_REPOS` | Repos whose work may only go to `local` workers |

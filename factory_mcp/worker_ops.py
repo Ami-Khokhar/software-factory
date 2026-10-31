@@ -351,13 +351,11 @@ def current_binding(config, worker_id):
 
 
 def set_enabled(store, config, worker_id, enabled, by, note, *, agent=False, owner_asked=False):
-    if agent and owner_asked is not True:
-        raise ToolError("worker activation needs owner approval; quote it in note and set ownerAsked true")
     if owner_asked and not agent:
         raise ToolError("ownerAsked is Day Desk's flag; use the owner token directly without it")
     if (type(enabled) is not bool or not isinstance(by, str) or not by.strip()
             or not isinstance(note, str) or not note.strip() or len(note) > 1000):
-        raise ToolError("worker activation needs enabled boolean, by, and an approval note up to 1000 characters")
+        raise ToolError("worker activation needs enabled boolean, by, and a reason note up to 1000 characters")
     if not isinstance(worker_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,99}", worker_id):
         raise ToolError("worker must name a registered relay agent")
     binding = ""

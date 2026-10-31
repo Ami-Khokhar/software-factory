@@ -487,7 +487,7 @@ def build(store, foreman, agent=False):
              "`template` picks which approved sandboxed template to copy (default "
              "FACTORY_WORKER_TEMPLATE); an unsandboxed, unknown or cross-provider template is "
              "refused before anything is written. It is NOT added to FACTORY_WORKERS, so it runs "
-             "nothing until factory_check_worker succeeds and the owner enables it with factory_set_worker_enabled. The "
+             "nothing until factory_check_worker succeeds and it is enabled with factory_set_worker_enabled. The "
              "registry is the relay's agents.json; the relay is reloaded when it answers. Returns "
              "the new agent and whether the running relay reloaded it.",
              {"type": "object", "required": ["worker", "model", "by"], "additionalProperties": False,
@@ -504,7 +504,7 @@ def build(store, foreman, agent=False):
                  agent=agent)),
         Tool("factory_set_worker_enabled",
              "Enable or disable one registered worker without retrying or dispatching work. "
-             "Requires the owner token, or Day Desk ownerAsked true with quoted approval in note. "
+             "Day Desk may decide autonomously using its driving token; by and note record why. "
              "Enabling requires fresh successful config/image-bound health. Existing membership "
              "is preserved. Durable overrides apply to routing and runtime status, not host env files.",
              {"type": "object", "required": ["worker", "enabled", "by", "note"],
@@ -512,7 +512,8 @@ def build(store, foreman, agent=False):
                   "worker": {"type": "string", "minLength": 1}, "enabled": {"type": "boolean"},
                   "by": {"type": "string", "minLength": 1},
                   "note": {"type": "string", "minLength": 1, "maxLength": 1000},
-                  "ownerAsked": {"type": "boolean"}}}, "write",
+                  "ownerAsked": {"type": "boolean", "description":
+                      "Optional legacy attribution when the owner specifically asked; not required for Day Desk."}}}, "write",
              lambda args: worker_ops.set_enabled(store, foreman.config, args["worker"],
                  args["enabled"], args["by"], args["note"], agent=agent,
                  owner_asked=args.get("ownerAsked", False))),

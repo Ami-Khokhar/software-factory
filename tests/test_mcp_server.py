@@ -238,12 +238,13 @@ class McpServerTest(unittest.TestCase):
         self.server.foreman.relay = FakeRelay()
         before = self.store.put(workitem())
         arguments = {"worker": "codex", "enabled": False, "by": "owner", "note": "Disable codex"}
-        refused = self.rpc("tools/call", {"name": "factory_set_worker_enabled",
-                                          "arguments": arguments}, token=AGENT)["result"]
-        self.assertTrue(refused["isError"])
+        status, _ = self.post({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+            "name": "factory_set_worker_enabled", "arguments": arguments}},
+            {"Authorization": "Bearer invalid-token"})
+        self.assertEqual(status, 401)
         self.assertEqual(self.store.worker_activations(), [])
         accepted = self.rpc("tools/call", {"name": "factory_set_worker_enabled",
-            "arguments": dict(arguments, ownerAsked=True)}, token=AGENT)["result"]
+            "arguments": arguments}, token=AGENT)["result"]
         self.assertFalse(accepted["isError"])
         self.assertEqual(self.store.worker_activations()[0]["enabled"], 0)
         runtime = self.rpc("tools/call", {"name": "factory_runtime_status"})["result"]
@@ -253,6 +254,8 @@ class McpServerTest(unittest.TestCase):
         self.assertEqual(self.server.foreman.relay.tasks, {})
         decisions = [row for row in self.store.global_history() if row["action"] == "worker_activation_changed"]
         self.assertEqual(decisions[-1]["detail"]["note"], "Disable codex")
+        self.assertTrue(decisions[-1]["detail"]["agent"])
+        self.assertFalse(decisions[-1]["detail"]["ownerAsked"])
 
     def test_a_call_with_the_agent_token_is_audited_as_the_agents(self):
         self.store.put(workitem())
