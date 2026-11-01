@@ -97,7 +97,7 @@ class FindingsTest(unittest.TestCase):
         kept = {entry["identity"] for entry in view}
         self.assertEqual([doc["id"] for doc in open_findings], sorted(kept & {doc["id"] for doc in open_findings},
                           key=[doc["id"] for doc in open_findings].index))
-        self.assertNotIn(rejected[0]["id"], kept)  # the oldest rejection dropped first
+        self.assertNotIn(rejected[2]["id"], kept)  # the oldest selected rejection dropped first
         self.assertIn(rejected[-1]["id"], kept)  # the newest rejection survives
 
     def test_open_lists_unfinished_findings_only(self):
