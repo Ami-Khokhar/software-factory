@@ -7,6 +7,7 @@ import re
 import shutil
 import signal
 import subprocess
+import time
 import sys
 import tempfile
 import uuid
@@ -23,7 +24,12 @@ PROCESS_SECONDS = 390
 HARNESS_NAMES = {"pi", "codex", "opencode"}
 HEALTH_STATUSES = {"ok", "unexpected_response", "harness_deadline", "provider_quota",
                    "provider_rate_limit", "provider_auth", "provider_error", "unavailable"}
-HEALTH_EVENTS = {"preflight", "probe"}
+HEALTH_EVENTS = {"preflight", "probe", "launch"}
+# The launch step: one tiny relay task whose cwd is the configured checkout folder, so the check
+# proves the whole launch path the probe cannot see (#430): the interpreter the agent entry names,
+# the task cwd and macOS privacy denials on that folder. One attempt, no retries, never a WorkOrder.
+LAUNCH_PROMPT = "Health probe: reply with exactly: ok"
+LAUNCH_SECONDS = 120
 HEALTH_FIELDS = {"ts", "event", "tool", "status", "exitCode", "retries", "latencyMs",
                  "promptBytes", "responseBytes", "diagnosticBytes"}
 SECRET_ENV = re.compile(r"(?:SECRET|TOKEN|KEY|PASSWORD|CREDENTIAL|AUTH)", re.IGNORECASE)
@@ -303,7 +309,56 @@ def _run(candidate):
     return _safe_report(stdout, process.returncode, candidate["harness"]), True
 
 
-def check(store, config, worker_id, by, *, agent=False):
+def _launch(relay, config, repo, worker_id):
+    """One relay task that proves the relay can start the agent's interpreter in the checkout
+    folder: its cwd is `config.checkout(repo)`, the same value a real WorkOrder submit sends.
+    Returns (event, reason); (None, None) when this check carries no launch step (no relay, or
+    no checkout folder for the repo), which keeps the check to the synthetic provider steps."""
+    cwd = config.checkout(repo) if repo else None
+    if not cwd:
+        return None, None
+
+    def failed(status, exit_code, reason, started):
+        return ({"ts": _stamp(_now()), "event": "launch", "tool": "relay", "status": status,
+                 "exitCode": exit_code, "retries": 0,
+                 "latencyMs": max(0, int((_now() - started).total_seconds() * 1000))}, reason)
+
+    started = _now()
+    try:
+        task = relay.submit(worker_id, LAUNCH_PROMPT, f"health-launch-{uuid.uuid4().hex}",
+                            LAUNCH_SECONDS * 1000, cwd=cwd)
+    except RelayError:
+        return failed("unavailable", 1, "the launch step did not run: the relay refused the "
+                      "launch task", started)
+    deadline = time.monotonic() + LAUNCH_SECONDS
+    while True:
+        try:
+            task = relay.get(task["id"])
+        except RelayError:
+            return failed("unavailable", 1, "the launch step did not run: the relay lost the "
+                          "launch task", started)
+        task_status = task.get("status") if task else None
+        if task is None or task_status not in (None, "queued", "running"):
+            break
+        if time.monotonic() >= deadline:
+            return failed("unavailable", 1, f"the launch task did not finish within "
+                          f"{LAUNCH_SECONDS} seconds", started)
+        time.sleep(0.25)
+    if task is None:
+        return failed("unavailable", 1, "the launch step did not run: the relay lost the "
+                      "launch task", started)
+    if task_status != "completed":
+        return failed("provider_error", 1, f"the launch step failed: task {task_status}", started)
+    latency = max(0, int((_now() - started).total_seconds() * 1000))
+    if (task.get("output") or "").strip() != LAUNCH_PROMPT.rsplit(": ", 1)[-1]:
+        return ({"ts": _stamp(_now()), "event": "launch", "tool": "relay",
+                 "status": "unexpected_response", "exitCode": 0, "retries": 0,
+                 "latencyMs": latency}, "the launch step ran but the worker did not reply `ok`")
+    return ({"ts": _stamp(_now()), "event": "launch", "tool": "relay", "status": "ok",
+             "exitCode": 0, "retries": 0, "latencyMs": latency}, None)
+
+
+def check(store, config, worker_id, by, relay=None, repo=None, *, agent=False):
     if not isinstance(by, str) or not by.strip():
         raise ToolError("checking a worker needs the name of the person who asked")
     candidate = _candidate(config, worker_id)
@@ -315,17 +370,24 @@ def check(store, config, worker_id, by, *, agent=False):
                               "finishedAt": _stamp(_now()), "events": []}, True)
     else:
         report, cleanup_ok = _run(candidate)
-    status = "healthy" if report["status"] == "ok" and cleanup_ok else "quarantined"
+    launch_event, launch_reason = _launch(relay, config, repo or (
+        next(iter(config.repos), None) if len(config.repos) == 1 else None), worker_id)
+    if launch_event is not None:
+        report = {**report, "events": [*report.get("events", []), launch_event],
+                  "status": "unavailable" if launch_reason else report["status"]}
+    status = "healthy" if report["status"] == "ok" and cleanup_ok and not launch_reason \
+        else "quarantined"
     checked = _now()
     valid_until = checked + timedelta(seconds=HEALTH_TTL)
     report_json = json.dumps(report, sort_keys=True, separators=(",", ":"))
     store.put_worker_health(worker_id, binding, status, _stamp(checked), _stamp(valid_until), report_json)
     store.log("worker_health_checked", {"worker": worker_id, "status": status,
                                          "result": report["status"], "binding": binding,
+                                         **({"reason": launch_reason} if launch_reason else {}),
                                          "by": by, **({"agent": True} if agent else {})})
     return {"worker": worker_id, "recordStatus": status, "checkedAt": _stamp(checked),
             "validUntil": _stamp(valid_until), "cleanup": "ok" if cleanup_ok else "unavailable",
-            "health": report}
+            "health": report, "reason": launch_reason}
 
 
 def reload(store, relay, by, *, agent=False):

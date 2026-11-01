@@ -226,7 +226,8 @@ class McpServerTest(unittest.TestCase):
                 "worker": "opencode-mimo-factory", "by": "Day Desk"}}, token=AGENT)["result"]
         self.assertFalse(result["isError"])
         check.assert_called_once_with(self.store, self.server.foreman.config,
-                                      "opencode-mimo-factory", "Day Desk", agent=True)
+                                      "opencode-mimo-factory", "Day Desk",
+                                      self.server.foreman.relay, None, agent=True)
         result = self.rpc("tools/call", {"name": "factory_reload_workers", "arguments": {
             "by": "Day Desk"}}, token=AGENT)["result"]
         self.assertFalse(result["isError"])
