@@ -641,16 +641,17 @@ class AcceptanceTest(unittest.TestCase):
 
     def test_a_full_tick_repairs_a_legacy_project_and_its_last_member_closes_it(self):
         project = self.legacy_project()
-        self.foreman.tick()
-        stored = self.foreman.store.project(project["id"])
-        self.assertEqual((stored["state"], stored["pausedReason"]), ("active", None))
-        self.assertEqual(stored["acceptanceItem"], project["members"][-1])
-        self.assertFalse(any(row["action"] == "project_paused"
-                             for row in self.foreman.store.global_history()))
-        last = self.foreman.store.get(project["members"][-1])
-        self.foreman.store.put(dict(last, state="closed"))
-        self.foreman.tick()
-        self.assertEqual(self.foreman.store.project(project["id"])["state"], "done")
+        with mock.patch("factory_mcp.foreman.now", return_value=AT):  # the budget's deadline must not have passed
+            self.foreman.tick()
+            stored = self.foreman.store.project(project["id"])
+            self.assertEqual((stored["state"], stored["pausedReason"]), ("active", None))
+            self.assertEqual(stored["acceptanceItem"], project["members"][-1])
+            self.assertFalse(any(row["action"] == "project_paused"
+                                 for row in self.foreman.store.global_history()))
+            last = self.foreman.store.get(project["members"][-1])
+            self.foreman.store.put(dict(last, state="closed"))
+            self.foreman.tick()
+            self.assertEqual(self.foreman.store.project(project["id"])["state"], "done")
 
     def test_a_protected_path_in_acceptance_explains_how_to_reword_it_and_opens_nothing(self):
         for over in ({"title": "Fix .github/workflows/ci.yml"},

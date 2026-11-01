@@ -48,9 +48,9 @@ class FakeGitHub:
                                        "state": state, "labels": [{"name": n} for n in labels],
                                        "user": {"login": author or repo.split("/")[0]}}
 
-    def add_pr(self, repo, number, branch, sha, state="open", merged=False):
+    def add_pr(self, repo, number, branch, sha, state="open", merged=False, merged_at=None):
         self.pulls.append({"repo": repo, "number": number, "state": state,
-                           "merged_at": "2026-09-24T01:00:00Z" if merged else None,
+                           "merged_at": merged_at or ("2026-09-24T01:00:00Z" if merged else None),
                            "mergeable": True if state == "open" else None,
                            "head": {"ref": branch, "sha": sha, "repo": {"full_name": repo}},
                            "base": {"ref": "main", "sha": "base0"}})
@@ -108,6 +108,20 @@ class FakeGitHub:
 
     def issue_timeline(self, repo, number):
         return list(self.timelines.get((repo, number), []))
+
+    def closing_pull(self, repo, number):
+        from factory_mcp.github import GitHubError
+        for event in self.timelines.get((repo, number), []):
+            source = (event.get("source") or {}).get("issue") or {}
+            if event.get("event") != "cross-referenced" or "pull_request" not in source:
+                continue
+            try:
+                pull = self.pull(repo, source["number"])
+            except GitHubError:
+                continue
+            if pull.get("state") == "closed" and pull.get("merged_at"):
+                return {"number": pull["number"], "merged_at": pull["merged_at"]}
+        return None
 
     def comments(self, repo, number):
         return list(self.issue_comments.get((repo, number), []))
