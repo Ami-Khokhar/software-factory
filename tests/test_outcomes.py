@@ -140,6 +140,26 @@ class OutcomesTest(unittest.TestCase):
         self.assertEqual(current["validation"]["version"], 2)
         self.assertEqual(current["checkedHead"], "new-head")
 
+    def test_a_fresh_publication_keeps_the_superseded_measure(self):
+        self.merged()
+        first = self.measure()
+        number = self.record["issueNumber"]
+        self.gh.issues[("o/r", number)]["state"] = "closed"
+        self.store.findings.decide(self.store.findings.identity(
+            "o/r", self.record["fingerprint"]), "rejected", "No; too costly",
+            "2026-10-29T00:00:00+00:00")
+        candidate = self.store.dreaming.latest()["result"]["improvements"][0]
+        later = publication.ImprovementsTest.again(self, candidate, base.AT + timedelta(days=8))
+        second = improvements.publish(self.foreman, later)
+        self.assertNotEqual(second["issues"][0]["issueNumber"], number)
+        row = outcomes.records(self.store, self.config, "o/r")[0]
+        self.assertEqual(row["previousIssue"], number)
+        self.assertEqual(row["validation"]["memoryId"], first["memoryId"])
+        self.assertEqual(row["validation"]["direction"], "observed_better")
+        report = outcomes.report(self.store, self.config, {"repo": "o/r"})["improvements"][0]
+        self.assertEqual(report["effect"], "observed_better")
+        self.assertEqual(report["fixMemoryId"], row["fixMemoryId"])
+
     def test_stale_refresh_cannot_demote_a_concurrent_newer_measurement(self):
         self.merged()
         self.measure()

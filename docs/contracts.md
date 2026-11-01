@@ -649,10 +649,16 @@ Publication goes through the finding ledger (#444). Reflection records one findi
 keyed by the same cause fingerprint. Before creating anything, publication looks up that row: an
 open finding already linked to an issue gets the new evidence as a comment and opens nothing;
 a rejected or resolved finding whose evidence is no newer than the decision is reported as
-`suppressed` in the result; otherwise the issue is created and the finding row is linked to its
-issue number. At most three new issues open per run, ranked by occurrence count then newest
-evidence; the rest are reported as `deferred`. `suppressed` and `deferred` are result fields,
-never issue labels.
+`suppressed` in the result; otherwise an open issue still carrying the marker is adopted, and
+a fresh publication posts the newer evidence as a comment on the adopted issue; if none is
+open, a new issue is created and the finding row is linked to its issue number. At most three
+new issues open per run, ranked by occurrence count then newest evidence; the rest are reported
+as `deferred`. `suppressed` and `deferred` are result fields, never issue labels. The plan
+budget of three improvements makes that cap untriggerable today;
+`test_at_most_three_new_issues_per_run` guards the invariant that publication stays bounded.
+When a fresh publication replaces a superseded record, the record keeps its owner-reported
+`validation`, `fixMemoryId` and a `previousIssue` reference to the earlier issue number, so
+`factory_improvement_status` still reports the earlier measured repair.
 
 FACTORY_DREAM_AUTO_REPOS is a comma-separated opt-in subset of enabled repos. By default all
 improvements remain factory:proposed. At most one repair per run may be admitted automatically,

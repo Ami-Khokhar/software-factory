@@ -1,5 +1,6 @@
 """Saved plans publish once, adopt lost responses, and retain bounded repair authority."""
 import dataclasses
+import json
 import unittest
 from datetime import timedelta
 from unittest import mock
@@ -109,6 +110,25 @@ class ImprovementsTest(unittest.TestCase):
         self.assertEqual((repo, number), ("o/r", second["issues"][0]["issueNumber"]))
         self.assertEqual(note, improvements.evidence_note(
             recurrence["result"]["improvements"][0], recurrence))
+
+    def test_a_fresh_publication_adopts_a_reopened_issue_and_posts_evidence(self):
+        """An owner-reopened issue is the fresh proposal's home: evidence comments on it."""
+        candidate = self.prepare()["result"]["improvements"][0]
+        first = improvements.publish(self.foreman, self.store.dreaming.latest())
+        number = first["issues"][0]["issueNumber"]
+        self.store.findings.decide(self.identity(candidate), "rejected", "No; too costly",
+                                   "2026-10-29T00:00:00+00:00")
+        self.gh.issues[("o/r", number)]["state"] = "open"  # the owner closed and reopened it
+        later = self.again(candidate, base.AT + timedelta(days=8))
+        second = improvements.publish(self.foreman, later)
+        self.assertEqual(second["issues"][0]["issueNumber"], number)
+        self.assertEqual(len(self.gh.issues), 1)
+        self.assertEqual(self.gh.posted, [("o/r", number,
+             improvements.evidence_note(later["result"]["improvements"][0], later))])
+        with self.store._lock:
+            doc = json.loads(next(self.store._db.execute(
+                "SELECT doc FROM dream_issues"))[0])
+        self.assertEqual(doc["commentedOccurrences"], 2)
 
     def test_lost_create_response_for_a_superseded_cause_is_adopted(self):
         """A dropped create for a fresh cause is adopted on retry, never repeated."""
