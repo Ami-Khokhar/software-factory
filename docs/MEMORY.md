@@ -41,7 +41,11 @@ before one bounded provider request; failures retain it.
 
 At most three improvement candidates are created per reflection. Automatic work is opt-in per repo,
 one admission per run, with no concurrent repair. Normal budgets and gate policy remain; repairs
-cannot spawn chains.
+cannot spawn chains. A published proposal mentions the owner (`config.owner` or the repo owner)
+and names both next steps: add the `factory:ready` label, or comment with what to change.
+Reflection may also propose a documentation or instruction change to an existing `.md` file
+(ADR-0128), with an acceptance check that reads the file; it always stays a factory:proposed
+proposal the owner starts.
 
 ## Deploy deliberately
 

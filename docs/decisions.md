@@ -3021,3 +3021,22 @@ reviewer-family checks remain unchanged. New credential/provider boundaries stil
 host environment files or pretending the owner approved each choice. Enabling makes a worker
 eligible for the normal ticker; it does not directly dispatch a WorkOrder, retry an exhausted item,
 increase time limits, replenish passes or change independent gate merge control.
+
+## ADR-0128 — Dream proposals mention the owner and may propose documentation
+
+**Context.** Dreaming opened one `factory:proposed` issue per repair but never told the owner it
+did, and reflection rejected any non-code proposal because it had no unittest-style acceptance
+check (issue #441).
+
+**Decision.** A published proposal body mentions the owner login on its own line
+(`config.owner`, else the repo owner) and names both next steps: add `factory:ready` to have the
+factory do it, or comment with what to change. The reflection prompt may now propose a
+documentation or instruction change to an existing `.md` file, with an acceptance check that
+reads that file. Any candidate whose paths end with `.md` is refused automatic admission in
+`automatic_reason`.
+
+**Consequence.** Recurring process problems that are instructions, not code, can surface as
+proposals the owner starts. A mention is only a notification and never approval; `factory:ready`
+stays the owner's explicit signal, and documentation work never enters the automatic admission
+path. The candidate shape, the three-improvement cap, the evidence rule and existing prohibitions
+are unchanged.

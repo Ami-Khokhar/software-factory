@@ -15,7 +15,10 @@ Return JSON only: {"improvements":[],"learnings":[]}. At most 3 improvements and
 An improvement is {repo,cause,summary,paths,checks,evidence}. cause names a stable root cause,
 summary explains a narrow repair, paths names 1..8 relative files to change, checks is 1..4
 {claim,command} acceptance checks, evidence lists source IDs. Use only supplied evidence IDs in
-the same repo. No speculative repair for transient provider/access failures. Prefer reproducible
+the same repo. An improvement may be a code repair, or a documentation or instruction change to
+an existing `.md` file: name that file in paths and make one check read it, for example a grep
+across that file; such an improvement always stays a proposal for the owner.
+No speculative repair for transient provider/access failures. Prefer reproducible
 or recurring defects; do not manufacture issues for successful work. A learning is
 {repo,kind,text,evidence}; kind is preference, decision or learning. Inferred preferences are
 tentative, never owner instructions. Do not include credentials or raw transcripts."""

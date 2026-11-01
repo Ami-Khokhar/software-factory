@@ -7,7 +7,11 @@ from .mcp import ToolError
 
 
 
-def body(candidate, run):
+NEXT_STEP = "Add `factory:ready` to have the factory do it, or comment with what to change."
+
+
+def body(candidate, run, owner=None):
+    owner = owner or candidate["repo"].split("/")[0]
     escape = lambda value: html.escape(value).replace("`", "&#96;")
     refs = {dream_model.source_id(event): event for event in run["evidence"]}
     lines = ["## Goal", escape(candidate["summary"]), "", "Paths: " + ", ".join(candidate["paths"]),
@@ -20,7 +24,9 @@ def body(candidate, run):
     lines += [f"- {escape(check['claim'])} — done when: {escape(check['command'])}" for check in candidate["checks"]]
     lines += ["- Existing credentials, protected paths and merge controls remain unchanged — done when: "
               "the repository verify command passes and protected paths are unchanged.", "",
+              f"@{owner}", NEXT_STEP, "",
               f"<!-- factory-dream:{candidate['fingerprint']} -->", f"Dream run: {run['id']}"]
+
     return "\n".join(lines)
 
 
@@ -57,6 +63,8 @@ def automatic_reason(foreman, candidate, issue, expected, run):
                                             "uv run pytest", "npm test", "go test", "cargo test")) or any(
                 char in check["command"] for char in ";&|<>`$"):
             return "complex acceptance commands require owner review"
+    if any(path.endswith(".md") for path in candidate["paths"]):
+        return "documentation or instruction changes always wait for owner review"
     for path in candidate["paths"]:
         if path.split("/")[0] in (".github", ".git") or any(
                 path == protected or protected.endswith("/") and path.startswith(protected)
@@ -118,7 +126,7 @@ def publish(foreman, run):
                        and any(path in (issue.get("body") or "") for path in candidate["paths"])]
         if len(matches) > 1:
             raise ToolError("multiple matching improvement issues; owner review required")
-        expected = body(candidate, run)
+        expected = body(candidate, run, config.owner or repo.split("/")[0])
         if matches:
             issue = matches[0]
         else:

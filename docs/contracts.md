@@ -652,6 +652,12 @@ commands, edited/closed issues, untrusted authors and descendants of failed impr
 automatically admitted. Eligible work passes through approve_issue and normal worker/gate budgets;
 dreaming never merges code or replenishes exhausted budgets. Ambiguous admission stays reserved.
 An exact related gate follow-up is reused without editing its body and needs owner review.
+Each published body mentions the owner login on its own line (`config.owner`, else the repo
+owner) and names both next steps: add `factory:ready` to have the factory do it, or comment
+with what to change. A proposal is data the owner starts; a mention is only a notification.
+Reflection may propose a documentation or instruction change to an existing `.md` file, with
+an acceptance check that reads the file (ADR-0128). Any candidate whose paths end with `.md`
+is refused automatic admission, so such work always waits for the owner.
 
 ## Improvement outcomes (ADR-0121)
 

@@ -138,6 +138,21 @@ class ImprovementsTest(unittest.TestCase):
         self.assertEqual(self.gh.issues[("o/r", 50)]["body"], original)
         self.assertEqual(len(self.gh.issues), 1)
 
+    def test_a_proposal_names_the_owner_and_both_next_steps(self):
+        run = self.prepare()
+        result = improvements.publish(self.foreman, run)
+        issue = self.gh.issues[("o/r", result["issues"][0]["issueNumber"])]
+        self.assertIn("@o\n", issue["body"])
+        self.assertIn(improvements.NEXT_STEP, issue["body"])
+        self.assertIn("@o\n" + improvements.NEXT_STEP, issue["body"])
+
+    def test_a_documentation_proposal_waits_for_the_owner(self):
+        self.config = dataclasses.replace(self.config, dream_auto_repos=frozenset({"o/r"}))
+        self.foreman.config = self.config
+        result = improvements.publish(self.foreman, self.prepare(paths=["docs/trouble.md"]))
+        self.assertEqual(result["issues"][0]["status"], "proposed")
+        self.assertIn("documentation", result["issues"][0]["reason"])
+
     def test_failed_improvements_do_not_start_automatic_descendant_repairs(self):
         self.config = dataclasses.replace(self.config, dream_auto_repos=frozenset({"o/r"}))
         self.foreman.config = self.config
