@@ -139,11 +139,22 @@ class FollowupApprovalTest(unittest.TestCase):
                       if h["action"] == "approval_invalid"][-1]
         self.assertIn("provenance", escalation["escalation"])
 
-    def test_a_commented_old_pin_in_the_caller_still_approves(self):
-        """Guard: only anchored `uses:` lines count as pins, so an upgrade that preserves a
-        commented-out pin (ADR-0080) leaves a caller with exactly one live revision approvable."""
+    def test_the_canonical_indented_caller_still_approves(self):
+        """The caller `bootstrap_plan` installs indents its job-level `uses:` line; the pin check
+        strips the indentation `GATE_USES` captures, so approval does not refuse it."""
         self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")] = (
-            "# upgrade kept the old pin: uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@"
+            "  jobs:\n"
+            "    gatekeeper:\n"
+            "      uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "a" * 40
+            + "\n      with:\n"
+            "        gatekeeper_ref: " + "a" * 40)
+        self.assertFalse(self.call()[0])
+
+    def test_a_commented_old_pin_in_the_caller_still_approves(self):
+        """Guard: only anchored `uses:` lines count as pins, so an upgrade that preserves an
+        indented commented-out pin (ADR-0080) leaves a caller with exactly one live revision approvable."""
+        self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")] = (
+            "  # upgrade kept the old pin: uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@"
             + "b" * 40 + "\n" + self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")])
         self.assertFalse(self.call()[0])
 

@@ -85,8 +85,9 @@ def validate(github, repo, issue, source_pr):
     # two jobs or an old live pin would still be ambiguous, so count the live pins and refuse any
     # caller that does not pin exactly one gate revision.
     pins = repos._gate_pins(caller)
+    # `GATE_USES` keeps each line's indentation in group 1 for _upgraded_workflow, so compare stripped
     if (pins is None or len(repos.GATE_USES.findall(caller)) != 1
-            or pins["uses"] != f"uses: {WRAPPER}/.github/workflows/gatekeeper.yml@"):
+            or pins["uses"].strip() != f"uses: {WRAPPER}/.github/workflows/gatekeeper.yml@"):
         refuse()
     pin = pins["usesSha"]
     runs = []
