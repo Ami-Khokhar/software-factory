@@ -73,23 +73,32 @@ class FindingsTest(unittest.TestCase):
 
     def test_the_projection_trims_to_its_budget(self):
         """Guard: the weekly read sees open findings first, last rejections with reasons,
-        and cannot exceed its byte budget, however much history the ledger holds."""
+        and cannot exceed its byte budget, however much history the ledger holds. Over
+        budget it drops the least useful rows first: the oldest rejections before any
+        open row."""
+        summary = "Trouble " + "x" * 192
         rejected = [
-            self.record(fingerprint=f"rejected-{n}") for n in range(12)]
+            self.record(fingerprint=f"rejected-{n}", summary=summary) for n in range(12)]
         for n, finding in enumerate(rejected):
-            self.store.findings.decide(finding["id"], "rejected", f"reason {n}",
-                                       f"2026-11-0{1 + n // 9}T00:00:00+00:00")
-        for n in range(8):
-            finding = self.record(fingerprint=f"open-{n}")
+            self.record(fingerprint=f"rejected-{n}", summary=summary,
+                        at=f"2026-11-01T00:{n:02d}:00+00:00")  # a second occurrence
+            self.store.findings.decide(finding["id"], "rejected", f"reason {n} " + "r" * 400,
+                                       f"2026-11-01T00:{n:02d}:00+00:00")
+        open_findings = [self.record(fingerprint=f"open-{n}", summary=summary,
+                                     at=f"2026-11-02T00:{n:02d}:00+00:00") for n in range(8)]
         view = projection(self.store, self.config())
         self.assertLessEqual(len(json.dumps(view).encode()), 6000)
         states = [entry["state"] for entry in view]
         self.assertEqual(states.count("open"), 8)
-        self.assertEqual(states.count("rejected"), 10)
+        self.assertLessEqual(states.count("rejected"), 10)
         self.assertTrue(all(entry["reason"] for entry in view if entry["state"] == "rejected"))
         self.assertTrue(all(state == "open" or "open" not in states[index:]
                             for index, state in enumerate(states[:len(states) - 1])))
-        self.assertGreaterEqual(len(view), 4)  # open rows survive, overflow drops rejections
+        kept = {entry["identity"] for entry in view}
+        self.assertEqual([doc["id"] for doc in open_findings], sorted(kept & {doc["id"] for doc in open_findings},
+                          key=[doc["id"] for doc in open_findings].index))
+        self.assertNotIn(rejected[0]["id"], kept)  # the oldest rejection dropped first
+        self.assertIn(rejected[-1]["id"], kept)  # the newest rejection survives
 
     def test_open_lists_unfinished_findings_only(self):
         kept = self.record(fingerprint="a")
