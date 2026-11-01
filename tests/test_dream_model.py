@@ -27,6 +27,27 @@ class DreamModelTest(unittest.TestCase):
             "evidence": ["o/r@1"]}], "learnings": [{"repo": "o/r", "kind": "preference",
             "text": "Prefer compact failure summaries", "evidence": ["o/r@1"]}]}
 
+    def test_the_input_carries_the_bounded_ledger(self):
+        """Guard: reflection reads the ledger as a bounded projection, never the history,
+        and the whole input stays under the input budget however large the ledger grows."""
+        self.store.findings.record("o/r", "flaky-test", "Verify flakes on retries",
+                                   "audit:1", base.AT.isoformat())
+        rejected = self.store.findings.record("o/r", "slow-verify", "Verify runs twice",
+                                              "audit:2", base.AT.isoformat())
+        self.store.findings.decide(rejected["id"], "rejected", "No; too costly for now",
+                                   base.AT.isoformat())
+        for n in range(20):
+            self.store.findings.record("o/r", f"cause-{n}", "Trouble " + "x" * 100,
+                                       "audit:1", base.AT.isoformat())
+        with mock.patch.object(dream_model, "completion", return_value=self.plan()) as model:
+            dream_model.reflect(self.store, self.config, base.AT)
+        captured = model.call_args[0][1]
+        ledgers = [item["ledger"] for item in captured if "ledger" in item]
+        self.assertEqual(len(ledgers), 1)
+        self.assertTrue(any(entry["state"] == "open" for entry in ledgers[0]))
+        self.assertTrue(any(entry["reason"] == "No; too costly for now" for entry in ledgers[0]))
+        self.assertLessEqual(len(json.dumps(captured).encode()), 17000)
+
     def test_one_reflection_persists_plan_and_tentative_learning_then_cools_down(self):
         with mock.patch.object(dream_model, "completion", return_value=self.plan()) as model:
             result = dream_model.reflect(self.store, self.config, base.AT)
@@ -55,6 +76,17 @@ class DreamModelTest(unittest.TestCase):
         config = dataclasses.replace(self.config, dream_url="")
         self.assertEqual(dream_model.reflect(self.store, config, base.AT)["status"], "not_configured")
         self.assertIsNone(self.store.dreaming.latest())
+
+    def test_a_large_ledger_never_exceeds_the_input_budget(self):
+        """Guard: the same-size ledger projection keeps the reflection input bounded
+        in week fifty as in week one."""
+        for n in range(80):
+            self.store.findings.record("o/r", f"cause-{n}", "Trouble " + "x" * 150,
+                                       "audit:1", base.AT.isoformat())
+        with mock.patch.object(dream_model, "completion", return_value=self.plan()) as model:
+            dream_model.reflect(self.store, self.config, base.AT)
+        content = model.call_args[0][1]
+        self.assertLessEqual(len(json.dumps(content).encode()), 17000)
 
     def test_evidence_graph_links_are_real_and_sensitive_diagnostics_are_redacted(self):
         self.store.log("attempt_failed", {"reason": "sk-" + "a1B2" * 8}, "o/r#1")

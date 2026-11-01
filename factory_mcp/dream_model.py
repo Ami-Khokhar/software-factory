@@ -6,6 +6,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from .findings import projection
 from .knowledge import record_id, text
 from .mcp import ToolError
 from .diagnostics import sanitize
@@ -107,6 +108,9 @@ def reflect(store, config, at):
         return store.dreaming.status(config, at)
     try:
         inputs = [{"sourceId": source_id(event), **event} for event in run["evidence"]]
+        ledger = {"ledger": projection(store, config)}
+        if len(json.dumps(inputs + [ledger]).encode()) <= 17000:
+            inputs.append(ledger)
         for repo in sorted(config.repos):
             for doc in store.knowledge.search(config, {"repo": repo, "limit": 3})["memories"]:
                 item = {"context": doc}

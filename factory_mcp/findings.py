@@ -158,6 +158,32 @@ class Findings:
         return [json.loads(row[0]) for row in rows]
 
 
+def projection(store, config, budget=6000):
+    """The bounded weekly view of the ledger: open findings, then the last ten
+    rejections with their reasons, then the five most frequent findings. Trimmed
+    to `budget` bytes by dropping the least useful entries first, so the model
+    input is the same size every week.
+    """
+    with store._lock:
+        rows = store._db.execute("SELECT doc FROM findings").fetchall()
+    docs = [json.loads(row[0]) for row in rows]
+
+    def item(doc):
+        return {"identity": doc["id"], "repo": doc["repo"], "summary": doc["summary"],
+                "occurrences": doc["occurrences"], "state": doc["verdict"],
+                "reason": doc.get("reason", ""), "lastSeen": doc["lastSeen"]}
+
+    ranked = [item(doc) for doc in docs if doc["verdict"] not in TERMINAL]
+    rejected = sorted((item(doc) for doc in docs if doc["verdict"] == "rejected"),
+                      key=lambda entry: entry["lastSeen"], reverse=True)
+    ranked += rejected[:10]
+    ranked += (item(doc) for doc in sorted(docs, key=lambda d: (-d["occurrences"], d["id"]))[:5]
+               if doc["id"] not in {entry["identity"] for entry in ranked})
+    while ranked and len(json.dumps(ranked).encode()) > budget:
+        ranked.pop()
+    return ranked
+
+
 def _ts(value):
     return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
 
