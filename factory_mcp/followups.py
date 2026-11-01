@@ -81,8 +81,11 @@ def validate(github, repo, issue, source_pr):
     # Trust the caller pinned on the source PR's base, never a pin supplied by the issue/PR head.
     # The pin itself is parsed by the repo helper, so the two parsers of one file cannot drift.
     caller = github.file(repo, ".github/workflows/pr-gatekeeper.yml", pr["base"]["sha"]) or ""
+    # `_gate_pins` takes the first `uses:` line, so two pins there (a comment, or two jobs) stay
+    # ambiguous: count them and refuse any caller that does not pin exactly one gate revision.
     pins = repos._gate_pins(caller)
-    if pins is None or pins["uses"] != f"uses: {WRAPPER}/.github/workflows/gatekeeper.yml@":
+    if (pins is None or len(repos.GATE_USES.findall(caller)) != 1
+            or pins["uses"] != f"uses: {WRAPPER}/.github/workflows/gatekeeper.yml@"):
         refuse()
     pin = pins["usesSha"]
     runs = []

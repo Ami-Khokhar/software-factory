@@ -88,6 +88,7 @@ class FollowupApprovalTest(unittest.TestCase):
                      "wrong head", "not merged", "wrong merge actor", "no review", "duplicate review",
                      "unrelated body", "unrelated bot", "no workflow", "wrong workflow",
                      "duplicate workflow", "outside run", "wrong reusable workflow", "base pin mismatch",
+                     "duplicate base pin",
                      "late link", "issue before merge", "head repo deleted", "base repo deleted"):
             with self.subTest(flaw=flaw):
                 self.setUp()
@@ -108,6 +109,10 @@ class FollowupApprovalTest(unittest.TestCase):
                 if flaw == "base pin mismatch": self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")] = (
                     "uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "b" * 40)
                 if flaw == "wrong reusable workflow": self.run["referenced_workflows"][0]["path"] = "forged"
+                if flaw == "duplicate base pin": self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")] = (
+                    "# uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "b" * 40
+                    + "\nuses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "a" * 40
+                    + "\ngatekeeper_ref: " + "a" * 40)
                 if flaw == "late link": self.link["created_at"] = "2026-10-17T08:52:40Z"
                 if flaw == "issue before merge": self.issue["created_at"] = "2026-10-17T08:52:20Z"
                 if flaw == "head repo deleted": self.pr["head"]["repo"] = None
