@@ -1,9 +1,12 @@
 """Publish saved dream plans without duplicate creates or unbounded auto-admission."""
 import html
 import json
+from datetime import datetime, timezone
 
-from . import dream_model
+from . import dream_model, findings as ledger
 from .mcp import ToolError
+
+NEW_ISSUE_CAP = 3
 
 
 
@@ -95,17 +98,52 @@ def reserve_admission(store, run_id, wid):
     return True
 
 
+def priority(store):
+    """Most reported causes first, then causes with the newest recorded evidence."""
+    def key(candidate):
+        finding = store.findings.get(store.findings.identity(candidate["repo"], candidate["fingerprint"]))
+        if finding is None:
+            return (0, 0)
+        newest = ledger._ts(finding.get("lastSeen") or finding["at"]).timestamp()
+        return (-finding.get("occurrences", 0), -newest)
+    return key
+
+
+def evidence_note(candidate, run):
+    return "Same cause found again; evidence added, no new issue opened.\nEvidence: " + \
+        ", ".join(candidate["evidence"]) + f"\nDream run: {run['id']}"
+
+
 def publish(foreman, run):
     store, gh, config = foreman.store, foreman.github, foreman.config
-    published, pending, cache = [], False, {}
-    for candidate in run["result"]["improvements"]:
+    published, suppressed, deferred, cache = [], [], [], {}
+    pending = False
+    ordered = sorted(run["result"]["improvements"], key=priority(store))
+    created = 0
+    for candidate in ordered:
         repo, fingerprint = candidate["repo"], candidate["fingerprint"]
         if config.listed(repo) is None:
             raise ToolError("dream target repo is no longer enabled")
+        finding = store.findings.get(store.findings.identity(repo, fingerprint))
+        # A rejected finding silences its cause again; evidence the decision
+        # postdates may come back, but only as a fresh proposal for the owner.
+        if finding and finding.get("verdict") in ledger.TERMINAL:
+            decision = finding.get("rejectedAt") or finding.get("at")
+            if ledger._ts(finding.get("lastSeen") or finding["at"]) <= ledger._ts(decision):
+                suppressed.append({"repo": repo, "fingerprint": fingerprint,
+                                   "reason": f"the owner {finding['verdict']} this cause and the evidence is no newer"})
+                continue
+            fresh = True
+        else:
+            fresh = False
         with store._lock:
             row = store._db.execute("SELECT doc FROM dream_issues WHERE fingerprint=?", (fingerprint,)).fetchone()
         record = json.loads(row[0]) if row else None
-        if record and record.get("issueNumber"):
+        if record and record.get("issueNumber") and not fresh:
+            if finding is not None and finding["occurrences"] > record.get("commentedOccurrences", 0):
+                gh.comment(repo, record["issueNumber"], evidence_note(candidate, run))
+                record["commentedOccurrences"] = finding["occurrences"]
+                save(store, fingerprint, repo, record)
             if record.get("status") == "admission_reserved":
                 existing = store.get(f"{repo}#{record['issueNumber']}")
                 if existing is None:
@@ -117,10 +155,12 @@ def publish(foreman, run):
             continue
         if repo not in cache:
             cache[repo] = gh.all_issues(repo)
-        marker = f"<!-- factory-dream:{fingerprint} -->"
-        matches = [issue for issue in cache[repo] if marker in (issue.get("body") or "")]
+        # Rejected causes with newer evidence are never quietly re-adopted:
+        # the closed issue stays closed and the fresh proposal speaks for itself.
+        matches = [] if fresh else [issue for issue in cache[repo]
+                                    if f"<!-- factory-dream:{fingerprint} -->" in (issue.get("body") or "")]
         # Exact related gate follow-ups can be reused, but are never auto-approved as new work.
-        if not matches:
+        if not matches and not fresh:
             matches = [issue for issue in cache[repo] if issue.get("title", "").startswith("Follow-up to #")
                        and candidate["cause"].casefold() in (issue.get("body") or "").casefold()
                        and any(path in (issue.get("body") or "") for path in candidate["paths"])]
@@ -130,7 +170,13 @@ def publish(foreman, run):
         if matches:
             issue = matches[0]
         else:
+            if created >= NEW_ISSUE_CAP:
+                deferred.append({"repo": repo, "fingerprint": fingerprint,
+                                 "reason": f"the cap of {NEW_ISSUE_CAP} new issues per run was reached"})
+                continue
             with store._lock, store._transaction():
+                if fresh:  # the closed issue is history; this fingerprint publishes a new proposal
+                    store._db.execute("DELETE FROM dream_issues WHERE fingerprint=?", (fingerprint,))
                 inserted = store._db.execute("INSERT OR IGNORE INTO dream_issues VALUES (?,?,?)", (
                     fingerprint, repo, json.dumps({"repo": repo, "status": "creating", "runId": run["id"]}))).rowcount
             if not inserted:
@@ -139,11 +185,13 @@ def publish(foreman, run):
             made = foreman.propose_issue(repo, "Dream: " + candidate["cause"], expected)
             issue = gh.issue(repo, made["issue"])
             cache[repo].append(issue)
+            created += 1
         if not config.trusts(repo, (issue.get("user") or {}).get("login")):
             raise ToolError("improvement issue author is not trusted")
         record = {"repo": repo, "fingerprint": fingerprint, "issueNumber": issue["number"],
                   "runId": run["id"], "memoryId": candidate["memoryId"], "status": "proposed",
-                  "paths": candidate["paths"]}
+                  "paths": candidate["paths"],
+                  "commentedOccurrences": finding["occurrences"] if finding else 0}
         reason = automatic_reason(foreman, candidate, issue, expected, run)
         wid = f"{repo}#{issue['number']}"
         if reason is None and reserve_admission(store, run["id"], wid):
@@ -152,15 +200,24 @@ def publish(foreman, run):
             record["status"] = "admitted"
         else:
             record["reason"] = reason or "one admission per run; another repair is active or reserved"
+        if finding is None:
+            # A plan saved before the ledger existed still leaves its row behind now.
+            started = datetime.fromtimestamp(run["startedAt"], timezone.utc)
+            store.findings.record(repo, fingerprint, candidate["summary"], ",".join(candidate["evidence"]),
+                                  started.isoformat(), issue=issue["number"])
+        else:
+            store.findings.link(store.findings.identity(repo, fingerprint), issue["number"])
         record = save(store, fingerprint, repo, record)
         published.append(record)
     if not pending:
         with store._lock:
             current = store._db.execute("SELECT doc FROM dream_runs WHERE id=?", (run["id"],)).fetchone()
             doc = json.loads(current[0])
-            doc.update(status="complete", publications=published)
+            doc.update(status="complete", publications=published, suppressed=suppressed,
+                       deferred=deferred)
             store._db.execute("UPDATE dream_runs SET status='complete', doc=? WHERE id=?", (json.dumps(doc), run["id"]))
-    return {"status": "publication_pending" if pending else "complete", "runId": run["id"], "issues": published}
+    return {"status": "publication_pending" if pending else "complete", "runId": run["id"],
+            "issues": published, "suppressed": suppressed, "deferred": deferred}
 
 
 def run(foreman, at):

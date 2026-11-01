@@ -25,12 +25,84 @@ class ImprovementsTest(unittest.TestCase):
     def prepare(self, count=1, paths=None):
         plan = model_tests.DreamModelTest.plan(self)
         if paths is not None: plan["improvements"][0]["paths"] = paths
-        if count == 2:
-            second = {**plan["improvements"][0], "cause": "Different root cause"}
-            plan["improvements"].append(second)
+        for index in range(1, count):
+            label = "Different root cause" if index == 1 else f"Different root cause {index}"
+            plan["improvements"].append({**plan["improvements"][0], "cause": label})
         with mock.patch.object(dream_model, "completion", return_value=plan):
             dream_model.reflect(self.store, self.config, base.AT)
         return self.store.dreaming.latest()
+
+    def identity(self, candidate):
+        return self.store.findings.identity(candidate["repo"], candidate["fingerprint"])
+
+    def again(self, candidate, at):
+        """A later dream run that reports the same cause once more."""
+        candidate = {key: candidate[key] for key in ("repo", "cause", "summary", "paths",
+                                                    "checks", "evidence")}
+        self.store.log("attempt_failed", {"reason": "test failed code"}, "o/r#1")
+        evidence, _ = self.store.dreaming.collect(self.config)
+        ref = dream_model.source_id([e for e in evidence if e["repo"] == candidate["repo"]][-1])
+        plan = model_tests.DreamModelTest.plan(self)
+        plan["improvements"] = [{**candidate, "evidence": [ref]}]
+        plan["learnings"] = []
+        with mock.patch.object(dream_model, "completion", return_value=plan):
+            dream_model.reflect(self.store, self.config, at)
+        return self.store.dreaming.latest()
+
+    def test_a_repeat_comments_on_the_existing_issue(self):
+        run = self.prepare()
+        first = improvements.publish(self.foreman, run)
+        number = first["issues"][0]["issueNumber"]
+        later = self.again(run["result"]["improvements"][0], base.AT + timedelta(days=7))
+        second = improvements.publish(self.foreman, later)
+        self.assertEqual(number, second["issues"][0]["issueNumber"])
+        self.assertEqual(len(self.gh.issues), 1)
+        self.assertEqual([(repo, num, body) for repo, num, body in self.gh.posted],
+                         [("o/r", number, improvements.evidence_note(
+                             later["result"]["improvements"][0], later))])
+
+    def test_a_rejection_suppresses_without_newer_evidence(self):
+        candidate = self.prepare()["result"]["improvements"][0]
+        first = improvements.publish(self.foreman, self.store.dreaming.latest())
+        self.store.findings.decide(self.identity(candidate), "rejected", "No; too costly",
+                                   "2026-10-29T00:00:00+00:00")
+        second = improvements.publish(self.foreman, self.store.dreaming.latest())
+        self.assertEqual(second["issues"], [])
+        self.assertEqual(second["deferred"], [])
+        self.assertEqual(len(second["suppressed"]), 1)
+        self.assertEqual(second["suppressed"][0]["fingerprint"], candidate["fingerprint"])
+        self.assertEqual(len(self.gh.issues), 1)
+        self.assertEqual(self.gh.posted, [])
+        self.assertEqual(second["status"], "complete")
+
+    def test_newer_evidence_outranks_a_rejection(self):
+        candidate = self.prepare()["result"]["improvements"][0]
+        first = improvements.publish(self.foreman, self.store.dreaming.latest())
+        self.store.findings.decide(self.identity(candidate), "rejected", "No; too costly",
+                                   "2026-10-29T00:00:00+00:00")
+        self.gh.issues[("o/r", first["issues"][0]["issueNumber"])]["state"] = "closed"
+        later = self.again(candidate, base.AT + timedelta(days=8))
+        second = improvements.publish(self.foreman, later)
+        self.assertEqual(second["suppressed"], [])
+        self.assertNotEqual(second["issues"][0]["issueNumber"], first["issues"][0]["issueNumber"])
+        self.assertEqual(len(self.gh.issues), 2)
+        finding = self.store.findings.get(self.identity(candidate))
+        self.assertEqual(finding["issue"], second["issues"][0]["issueNumber"])
+        self.assertEqual(finding["occurrences"], 2)
+
+    def test_at_most_three_new_issues_per_run(self):
+        first = self.prepare()
+        candidate = first["result"]["improvements"][0]
+        # A saved plan cannot exceed three improvements itself, but several pending
+        # causes can land in one publication, so the cap is checked there.
+        extras = [{**candidate, "fingerprint": f"extra{i}", "cause": f"Other cause {i}"}
+                  for i in range(1, 4)]
+        run = {**first, "result": {"improvements": [candidate] + extras}}
+        result = improvements.publish(self.foreman, run)
+        self.assertEqual(len(result["issues"]), 3)
+        self.assertEqual(len(result["deferred"]), 1)
+        self.assertEqual(result["deferred"][0]["fingerprint"], run["result"]["improvements"][3]["fingerprint"])
+        self.assertEqual(len(self.gh.issues), 3)
 
     def test_proposed_by_default_and_repeated_publication_does_not_duplicate(self):
         run = self.prepare()

@@ -77,6 +77,25 @@ class Findings:
                        (identity, doc["version"], encoded))
         return doc
 
+    def link(self, identity, issue):
+        """Link one finding to its issue without touching occurrences or decision times."""
+        with self.store._lock, self.store._transaction():
+            db = self.store._db
+            row = db.execute("SELECT doc FROM findings WHERE id = ?", (identity,)).fetchone()
+            if row is None:
+                return None
+            doc = json.loads(row[0])
+            if doc.get("issue") == int(issue):
+                return doc
+            doc["issue"] = int(issue)
+            doc["version"] += 1
+            encoded = json.dumps(doc, sort_keys=True)
+            db.execute("INSERT OR REPLACE INTO findings VALUES (?,?,?,?)",
+                       (identity, doc["repo"], doc["version"], encoded))
+            db.execute("INSERT INTO finding_versions VALUES (?,?,?)",
+                       (identity, doc["version"], encoded))
+        return doc
+
     def get(self, identity):
         with self.store._lock:
             row = self.store._db.execute("SELECT doc FROM findings WHERE id = ?",
