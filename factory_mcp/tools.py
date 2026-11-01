@@ -520,13 +520,18 @@ def build(store, foreman, agent=False):
         Tool("factory_check_worker",
              "Run one bounded synthetic provider-health check for a registered sandboxed worker. "
              "Uses only the worker's existing pinned model, credential mounts, safe environment, "
-             "image and supported harness. Stores sanitized health or quarantine status for 15 minutes. "
-             "Never starts a WorkOrder or activates the worker.",
+             "image and supported harness. When a repo is named (or exactly one repo is "
+             "configured), one tiny launch task through the relay also proves the agent starts in "
+             "the repo's configured checkout folder. Stores sanitized health or quarantine status "
+             "for 15 minutes. Never starts a WorkOrder or activates the worker.",
              {"type": "object", "required": ["worker", "by"], "additionalProperties": False,
               "properties": {"worker": {"type": "string", "minLength": 1},
-                             "by": {"type": "string", "minLength": 1}}}, "write",
-             lambda args: worker_ops.check(store, foreman.config,
-                                           args["worker"], args["by"], agent=agent)),
+                             "by": {"type": "string", "minLength": 1},
+                             "repo": {"type": "string", "pattern": "^[^/]+/[^/]+$", "description":
+                                      "Which repo's checkout folder the launch task runs in; omit "
+                                      "for the single configured repo."}}}, "write",
+             lambda args: worker_ops.check(store, foreman.config, args["worker"], args["by"],
+                                           foreman.relay, args.get("repo"), agent=agent)), 
         Tool("factory_reload_workers",
              "Ask the running relay to reload its existing worker registry through its fixed local "
              "reload endpoint. Does not edit the registry, change FACTORY_WORKERS, start a task or "

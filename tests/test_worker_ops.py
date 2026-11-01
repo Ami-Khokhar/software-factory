@@ -108,6 +108,92 @@ class WorkerOpsTest(unittest.TestCase):
         self.assertEqual(json.loads(row["report"])["status"], "provider_auth")
         self.assertEqual(self.store.all_workorders(), [])
 
+    def launch_check(self):
+        """A check with a checkout folder and the fake relay, so the launch step runs."""
+        import dataclasses
+        self.config = dataclasses.replace(self.config, checkout_root=str(self.root / "checks"),
+                                          repos=frozenset({"o/r"}))
+        with mock.patch.object(worker_ops, "_image_id", return_value="sha256:" + "a" * 64), \
+             mock.patch.object(worker_ops, "_run", return_value=(self.health, True)):
+            return worker_ops.check(self.store, self.config, "opencode-mimo-factory", "Day Desk",
+                                    self.relay, agent=True)
+
+    def test_the_launch_task_runs_in_the_configured_checkout_root_and_the_step_is_stored(self):
+        result = self.launch_check_auto()
+        task = list(self.launch_relay.tasks.values())[0]
+        self.assertEqual(task["cwd"], self.config.checkout("o/r"))
+        self.assertIn(self.agent["id"], task["agentId"])
+        self.assertEqual(task["input"], worker_ops.LAUNCH_PROMPT)
+        self.assertEqual(result["recordStatus"], "healthy")
+        self.assertIsNone(result["reason"])
+        stored = json.loads(self.store.worker_health("opencode-mimo-factory")["report"])
+        launch = [event for event in stored["events"] if event["event"] == "launch"]
+        self.assertEqual(len(launch), 1)
+        self.assertEqual(launch[0]["status"], "ok")
+        self.assertEqual(self.store.all_workorders(), [])  # not a WorkOrder
+
+    def test_a_refused_launch_submit_quarantines_with_a_reason_that_names_the_step(self):
+        self.relay.down = True
+        result = self.launch_check()
+        stored = json.loads(self.store.worker_health("opencode-mimo-factory")["report"])
+        self.assertEqual(result["recordStatus"], "quarantined")
+        self.assertIn("launch step", result["reason"])
+        self.assertEqual(stored["events"][-1]["event"], "launch")
+        self.assertEqual(stored["events"][-1]["status"], "unavailable")
+        self.assertEqual(self.store.global_history()[-1]["detail"]["reason"], result["reason"])
+
+    def test_a_relaunched_task_that_fails_quarantines_with_a_reason_that_names_the_step(self):
+        result = self.launch_check_auto(output=None, status="failed")
+        stored = json.loads(self.store.worker_health("opencode-mimo-factory")["report"])
+        self.assertEqual(result["recordStatus"], "quarantined")
+        self.assertEqual(result["reason"], "the launch step failed: task failed")
+        self.assertEqual(stored["events"][-1]["event"], "launch")
+        self.assertEqual(stored["events"][-1]["status"], "provider_error")
+
+    def test_an_unexpected_launch_reply_quarantines_with_a_reason_that_names_the_step(self):
+        result = self.launch_check_auto(output="something else")
+        self.assertEqual(result["recordStatus"], "quarantined")
+        self.assertIn("launch step", result["reason"])
+        self.assertEqual(json.loads(self.store.worker_health("opencode-mimo-factory")["report"])
+                         ["events"][-1]["status"], "unexpected_response")
+
+    def test_a_launch_task_that_never_finishes_quarantines_after_its_deadline(self):
+        with mock.patch.object(worker_ops, "LAUNCH_SECONDS", 1):
+            result = self.launch_check()  # the fake relay leaves the task running
+        self.assertEqual(result["recordStatus"], "quarantined")
+        self.assertIn("did not finish within 1 seconds", result["reason"])
+        self.assertEqual(json.loads(self.store.worker_health("opencode-mimo-factory")["report"])
+                         ["events"][-1]["status"], "unavailable")
+
+    def test_no_checkout_folder_keeps_the_check_to_the_synthetic_provider_steps(self):
+        with mock.patch.object(worker_ops, "_image_id", return_value="sha256:" + "a" * 64), \
+             mock.patch.object(worker_ops, "_run", return_value=(self.health, True)):
+            result = worker_ops.check(self.store, self.config, "opencode-mimo-factory", "owner",
+                                      self.relay)
+        self.assertEqual(result["recordStatus"], "healthy")
+        self.assertIsNone(result["reason"])
+        self.assertEqual(self.relay.tasks, {})  # no launch task; provider steps alone
+        self.assertEqual([event["event"] for event in
+                          json.loads(self.store.worker_health("opencode-mimo-factory")["report"])
+                          ["events"]], ["preflight", "probe"])
+
+    def launch_check_auto(self, output="ok", status="completed"):
+        """A launch check where the relay answers the launch task right away."""
+        from tests.fakes import FakeRelay
+
+        class ImmediateRelay(FakeRelay):
+            def submit(self, agent_id, text, request_id, timeout_ms, cwd=None):
+                task = FakeRelay.submit(self, agent_id, text, request_id, timeout_ms, cwd=cwd)
+                FakeRelay.finish(self, task["id"], status=status, output=output or "")
+                return task
+
+        saved = self.relay
+        self.relay = self.launch_relay = ImmediateRelay()
+        try:
+            return self.launch_check()
+        finally:
+            self.relay = saved
+
     def test_a_config_or_credential_metadata_change_replaces_the_health_binding(self):
         self.check()
         before = self.store.worker_health("opencode-mimo-factory")["binding"]

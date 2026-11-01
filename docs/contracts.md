@@ -53,6 +53,17 @@ does not add or change the worker in `FACTORY_WORKERS`.
 Credential-file readability is not provider authentication; only a returned `factory.health/v1`
 status of `ok` proves the synthetic response was received.
 
+The check also carries one launch step (`factory.health/v1` event type `launch`) when it runs for
+a repo whose configured checkout folder exists: one tiny relay task to the agent itself, with the
+same task cwd (`Config.checkout(repo)`) and request-id idempotency a real WorkOrder submit sends,
+replying `ok`. This is the launch path the sandboxed probe cannot see: the interpreter the agent
+entry names, the task cwd, and macOS privacy denials on the checkout folder. A refused submit, a
+lost or timed-out task, a task that reports failure, or a reply other than `ok` quarantines the
+worker with a reason that names the launch step, recorded in the store's audit log. With no relay,
+no repo or no checkout folder the check stays the synthetic provider steps alone. The step is one
+attempt, never a WorkOrder, never retried, and its prompt and reply are the fixed `ok` marker —
+no transcript is stored.
+
 `factory_reload_workers` accepts only the caller name and invokes agent-relay's fixed
 `POST /v1/admin/reload` operation. It does not edit the relay registry, change `FACTORY_WORKERS`,
 start a task or retry work. Both operations are driving-token writes.
