@@ -2980,10 +2980,14 @@ separate owner-reviewed PRs. Never silently delete custom protections during boo
 
 **Consequence.** Instruction changes can ship without filename-only escalation after activation.
 They do not authorise themselves, weaken review, or bypass a blocking finding. Existing orders
-retain their original fences. docs/RUNBOOK.md records migration and live acceptance. A control or
-credential name matches whole path segments at any depth when a patch path or a plan mention is
-checked (worker/.env under `.env`, worker/secrets/key under `secrets/`, .github/workflows/ci.yml
-under `.github/`), so the plan consummately refuses what the patch guard would refuse.
+retain their original fences. docs/RUNBOOK.md records migration and live acceptance. When a patch
+path is checked, a control or credential name matches whole path segments at any depth
+(worker/.env under `.env`, worker/secrets/key under `secrets/`, backend/secrets/key under
+`backend/secrets/`). The plan check refuses the same tokens for the factory floor it reads, so a
+plan cannot name a protected path for the default entries: a file entry whole-word (`.env`,
+`.claude/settings.json`, a plain-word name like `Dockerfile`), a directory entry by its
+slash-joined spelling (`secrets/`, `backend/secrets/`, `.github`). It reads no repo's base list,
+so a base-only entry is still refused at push time instead of at the plan.
 
 
 ## ADR-0126 — Owner-approved, health-bound worker membership

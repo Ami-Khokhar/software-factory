@@ -162,6 +162,21 @@ class ActionsTest(unittest.TestCase):
         self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
         self.assertEqual(self.tick()["state"], "pr_open")
 
+    def test_a_multi_segment_directory_entry_is_protected_in_plan_and_at_push(self):
+        import factory_mcp.patches as patches
+        self.assertTrue(patches.is_protected("backend/secrets/key", ("backend/secrets/",)))
+        self.assertTrue(patches.is_protected("worker/.env", (".env",)))
+        self.assertFalse(patches.is_protected("docs/secrets.md", ("secrets/",)))
+        self.assertFalse(patches.is_protected("worker/main.py", self.foreman.config.protected_paths))
+        self.github.contents[(REPO, ".github/pr-gatekeeper.json", "base0")] = json.dumps(
+            {"protected_paths": ["backend/secrets/"]})
+        wi, task = self.dispatched()
+        self.git.files = (("backend/secrets/key", 1, 0),)
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
+        wi = self.tick()
+        self.assertEqual(wi["state"], "ready")
+        self.assertIn("changes protected path backend/secrets/key", wi["attempts"][0])
+
     def test_a_change_must_fit_one_pr(self):
         """ADR-0070 over ADR-0002: the line count is a small-PR target, not a wall — a whole-PR
         exceedance warns and still opens the pull request; the file count binds, as do the
