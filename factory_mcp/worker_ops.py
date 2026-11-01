@@ -8,8 +8,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import time
-import weakref
 import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -44,7 +42,6 @@ IMAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}\Z")
 CONTAINER_ID = re.compile(r"[0-9a-f]{12,64}\Z")
 ROOT = Path(__file__).resolve().parent.parent
 DRIFT_WINDOW = 60  # seconds one (worker, cause) may log worker_membership_drift again
-_DRIFT_LOGGED = weakref.WeakKeyDictionary()  # Store -> {(worker, reason): window} already logged
 RUNNER = ROOT / "worker" / "runner.py"
 HEALTH_SCRIPT = ROOT / "scripts" / "provider_health.py"
 
@@ -427,15 +424,10 @@ def membership(store, config):
 def _membership_drift(store, worker_id, reason):
     """One `worker_membership_drift` audit row per (worker, cause) per short window (#437): the
     Foreman computes membership per dispatch decision, so an operator sees an enabled worker stop
-    being routed, and a ticking instance does not flood the audit."""
-    window = int(time.monotonic()) // DRIFT_WINDOW
-    logged = _DRIFT_LOGGED.setdefault(store, {})
-    for key in [k for k, seen in logged.items() if seen != window]:
-        del logged[key]
-    if logged.get((worker_id, reason)) == window:
-        return
-    logged[(worker_id, reason)] = window
-    store.log("worker_membership_drift", {"worker": worker_id, "reason": reason})
+    being routed, and a ticking instance does not flood the audit. The throttle lives in the
+    store (like Foreman._refuse_repo), so a concurrent membership walk from another request
+    thread sees the same state and logs at most one row."""
+    store.log_worker_drift(worker_id, reason, DRIFT_WINDOW)
 
 
 def unusable_reasons(store, config):

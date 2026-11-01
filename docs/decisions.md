@@ -3115,4 +3115,7 @@ threshold changes; a host with no enabled rows routes exactly as before.
 **Consequence.** A store with several activated workers costs one image inspect per row per
 decision instead of two, and an operator reads in the audit why an enabled member stopped being
 routed. The duplicated row is the price of visibility from any membership read, not only the
-no-worker escalation.
+no-worker escalation. Follow-up (r3, #437): the short-window throttle is not module state in
+worker_ops; it is one atomic check-and-log in the store (`Store.log_worker_drift`), so a
+concurrent membership walk from another request thread cannot double-log or crash an iterating
+walker, and the throttle survives a restart like `Foreman._refuse_repo`'s.

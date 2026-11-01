@@ -2,6 +2,7 @@
 import json
 import subprocess
 import tempfile
+import threading
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -80,6 +81,58 @@ class WorkerOpsTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["detail"]["worker"], self.agent["id"])
         self.assertIn("stored binding no longer matches", rows[0]["detail"]["reason"])
+
+    def test_drift_rows_survive_two_threads_walking_the_same_drifted_membership(self):
+        """The drift throttle is one atomic check-and-log in the store: two request threads that
+        walk the same drifted membership together log exactly one row per (worker, cause) and see
+        no unsynchronized shared state (#437)."""
+        self.enable()
+        self.agent["args"][-1] = "opencode/mimo-other"
+        self.registry.write_text(json.dumps({"agents": [self.agent]}))
+        reason = ("opencode-mimo-factory is enabled but its stored binding no longer matches this "
+                  "config or image; run factory_check_worker")
+        with mock.patch.object(worker_ops, "_image_id", return_value="sha256:" + "a" * 64):
+            start = threading.Barrier(2)  # both threads settle each call together
+            errors = []
+
+            def walk():
+                try:
+                    for _ in range(50):
+                        start.wait()
+                        worker_ops.membership(self.store, self.config)
+                except BaseException as exc:  # a racy throttle shows up here
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=walk) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            self.assertEqual(errors, [])
+            # The write itself, raced: two threads ask for the same (worker, cause) row together,
+            # after a settled first row, inside the same long window.
+            self.store.log_worker_drift(self.agent["id"], "the drifted binding", 3600)
+            start.reset()
+            raced = []
+
+            def log_drift():
+                try:
+                    start.wait()
+                    self.store.log_worker_drift(self.agent["id"], "the drifted binding", 3600)
+                    raced.append(None)
+                except BaseException as exc:
+                    raced.append(exc)
+
+            threads = [threading.Thread(target=log_drift) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            self.assertEqual([row for row in raced if row is not None], [])
+        rows = [row for row in self.store.global_history()
+                if row["action"] == "worker_membership_drift"]
+        self.assertEqual([(row["detail"]["worker"], row["detail"]["reason"]) for row in rows],
+                         [(self.agent["id"], reason), (self.agent["id"], "the drifted binding")])
 
     def test_an_unavailable_image_that_drops_a_worker_names_the_worker_in_a_drift_row(self):
         self.enable()
