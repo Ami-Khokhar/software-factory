@@ -717,6 +717,14 @@ required for success. The digest is SHA256 of the default Python JSON encoding
 (`ensure_ascii=True`) of `[GitHub issue id, number, title, complete body, author id]`.
 GitHub timeline, merged PR, reviewed gate comment and pinned reusable workflow run
 records must uniquely corroborate original creation and reviewed non-blocking work.
+The gate comment must carry a pr-gatekeeper marker whose fields the approval reads:
+`outcome: MERGE`, `head_sha` equal to the source PR's head, `findings` with the residual
+minor/nit work, and `reviewed: true`. The pinned gate revision in this repo's
+`.github/workflows/pr-gatekeeper.yml` (`uses @59540639…`, `gatekeeper_ref 2a53e2c3…`) emits
+`reviewed` on its MERGE markers; an approval against the gate's #456 head passed with it.
+A marker without `reviewed` is treated as missing, forged or ambiguous provenance and the
+approval refuses: do not approve; check which gate revision produced the marker (the pin on
+the source PR's base workflow) and upgrade or report before retrying.
 Acceptance remains mandatory. Approval is stored in audit records, not WorkItem
 fields. The source review body digest also binds provenance against later comment edits.
 No schema or stored WorkItem migration is required. The digest and source

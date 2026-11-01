@@ -13,8 +13,8 @@ import threading
 import uuid
 from datetime import datetime
 
-from . import (diagnostics, documents, gate_secrets, jev_rank, lessons, memory, patches, projects, registry,
-               repos, routing, setup_merge, sizing, worker_ops, workitem)
+from . import (diagnostics, documents, followups, gate_secrets, jev_rank, lessons, memory, patches,
+               projects, registry, repos, routing, setup_merge, sizing, worker_ops, workitem)
 from .github import GitHubError
 from .mcp import ToolError
 from .relay import RelayError, RelayLimitError
@@ -132,12 +132,14 @@ class Foreman:
         self.holder = uuid.uuid4().hex
         self._skipped = set()  # rebuild refusals already logged by this process
 
-    def intake(self, repo, number):
+    def intake(self, repo, number, issue=None, proof=None):
+        """`issue`/`proof` come from a caller that already fetched and validated them; then the
+        issue is not fetched again and provenance is not validated twice."""
         repo = self._allowlisted(repo)
         existing = self.store.get(workitem.workitem_id(repo, number))
         if existing:
             return self._joined(existing)
-        wi = self._admit(repo, self._issue(repo, number))
+        wi = self._admit(repo, issue or self._issue(repo, number), proof)
         try:
             wi = self.store.put(wi)
         except Conflict:  # a concurrent tick took it in first
@@ -177,8 +179,7 @@ class Foreman:
                 raise ToolError(f"{repo}#{number} does not exist") from None
             raise
 
-    def _followup_approval(self, repo, issue):
-        from . import followups
+    def _followup_approval(self, repo, issue, proof=None):
         records = [h["detail"] for h in self.store.history(workitem.workitem_id(repo, issue["number"]))
                    if h["action"] == "gate_followup_approved"]
         if not records:
@@ -186,7 +187,8 @@ class Foreman:
         if records[-1]["digest"] != followups.digest(issue):
             raise ToolError("gate follow-up content changed after approval; "
                             "restore the approved content before retrying")
-        proof = followups.validate(self.github, repo, issue, records[-1]["sourcePr"])
+        if proof is None:
+            proof = followups.validate(self.github, repo, issue, records[-1]["sourcePr"])
         if any(proof[key] != records[-1].get(key) for key in proof):
             raise ToolError("gate follow-up provenance changed after approval")
         return True
@@ -198,14 +200,17 @@ class Foreman:
                 self._followup_approval(wi["repo"], issue)
                 workitem.intake(wi["repo"], issue)
             except (ToolError, ValueError) as exc:
-                return self._write(wi, dict(wi, state="human_waiting"),
+                # the cause travels in the WorkItem too: _notify, factory_status and the incident
+                # identity all read _reason, which prefers blockedOn over the bare state
+                return self._write(wi, dict(wi, state="human_waiting", blockedOn=str(exc)),
                                    "approval_invalid", reason=str(exc))
         return None
 
-    def _admit(self, repo, issue):
-        """The new WorkItem for `issue`, or a ToolError saying why the factory may not take it."""
+    def _admit(self, repo, issue, proof=None):
+        """The new WorkItem for `issue`, or a ToolError saying why the factory may not take it.
+        `proof` is provenance an approval path already validated; then `validate` runs once."""
         author = (issue.get("user") or {}).get("login")
-        if not self.config.trusts(repo, author) and not self._followup_approval(repo, issue):
+        if not self.config.trusts(repo, author) and not self._followup_approval(repo, issue, proof):
             raise ToolError(f"{repo}#{issue['number']} was opened by {author}, who is not a trusted "
                             "author (FACTORY_TRUSTED_AUTHORS); a trusted person must open the issue, or the owner "
                             "may approve an authentic gate follow-up with sourcePr and issueDigest")
@@ -228,16 +233,16 @@ class Foreman:
         if existing and existing["state"] in workitem.TERMINAL:
             raise ToolError(f"{existing['id']} is {existing['state']}; open a new issue for more work")
         issue = self._issue(repo, number)
+        proof = None
         if source_pr is not None or issue_digest is not None:
-            from . import followups
             identity = workitem.workitem_id(repo, number)
             try:
                 if issue_digest != followups.digest(issue):
                     raise ToolError("issueDigest must match the reviewed issue content")
-                if existing:
-                    self._followup_approval(repo, issue)  # an existing approval cannot expand its scope
-                workitem.intake(repo, issue)  # readiness/acceptance still apply before any write
                 proof = followups.validate(self.github, repo, issue, source_pr)
+                if existing:
+                    self._followup_approval(repo, issue, proof)  # an approval cannot expand its scope
+                workitem.intake(repo, issue)  # readiness/acceptance still apply before any write
             except (ToolError, ValueError) as exc:
                 self.store.log("gate_followup_refused", {"by": by, "validation": "refused"}, identity)
                 raise ToolError(str(exc)) from None
@@ -246,11 +251,11 @@ class Foreman:
                                                         "status": exc.status}, identity)
                 raise ToolError("gate follow-up provenance records unavailable; check GitHub access") from None
             self.store.log("gate_followup_approved", dict(proof, by=by, authority="owner token"), identity)
-        self._admit(repo, issue)  # refuse before labelling: a rebuild adopts any factory:ready issue
+        self._admit(repo, issue, proof)  # refuse before labelling: a rebuild adopts any factory:ready issue
         if workitem.READY not in workitem.labels(issue):
             self.github.add_labels(repo, number, [workitem.READY])
             self.store.log("approved", {"by": by}, workitem.workitem_id(repo, number))
-        return self.intake(repo, number)
+        return self.intake(repo, number, issue=issue, proof=proof)
 
     def add_repo(self, repo, by):
         """Enable a repo that passes the checks: its worker checkout, the factory labels, and an
@@ -1020,12 +1025,16 @@ class Foreman:
         wi = self._write(wi, dict(wi, state="dispatching", activeWorkOrderId=order["id"], worker=worker,
                                   recovery=recovery, question=None),
                          "dispatch", workOrder=order["id"], worker=worker)
-        return self.submit(wi, order)
+        # _dispatch just guarded provenance; handing it through keeps one validation per pass
+        return self.submit(wi, order, guarded=True)
 
-    def submit(self, wi, order):
-        refused = self._guard_followup(wi)
-        if refused is not None:
-            return refused
+    def submit(self, wi, order, guarded=False):
+        """`guarded=True` when the caller just ran _guard_followup: then provenance validates
+        once per pass, not once in _dispatch and again here."""
+        if not guarded:
+            refused = self._guard_followup(wi)
+            if refused is not None:
+                return refused
         paused = self._barrier(wi)  # the race guard: rechecked immediately before the worker runs (#234)
         if paused:  # the intent was written (state dispatching); a released barrier resumes it
             self.store.log("submit_paused", {"order": order["id"],
