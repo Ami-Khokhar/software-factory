@@ -39,7 +39,12 @@ if mode == "nocommit-broken":
 if mode == "cheat":
     open(".github/pr-gatekeeper.json", "w").write('{"verify": "true"}')
     open("app.txt", "w").write("still broken\n")
-if mode in ("fix", "noisy", "echo", "cheat"):
+if mode == "extrafile":  # a continuation that adds work on top of the retained checkpoint
+    open("extra.txt", "w").write("extra\n")
+if mode == "rewind":  # a continuation that rewrites history below the launch checkpoint first
+    git("reset", "--hard", "source/main")
+    open("extra.txt", "w").write("rewound\n")
+if mode in ("fix", "noisy", "echo", "cheat", "extrafile", "rewind"):
     git("add", "-A")
     git("-c", "user.name=h", "-c", "user.email=h@h", "commit", "-qm", "harness work")
 if mode == "plant":  # a filter driver and hooks, which run wherever git touches this tree
@@ -67,6 +72,10 @@ if mode == "salvage":  # a partial fix left uncommitted, then the harness runs o
     open("app.txt", "w").write("partial fix\n")
     sys.exit(124)
 if mode == "salvage-nomod":  # the clock runs out with the checkout unchanged
+    sys.exit(124)
+if mode == "rewind-salvage":  # rewrite history below the checkpoint, then run out of clock
+    git("reset", "--hard", "source/main")
+    open("app.txt", "w").write("partial fix\n")
     sys.exit(124)
 if mode == "timeout":
     print("step one", flush=True)
@@ -463,6 +472,131 @@ class RunnerTest(unittest.TestCase):
         result, _ = self.run_order("fix", kind="fix", head=self.base, continuation=checkpoint)
         self.assertEqual((result["status"], result["error"]),
                          ("failed", "the checkpoint branch moved after it was checked"))
+
+    def implement_checkpoint(self, marker, app="fixed\n"):
+        """A checkpoint with retained implementation: it writes app.txt ("fixed" passes the gate on
+        the checkpoint alone) and adds a `checkpoint.txt` marker that distinguishes it from the base."""
+        (self.checkout / "app.txt").write_text(app)
+        (self.checkout / "checkpoint.txt").write_text(marker)
+        sh(self.checkout, "add", "-A")
+        sh(self.checkout, "-c", "user.name=w", "-c", "user.email=w@w", "commit", "-qm", "checkpoint")
+        return sh(self.checkout, "rev-parse", "HEAD")
+
+    def implement_continuation_order(self, checkpoint, mode="nothing"):
+        """Push a distinct `checkpoint` commit as the retained-work scratch branch, then run one
+        implement continuation built on it."""
+        sh(self.checkout, "push", "-q", "origin", f"{checkpoint}:refs/heads/factory-wip/7")
+        return self.run_order(mode, continuation=checkpoint)
+
+    def test_an_unchanged_implement_continuation_finalizes_the_retained_work(self):
+        """#451: an implement pass whose harness adds nothing still hands back the retained
+        checkpoint as a completed Result — the patch is the work against the original baseSha,
+        with real verification run on the checkpoint, so the Foreman's apply keeps it."""
+        checkpoint = self.implement_checkpoint("checkpoint fix\n")
+        result, order = self.implement_continuation_order(checkpoint)
+        self.assertEqual(result["status"], "completed", result.get("error"))
+        self.assertEqual(result["patch"]["baseSha"], self.base)
+        self.assertEqual(result["patch"]["format"], "unified")
+        self.assertEqual(documents.check_result(result, order), [])
+        fresh = self.apply_on(self.base, result["patch"]["diff"])
+        self.assertEqual((fresh / "checkpoint.txt").read_text(), "checkpoint fix\n")
+        self.assertEqual([e["exit"] for e in result["evidence"]], [0])
+
+    def test_a_continuation_with_new_edits_retains_the_checkpoint(self):
+        checkpoint = self.implement_checkpoint("checkpoint fix\n")
+        result, order = self.implement_continuation_order(checkpoint, "extrafile")
+        self.assertEqual(result["status"], "completed", result.get("error"))
+        self.assertEqual(result["patch"]["baseSha"], self.base)
+        self.assertEqual(documents.check_result(result, order), [])
+        fresh = self.apply_on(self.base, result["patch"]["diff"])
+        self.assertEqual((fresh / "checkpoint.txt").read_text(), "checkpoint fix\n")
+        self.assertEqual((fresh / "extra.txt").read_text(), "extra\n")
+
+    def test_an_implement_continuation_that_rewinds_below_the_checkpoint_is_refused(self):
+        """#451: collection runs against the original base, but the launch checkpoint still guards
+        it — a harness that resets its copy below the checkpoint (the wiki copy exposes source/*)
+        and commits its own work is refused with the same history-rewrite error as before, so the
+        retained checkpoint can never be silently dropped from a completed patch."""
+        checkpoint = self.implement_checkpoint("checkpoint fix\n")
+        result, order = self.implement_continuation_order(checkpoint, "rewind")
+        self.assertEqual((result["status"], result["error"]),
+                         ("failed", "the harness rewrote history below the commit it was given"))
+        self.assertNotIn("patch", result)
+        self.assertEqual(documents.check_result(result, order), [])
+
+    def test_a_fix_continuation_that_rewinds_below_the_checkpoint_is_refused(self):
+        """Guard: the launch checkpoint ancestry check holds for every continuation kind, not just
+        the collection-base rewrite of the implement kind."""
+        checkpoint = self.extra_commit("checkpoint\n")
+        sh(self.checkout, "push", "-q", "origin", f"{self.base}:refs/heads/factory/7")
+        sh(self.checkout, "push", "-q", "origin", f"{checkpoint}:refs/heads/factory-wip/7")
+        result, order = self.run_order("rewind", kind="fix", head=self.base, continuation=checkpoint)
+        self.assertEqual((result["status"], result["error"]),
+                         ("failed", "the harness rewrote history below the commit it was given"))
+        self.assertNotIn("patch", result)
+        self.assertEqual(documents.check_result(result, order), [])
+
+    def test_a_timeout_after_a_rewind_still_ends_failed_with_no_partial(self):
+        """Guard: the salvage path collects against the launch checkpoint with the same ancestry
+        guard, so a checkout that rewrote history below the checkpoint leaves no partial patch —
+        and the timeout provenance for an intact checkout is unchanged."""
+        checkpoint = self.implement_checkpoint("fixed\n")
+        sh(self.checkout, "push", "-q", "origin", f"{checkpoint}:refs/heads/factory-wip/7")
+        result, order = self.run_order("rewind-salvage", continuation=checkpoint)
+        self.assertEqual((result["status"], result["error"]), ("failed", "the harness timed out"))
+        self.assertNotIn("patch", result)
+        self.assertEqual(documents.check_result(result, order), [])
+
+    def test_a_failing_verify_leaves_the_implement_continuation_unpublished(self):
+        """#451: verification runs before any completed checkpoint; a failing verify is a failed
+        Result with no patch, even though the retained work would have applied."""
+        checkpoint = self.implement_checkpoint("checkpoint fix\n", app="echo\n")  # the gate rejects it
+        result, order = self.implement_continuation_order(checkpoint)
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(result["error"].startswith("verify exited 1"), result["error"])
+        self.assertNotIn("patch", result)
+        self.assertEqual(documents.check_result(result, order), [])
+
+    def test_an_implement_continuation_timeout_keeps_its_exact_provenance(self):
+        """#451: the salvage contract is unchanged — a timed-out implement continuation is a
+        failed Result whose partial patch applies on the checkpoint itself, never "
+        "the original base."""
+        checkpoint = self.implement_checkpoint("fixed\n")
+        result, order = self.implement_continuation_order(checkpoint, "salvage")
+        self.assertEqual((result["status"], result["error"]), ("failed", "the harness timed out"))
+        self.assertEqual(result["patch"]["baseSha"], checkpoint)
+        fresh = self.apply_on(checkpoint, result["patch"]["diff"])
+        self.assertEqual((fresh / "app.txt").read_text(), "partial fix\n")
+        self.assertEqual(documents.check_result(result, order), [])
+
+    def test_an_implement_continuation_whose_whole_work_is_empty_still_fails(self):
+        """#451: a checkpoint at the base with a harness that adds nothing is a truly empty whole
+        work, against the original base too: it still rejects, with no completed publication."""
+        result, order = self.implement_continuation_order(self.base)
+        self.assertEqual((result["status"], result["error"]),
+                         ("failed", "the harness made no change"))
+        self.assertNotIn("patch", result)
+        self.assertEqual(documents.check_result(result, order), [])
+
+    def test_an_implement_continuation_refuses_when_the_checkpoint_is_off_the_base(self):
+        """#451: the retained checkpoint must build on the WorkOrder's base, so the collected patch
+        applies on it. A checkpoint off that base fails before the harness runs."""
+        sh(self.checkout, "checkout", "-q", "--orphan", "stray")
+        (self.checkout / "stray.txt").write_text("stray\n")
+        sh(self.checkout, "add", "-A")
+        sh(self.checkout, "-c", "user.name=w", "-c", "user.email=w@w", "commit", "-qm", "stray")
+        stray = sh(self.checkout, "rev-parse", "HEAD")
+        sh(self.checkout, "checkout", "-qf", "main")
+        sh(self.checkout, "push", "-q", "origin", f"{stray}:refs/heads/factory-wip/7")
+        result, _ = self.implement_continuation_order(stray)
+        self.assertEqual((result["status"], result["error"]),
+                         ("failed", "the checkpoint does not build on the WorkOrder's base"))
+
+    def test_an_implement_continuation_refuses_when_the_checkpoint_branch_is_missing(self):
+        result, order = self.run_order("nothing", continuation=self.base)
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("git rev-parse failed", result["error"])
+        self.assertEqual(documents.check_result(result, order), [])
 
     def test_a_fix_continuation_refuses_when_the_default_base_moved(self):
         checkpoint = self.extra_commit("checkpoint\n")

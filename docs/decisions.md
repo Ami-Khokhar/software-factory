@@ -3065,3 +3065,34 @@ check keeps its threshold.
 **Consequence.** A person reads the real cause in `factory_status` and the escalation instead of
 chasing FACTORY_WORKERS. No tool, schema or stored-data change; the reason is advisory text on an
 existing action.
+
+## ADR-0130 — Launch and collection base differ for an implement continuation
+
+**Context.** Issue #451 found a real instance of the salvage-continuation trap: an implement pass
+timed out, kept its checkpoint (`factory-wip/7`) on the original base, and the next continuation
+WorkOrder was dispatched with `continuationSha` set. The runner launched from and verified at the
+checkpoint correctly, but collected the patch against the checkpoint and named it
+`patch.baseSha` of that checkpoint. The Foreman's sergeant (`patches.apply`) faithfully applied
+the patch on that base — so an unchanged harness was rejected as "no change" after the whole
+work was actually complete, and even a harness that added edits sent only its new delta.
+Empty-checkpoint-to-HEAD is not empty original-base-to-HEAD.
+
+**Decision.** For an implement WorkOrder with a `continuationSha`, the checkpoint is still the
+launch and verify base — the pass checks out there, verifies there, keeps the existing
+scratch/default/head provenance checks, and refuses a checkpoint whose `merge-base --is-ancestor`
+against `baseSha` no longer holds. Only the completed Result's patch changes: it is collected
+against the WorkOrder's original `baseSha` and names it as `patch.baseSha`, so the existing
+Foreman apply path keeps the retained content. A fix continuation is not extended to the
+original base — its patch keeps applying on the checkpoint itself, as it continues a reviewed
+head. The salvage contract is untouched: a timed-out pass still collects and reports a partial
+patch on the checkpoint.
+
+**Consequence.** An unchanged successful implement continuation now finalizes its retained work
+instead of failing "no change", and extra edits apply on the original base. There is no new API,
+state or schema field: the Result's existing `patch.baseSha` carries the collection base, and
+the Foreman already prefers it, and the collection step keeps the launch checkpoint as a second
+ancestry guard (its own env beside the base check), so a harness that rewrites history below the
+checkpoint still fails with the history-rewrite error rather than completing with a patch that
+misses the retained work. Rollout is evidence-bound: merged source is not a deployed
+runner, so the relay item that triggered this stays blocked until the running revision and a
+representative guarded continuation are verified.

@@ -147,6 +147,19 @@ class SalvageTest(ForemanCase):
         self.assertEqual((wi["state"], wi["wip"]["moves"], wi["wip"]["sha"]), ("blocked", 2, "c1"))
         self.assertEqual(len([p for p in self.git.pushes if p["branch"] == "factory-wip/7"]), 2)
 
+    def test_a_completed_implement_continuation_applies_on_the_original_base(self):
+        """#451: the rescue pass's completed Result carries the whole work (retained checkpoint
+        plus new edits) against the original baseSha, so the Foreman applies it there, not on the
+        checkpoint, and the checkpoint is retired."""
+        self.keep_partial()  # the first pass times out; its checkpoint continues from base0
+        wi, task = self.dispatch()  # the rescue pass bases itself on the kept work
+        self.assertEqual(self.foreman.store.workorders(ID)[-1]["continuationSha"], "c1")
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"], base_sha="base0"))
+        wi = self.tick()
+        self.assertEqual(wi["state"], "pr_open")
+        self.assertEqual(self.git.pushes[-1]["base"], "base0")
+        self.assertIsNone(self.foreman.store.get(ID).get("wip"))
+
     def test_an_implement_checkpoint_survives_a_stable_base_and_is_kept_for_the_running_rescue(self):
         self.keep_partial()  # the implement pass timed out; its checkpoint continues from base0
         wi, _ = self.dispatch()  # the rescue pass bases itself on the kept work

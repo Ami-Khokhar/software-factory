@@ -188,7 +188,7 @@ and direct the caller to the approved template. Credential mounts over container
   `{branch, sha, startedAt}` while the WorkItem is `implementing` and waits for the GitHub run on
   its scratch branch `factory-verify/<issue>-<n>`; it is `null` otherwise. No stored WorkItem
   needs a migration: a document without the field reads as not waiting.
-- **Timed-out checkpoints (ADR-0092).** `WorkItem.wip` records `{branch, sha, workOrder, kind,
+- **Timed-out checkpoints (ADR-0092, ADR-0130).** `WorkItem.wip` records `{branch, sha, workOrder, kind,
   headSha, baseSha, moves, provenanceVersion}`. The source WorkOrder must match its kind and saved heads, the scratch
   branch must still point at `sha`, and the default branch must still point at `baseSha`. A fix
   checkpoint also requires the PR's live head to remain `headSha`. A continuation WorkOrder keeps
@@ -197,6 +197,19 @@ and direct the caller to the approved template. Credential mounts over container
   Result remains failed; the checkpoint is context for another attempt, never
   evidence of completion. Migration 9 marks old checkpoints as provenance version 0 so the Foreman
   can delete their recorded scratch branch and clear them before dispatch.
+
+  **Launch vs collection base (ADR-0130).** A completed implement continuation still launches
+  from `continuationSha` and verifies there, so its Result's test evidence is the checkpoint's
+  verify. Its completed `patch` is the whole work — the retained implementation plus any new
+  edits — as a diff against the original `baseSha`, and `patch.baseSha` names that original
+  base, so the Foreman's apply keeps the checkpoint content. The pass refuses a checkpoint that
+  no longer builds on `baseSha` (ancestry), a moved scratch branch or a moved default, and the
+  collection step re-checks the launch checkpoint's ancestry itself: a harness that rewrote
+  history below the checkpoint fails with the history-rewrite error instead of a completed patch
+  that silently drops the retained work. A truly
+  empty whole work, a failed verify and a timeout stay refused exactly as before — a timeout's
+  unverified partial keeps its exact provenance, a patch on the checkpoint itself. A fix
+  continuation keeps the checkpoint as the applied base: its patch continues the reviewed head.
 - **`WorkOrder.project` is data (ADR-0104).** Optional `{id, goal, blueprint}`, with all three
   strings required and no other keys. `goal` is at most 2000 characters and `blueprint` at most
   20000. Each member's implement or fix WorkOrder carries the stored Project's goal and Lead's

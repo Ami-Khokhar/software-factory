@@ -43,6 +43,9 @@ EXTRACT = """set -e
 git add -A
 if ! git diff --cached --quiet; then git -c core.hooksPath=/dev/null commit -q -m "$FACTORY_GOAL"; fi
 git merge-base --is-ancestor "$FACTORY_BASE" HEAD || exit 3
+if [ -n "$FACTORY_PARENT" ]; then
+  git merge-base --is-ancestor "$FACTORY_PARENT" HEAD || exit 3
+fi
 git diff --binary "$FACTORY_BASE" HEAD
 echo "FACTORY_PR_SIZE: $(git diff --shortstat "$(git merge-base "$FACTORY_DEFAULT" HEAD)" HEAD)" >&2
 git diff --numstat "$(git merge-base "$FACTORY_DEFAULT" HEAD)" HEAD | sed 's/^/FACTORY_PR_NUMSTAT: /' >&2
@@ -297,6 +300,16 @@ def prepare(cwd, order, branch, work):
             raise WorkerError("the checkpoint branch moved after it was checked")
         if default != order.get("baseSha"):
             raise WorkerError("the default branch base moved after the checkpoint was checked")
+        # A completed implement continuation collects the whole work against the original baseSha
+        # (#451), so the checkpoint must still build on that base or the collected patch would not
+        # apply on it, and the WorkOrder must name the base at all.
+        if order["kind"] == "implement":
+            if not order.get("baseSha"):
+                raise WorkerError("an implement continuation names no original base")
+            try:
+                git(cwd, "merge-base", "--is-ancestor", order["baseSha"], order["continuationSha"])
+            except WorkerError:
+                raise WorkerError("the checkpoint does not build on the WorkOrder's base") from None
     git(os.path.dirname(work), "clone", "-q", "--no-hardlinks", "--no-checkout", cwd, work)
     git(work, "fetch", "-q", cwd, "+refs/remotes/origin/*:refs/remotes/source/*")
     git(work, "remote", "remove", "origin")
@@ -474,7 +487,7 @@ def numstat_totals(err):
     return change_totals(files)
 
 
-def collect(sandbox, work, base, default, goal, limits):
+def collect(sandbox, work, base, default, goal, limits, parent=None):
     """The harness's work as one unified diff against `base`, computed in the sandbox. Uncommitted
     changes are committed first, so a harness that forgot to commit still hands its work over.
     Refuses the work when the whole pull request — every commit on the branch against the default
@@ -482,10 +495,14 @@ def collect(sandbox, work, base, default, goal, limits):
     counts source additions and deletions only; tests and docs are reported separately (ADR-0079).
     Over the source target warns, over the source ceiling refuses as a size-only excess the Foreman
     routes to decomposition, and over the file count refuses: that stands in for an expensive verify,
-    and factory-mcp's own prepush check stays for a base that advanced under the pass."""
-    code, diff, err = sandbox.run(["sh", "-c", EXTRACT], 300, work,
-                                  env={"FACTORY_BASE": base, "FACTORY_DEFAULT": default,
-                                       "FACTORY_GOAL": goal})
+    and factory-mcp's own prepush check stays for a base that advanced under the pass. `parent`
+    names a second commit that must also be an ancestor of HEAD — for a completed implement
+    continuation, the launch checkpoint, so a harness that rewrote history below it cannot hand
+    back a patch that silently drops the retained work."""
+    env = {"FACTORY_BASE": base, "FACTORY_DEFAULT": default, "FACTORY_GOAL": goal}
+    if parent is not None and parent != base:
+        env["FACTORY_PARENT"] = parent
+    code, diff, err = sandbox.run(["sh", "-c", EXTRACT], 300, work, env=env)
     if code == 3:
         raise WorkerError("the harness rewrote history below the commit it was given", 3)
     if code != 0:
@@ -726,9 +743,17 @@ def main(argv=None):
         if code != 0:
             detail = " ".join((err or out).split())[-300:]
             raise WorkerError(f"the harness exited {code}" + (f": {detail}" if detail else ""))
+        # A completed implement continuation finalizes the retained checkpoint plus any new edits
+        # against the WorkOrder's original baseSha, so the Foreman's apply path keeps the checkpoint
+        # content (#451); the pass still launched from and verifies the checkpoint (launch_base above).
+        # A fix keeps the checkpoint as the applied base: its patch continues the reviewed head.
+        collected_base = base
+        if order["kind"] == "implement" and order.get("continuationSha"):
+            collected_base = order["baseSha"]
         patch_start = time.monotonic()
         try:
-            diff = collect(sandbox, work, base, default, order["goal"], order["constraints"])
+            diff = collect(sandbox, work, collected_base, default, order["goal"], order["constraints"],
+                           parent=base)
         except WorkerError as exc:
             record("patch collection", patch_start, getattr(exc, "code", None), str(exc))
             raise
@@ -745,7 +770,8 @@ def main(argv=None):
             if code != 0:
                 detail = redact(output[-400:], secrets, limit=400)
                 raise WorkerError(f"verify exited {code}: {detail}")
-        result.update(status="completed", patch={"format": "unified", "diff": diff, "baseSha": base})
+        result.update(status="completed",
+                      patch={"format": "unified", "diff": diff, "baseSha": collected_base})
     except WorkerError as exc:
         result["error"] = str(exc)
     except Exception as exc:  # noqa: BLE001 - any failure must still end in a Result line
