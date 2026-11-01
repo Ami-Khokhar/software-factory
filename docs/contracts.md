@@ -645,6 +645,15 @@ saved before GitHub creation. A retry searches all issue states, adopts a truste
 and never blindly repeats an ambiguous create. A marker that never becomes visible leaves
 publication pending for operator diagnosis; no model call is made to retry publication.
 
+Publication goes through the finding ledger (#444). Reflection records one finding per candidate,
+keyed by the same cause fingerprint. Before creating anything, publication looks up that row: an
+open finding already linked to an issue gets the new evidence as a comment and opens nothing;
+a rejected or resolved finding whose evidence is no newer than the decision is reported as
+`suppressed` in the result; otherwise the issue is created and the finding row is linked to its
+issue number. At most three new issues open per run, ranked by occurrence count then newest
+evidence; the rest are reported as `deferred`. `suppressed` and `deferred` are result fields,
+never issue labels.
+
 FACTORY_DREAM_AUTO_REPOS is a comma-separated opt-in subset of enabled repos. By default all
 improvements remain factory:proposed. At most one repair per run may be admitted automatically,
 with no concurrent automatically admitted repair. Protected/credential paths, complex acceptance

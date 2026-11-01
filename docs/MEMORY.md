@@ -39,7 +39,10 @@ A nightly no-agent script calls the server. Without endpoint/model it skips refl
 records merge facts and revalidates measurements. Otherwise it reserves a global seven-day cooldown
 before one bounded provider request; failures retain it.
 
-At most three improvement candidates are created per reflection. Automatic work is opt-in per repo,
+At most three improvement candidates are created per reflection. Publication reuses the finding
+ledger: a repeat cause comments its new evidence on the existing issue, a finding the owner
+rejected or resolved suppresses unless its evidence is newer than that decision, and no more than
+three new issues open per run (the rest are reported as deferred). Automatic work is opt-in per repo,
 one admission per run, with no concurrent repair. Normal budgets and gate policy remain; repairs
 cannot spawn chains. A published proposal mentions the owner (`config.owner` or the repo owner)
 and names both next steps: add the `factory:ready` label, or comment with what to change.

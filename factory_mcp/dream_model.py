@@ -134,6 +134,9 @@ def reflect(store, config, at):
             candidate["memoryId"] = remember(candidate["repo"], "cause:" + candidate["fingerprint"],
                 "blocker", candidate["summary"], candidate["evidence"],
                 [{"id": evidence_ids[ref], "relation": "reported_in"} for ref in candidate["evidence"]])
+            # The ledger row must exist before publication: the same cause was seen here again.
+            store.findings.record(candidate["repo"], candidate["fingerprint"], candidate["summary"],
+                ",".join(candidate["evidence"]), at.isoformat())
         store.dreaming.settle(run["id"], "planned" if plan["improvements"] else "complete", plan)
         return {"status": "planned" if plan["improvements"] else "complete", "runId": run["id"],
                 "improvements": len(plan["improvements"]), "learnings": len(plan["learnings"])}
