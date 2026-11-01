@@ -127,6 +127,12 @@ class FindingsTest(unittest.TestCase):
         stored = self.store.findings.get(finding["id"])
         self.assertEqual(stored["verdict"], "open")
         self.assertEqual(stored["failedFix"], 9)
+        history = self.versions(stored)
+        # a repeat pass on the same pull names the same failed fix once, not again
+        reconcile(self.store, gh, self.config(), "2026-11-13T00:00:00+00:00")
+        self.assertEqual(self.store.findings.get(finding["id"]), stored)
+        self.assertEqual([self.store.findings.version(stored["id"], v)
+                          for v in range(1, stored["version"] + 1)], history)
 
     def test_a_closed_issue_without_a_merge_is_a_rejection(self):
         """Only the owner's last comment is the reason, sanitized and bounded."""

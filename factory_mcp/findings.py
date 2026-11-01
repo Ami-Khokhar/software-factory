@@ -153,11 +153,12 @@ def reconcile(store, github, config, at, quiet_days=28):
                                       rejectedAt=at)
             else:
                 merged_at = pull["merged_at"]
-                if _ts(doc["lastSeen"]) > _ts(merged_at):
+                if _ts(doc["lastSeen"]) > _ts(merged_at) and doc.get("failedFix") != pull["number"]:
+                    # a recurrence is named once; later passes on the same pull write nothing
                     store.findings._write(identity, at, verdict="open",
                                           reason=f"recurred after the fix in #{pull['number']}",
                                           failedFix=pull["number"])
-                elif doc["verdict"] == "open":
+                elif doc["verdict"] == "open" and doc.get("fixPr") != pull["number"]:
                     store.findings._write(identity, at, verdict="fix_landed",
                                           reason=f"fix landed in #{pull['number']}",
                                           fixPr=pull["number"], landedAt=merged_at)
