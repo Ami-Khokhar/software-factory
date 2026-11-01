@@ -290,7 +290,8 @@ def build(store, foreman, agent=False):
               "properties": {"repo": {"type": "string", "description": "owner/repo"},
                              "issue": {"type": "integer", "minimum": 1},
                              "by": {"type": "string", "minLength": 1, "description": "who approved"},
-                             "sourcePr": {"type": "integer", "minimum": 1},
+                             "sourcePr": {"type": "integer", "minimum": 1,
+                                          "description": "the merged source PR number the gate follow-up came from"},
                              "issueDigest": {"type": "string", "description": "SHA256 of JSON identity/title/body/author ID as documented"}}},
              "write", lambda args: {"workItem": foreman.approve_issue(
                  args["repo"], args["issue"], args["by"], args.get("sourcePr"), args.get("issueDigest"), agent=agent)}),
