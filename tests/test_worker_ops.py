@@ -55,9 +55,11 @@ class WorkerOpsTest(unittest.TestCase):
         self.enable()
         with mock.patch.object(worker_ops, "_image_id", return_value=None):
             self.assertEqual(worker_ops.effective_workers(self.store, self.config), BASELINE_WORKERS)
-        self.assertEqual(worker_ops.unusable_reasons(self.store, self.config), [
-            "opencode-mimo-factory is enabled but cannot be used: worker image is unavailable; "
-            "repair it and rerun factory_check_worker"])
+            # Inside the patch: outside it the assertion reads the real image and becomes a check
+            # of the drift reason, so the test used to pass only where Docker was absent.
+            self.assertEqual(worker_ops.unusable_reasons(self.store, self.config), [
+                "opencode-mimo-factory is enabled but cannot be used: worker image is unavailable; "
+                "repair it and rerun factory_check_worker"])
 
     def test_an_enabled_row_whose_stored_binding_drifted_says_so(self):
         self.enable()
