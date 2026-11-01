@@ -24,6 +24,21 @@ class DocumentationPatchTest(unittest.TestCase):
                             protected=Config(mcp_token="t", repos=frozenset()).protected_paths)
         self.assertEqual(git("show", f"{sha}:AGENTS.md", cwd=self.bare), "Document the service.")
 
+    def test_a_control_or_credential_path_is_protected_at_any_depth(self):
+        """Guard: nested credential names are refused on the push path, plain source is not."""
+        protected = Config(mcp_token="t", repos=frozenset()).protected_paths
+        for name in ("worker/.env", "backend/.env.local", "worker/secrets/key",
+                     ".github/workflows/ci.yml"):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(patches.PatchError, "changes protected path"):
+                    patches.apply(self.bare, None, "docs", self.base, self.patch(name),
+                                  "Add it", False, protected=protected)
+                git("reset", "-q", cwd=self.seed)  # each refusal patches its name alone
+        sha = patches.apply(self.bare, None, "docs", self.base, self.patch("worker/main.py"),
+                            "Add source", False, protected=protected)
+        self.assertEqual(git("show", f"{sha}:worker/main.py", cwd=self.bare).strip(),
+                         "Document the service.")
+
     def test_custom_protection_refuses_patch_before_push(self):
         """Guard: explicitly protected instructions remain protected."""
         with self.assertRaisesRegex(patches.PatchError, "changes protected path AGENTS.md"):

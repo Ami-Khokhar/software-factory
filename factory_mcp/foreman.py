@@ -2753,9 +2753,15 @@ class Foreman:
         text = f"{item['title']}\n{item['body']}".lower()  # code cannot tell a request from a mention
         # Refuse any mention of a protected name as whole path segments (ADR-0125): the same tokens
         # patches.is_protected refuses drive a plan's paths, so the plan refuses them up front — a
-        # directory's bare name, a deeper spelling, and a slash-joined root spelling too.
-        named = [path for path in self.config.protected_paths
-                 if re.search(rf"(?<![\w.-]){re.escape(path.lower().rstrip('/'))}(?:/|(?![\w.-]))", text)]
+        # dotted name bare (`.github`) or deeper (`.github/workflows`), and a slash-joined root
+        # spelling. A plain word ("secrets") must still keep its slash: the English word in prose
+        # is not the path.
+        named = []
+        for path in self.config.protected_paths:
+            stem = path.lower().rstrip("/")
+            boundary = r"(?:/|(?![\w.-]))" if ("." in stem or "/" in stem) else "/"
+            if re.search(rf"(?<![\w.-]){re.escape(stem)}{boundary}", text):
+                named.append(path)
         if named:
             return f"names {', '.join(named)}, which only a person changes; leave it out of the plan"
         if not workitem.paths_listed(item["body"]):

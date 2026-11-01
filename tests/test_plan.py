@@ -111,7 +111,8 @@ class StartPlanTest(unittest.TestCase):
                  ("docs/AGENTS.md", True), (".env.example", True),
                  ("src/secrets/handler.py", False), ("docs/secrets.md", True),
                  (".env", False), (".env.local", False), ("secrets/keys", False),
-                 ("edit the .github folder", False), (".github/workflows", False)]
+                 ("edit the .github folder", False), (".github/workflows", False),
+                 ("keep secrets out of logs", True), ("add the Actions secrets", True)]
         for mention, accepted in cases:
             with self.subTest(mention):
                 self.setUp()
