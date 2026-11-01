@@ -41,6 +41,7 @@ IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 IMAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}\Z")
 CONTAINER_ID = re.compile(r"[0-9a-f]{12,64}\Z")
 ROOT = Path(__file__).resolve().parent.parent
+DRIFT_WINDOW = 60  # seconds one (worker, cause) may log worker_membership_drift again
 RUNNER = ROOT / "worker" / "runner.py"
 HEALTH_SCRIPT = ROOT / "scripts" / "provider_health.py"
 
@@ -398,19 +399,13 @@ def _honour(store, config, worker_id, row):
     return binding, None
 
 
-def unusable_reasons(store, config):
-    """Why each enabled activation row is missing from effective workers; [] when none fails."""
-    reasons = []
-    for row in store.worker_activations():
-        if row["enabled"]:
-            _, reason = _honour(store, config, row["worker"], row)
-            if reason:
-                reasons.append(reason)
-    return reasons
-
-
-def effective_workers(store, config):
+def membership(store, config):
+    """One walk over the activation rows that a routing decision uses (#437): the effective
+    `workers` in the configured preference order, and the reasons an enabled row is missing
+    (ADR-0129). Routing order and thresholds are unchanged; a host with no enabled rows routes
+    exactly as before."""
     workers = dict(config.workers)
+    reasons = []
     for row in store.worker_activations():
         worker_id = row["worker"]
         workers.pop(worker_id, None)
@@ -418,6 +413,27 @@ def effective_workers(store, config):
             binding, reason = _honour(store, config, worker_id, row)
             if reason is None:
                 workers[worker_id] = dict(config.workers).get(worker_id, "hosted")
+            else:
+                _membership_drift(store, worker_id, reason)
+                reasons.append(reason)
     # Retain the configured preference order, appending newly activated hosted workers.
     order = dict.fromkeys([*(name for name, _ in config.workers), *workers])
-    return tuple((name, workers[name]) for name in order if name in workers)
+    return (tuple((name, workers[name]) for name in order if name in workers), reasons)
+
+
+def _membership_drift(store, worker_id, reason):
+    """One `worker_membership_drift` audit row per (worker, cause) per short window (#437): the
+    Foreman computes membership per dispatch decision, so an operator sees an enabled worker stop
+    being routed, and a ticking instance does not flood the audit. The throttle lives in the
+    store (like Foreman._refuse_repo), so a concurrent membership walk from another request
+    thread sees the same state and logs at most one row."""
+    store.log_worker_drift(worker_id, reason, DRIFT_WINDOW)
+
+
+def unusable_reasons(store, config):
+    """Why each enabled activation row is missing from effective workers; [] when none fails."""
+    return membership(store, config)[1]
+
+
+def effective_workers(store, config):
+    return membership(store, config)[0]

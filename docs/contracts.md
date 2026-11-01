@@ -75,6 +75,11 @@ changes. Runtime status and selection use effective membership. After activation
 is not a running lease, but changed config, credential metadata, image or quarantine removes the
 worker from eligibility. Pending submissions reload the relay and recheck membership and reviewer
 family immediately before submit. Repair requires another health check and explicit reactivation.
+Membership is computed in one pass over the activation rows per routing decision
+(`worker_ops.membership`), so a dispatch inspects each worker's Docker image at most once. When an
+enabled row stops matching — an unavailable image, drifted binding, missing healthy checks or
+malformed registry data — `worker_ops` writes one `worker_membership_drift` audit row per worker
+and cause within a short window, so a routing tick is not logged twice.
 
 Pi's fixed `--no-extensions`, `--no-skills` and `--no-prompt-templates` switches are supported.
 Unsupported harness diagnostics expose only bounded flag names, never values or positional text,

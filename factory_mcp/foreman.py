@@ -931,7 +931,9 @@ class Foreman:
                 return self._write(wi, dict(wi, state="exhausted", recovery=None, terminalReason=(
                     f"{used} worker passes used; FACTORY_MAX_PASSES is {self.config.max_passes}")),
                     "exhausted")
-        workers = worker_ops.effective_workers(self.store, self.config)
+        # One membership walk per dispatch decision (#437): the rows are checked here, and the
+        # reason text is already at hand if routing finds no worker, instead of a second walk.
+        workers, problems = worker_ops.membership(self.store, self.config)
         named, unknown = self._allowed_named(named, workers)
         failed = {h["detail"].get("worker") for h in self.store.history(wi["id"])
                   if h["action"] == "attempt_failed"}
@@ -962,7 +964,6 @@ class Foreman:
                 return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=(
                     "every allowed worker is in the reviewer family "
                     + ", ".join(sorted(excluded)) + dropped)), "no_worker", **audit)
-            problems = worker_ops.unusable_reasons(self.store, self.config)
             # An enabled row that could not be honoured says why, so a person never chases
             # FACTORY_WORKERS when the real cause is Docker, a drifted binding or bad registry data.
             no_worker = (f"{wi['repo']} is local-only and FACTORY_WORKERS has no local worker"

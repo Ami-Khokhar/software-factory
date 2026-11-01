@@ -2,6 +2,7 @@
 import json
 import subprocess
 import tempfile
+import threading
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -70,6 +71,113 @@ class WorkerOpsTest(unittest.TestCase):
             self.assertEqual(worker_ops.unusable_reasons(self.store, self.config), [
                 "opencode-mimo-factory is enabled but its stored binding no longer matches this "
                 "config or image; run factory_check_worker"])
+
+    def test_a_dropped_enabled_worker_logs_a_drift_row_naming_itself_and_its_cause(self):
+        self.enable()
+        self.agent["args"][-1] = "opencode/mimo-other"
+        self.registry.write_text(json.dumps({"agents": [self.agent]}))
+        with mock.patch.object(worker_ops, "_image_id", return_value="sha256:" + "a" * 64):
+            self.assertEqual(worker_ops.effective_workers(self.store, self.config), BASELINE_WORKERS)
+        rows = [row for row in self.store.global_history()
+                if row["action"] == "worker_membership_drift"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["detail"]["worker"], self.agent["id"])
+        self.assertIn("stored binding no longer matches", rows[0]["detail"]["reason"])
+
+    def test_drift_rows_survive_two_threads_walking_the_same_drifted_membership(self):
+        """The drift throttle is one atomic check-and-log in the store: two request threads that
+        walk the same drifted membership together log exactly one row per (worker, cause) and see
+        no unsynchronized shared state (#437)."""
+        self.enable()
+        self.agent["args"][-1] = "opencode/mimo-other"
+        self.registry.write_text(json.dumps({"agents": [self.agent]}))
+        reason = ("opencode-mimo-factory is enabled but its stored binding no longer matches this "
+                  "config or image; run factory_check_worker")
+        with mock.patch.object(worker_ops, "_image_id", return_value="sha256:" + "a" * 64):
+            start = threading.Barrier(2)  # both threads settle each call together
+            errors = []
+
+            def walk():
+                try:
+                    for _ in range(50):
+                        start.wait()
+                        worker_ops.membership(self.store, self.config)
+                except BaseException as exc:  # a racy throttle shows up here
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=walk) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            self.assertEqual(errors, [])
+            # The write itself, raced: two threads ask for the same (worker, cause) row together,
+            # after a settled first row, inside the same long window.
+            self.store.log_worker_drift(self.agent["id"], "the drifted binding", 3600)
+            start.reset()
+            raced = []
+
+            def log_drift():
+                try:
+                    start.wait()
+                    self.store.log_worker_drift(self.agent["id"], "the drifted binding", 3600)
+                    raced.append(None)
+                except BaseException as exc:
+                    raced.append(exc)
+
+            threads = [threading.Thread(target=log_drift) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            self.assertEqual([row for row in raced if row is not None], [])
+        rows = [row for row in self.store.global_history()
+                if row["action"] == "worker_membership_drift"]
+        self.assertEqual([(row["detail"]["worker"], row["detail"]["reason"]) for row in rows],
+                         [(self.agent["id"], reason), (self.agent["id"], "the drifted binding")])
+
+    def test_an_unavailable_image_that_drops_a_worker_names_the_worker_in_a_drift_row(self):
+        self.enable()
+        with mock.patch.object(worker_ops, "_image_id", return_value=None):
+            self.assertEqual(worker_ops.unusable_reasons(self.store, self.config), [
+                "opencode-mimo-factory is enabled but cannot be used: worker image is unavailable; "
+                "repair it and rerun factory_check_worker"])
+        rows = [row for row in self.store.global_history()
+                if row["action"] == "worker_membership_drift"]
+        self.assertEqual([row["detail"]["worker"] for row in rows], [self.agent["id"]])
+        self.assertIn("cannot be used", rows[0]["detail"]["reason"])
+
+    def test_one_routing_decision_walks_two_enabled_rows_once_each_with_drift_still_dropping(self):
+        """Both the image inspect cost and the dropped row: a dispatch decision inspects each
+        enabled row at most once (#437), whatever happened to the routing that follows it."""
+        second = {"id": "opencode-pluto-factory", "command": "python3", "args": [
+            str(worker_ops.RUNNER), "--credential", f"{self.credential}:/tmp/auth",
+            "--", "opencode", "run", "--model", "opencode/pluto-free"], "timeoutMs": 1500000}
+        self.registry.write_text(json.dumps({"agents": [self.agent, second]}))
+        inspects = []
+        with mock.patch.object(worker_ops, "_image_id", side_effect=lambda image: (
+                inspects.append(image), "sha256:" + "a" * 64)[1]), \
+             mock.patch.object(worker_ops, "_run", return_value=(self.health, True)):
+            for worker_id in (self.agent["id"], second["id"]):
+                worker_ops.check(self.store, self.config, worker_id, "Day Desk", agent=True)
+                worker_ops.set_enabled(self.store, self.config, worker_id, True, "Day Desk",
+                                       "Enable the worker", agent=True)
+            inspects.clear()
+            workers, problems = worker_ops.membership(self.store, self.config)
+            self.assertEqual(len(inspects), 2)  # one docker inspect per enabled row, not more
+            self.assertEqual(workers, (*self.config.workers,
+                                       (self.agent["id"], "hosted"), (second["id"], "hosted")))
+            self.assertEqual(problems, [])
+            # A drifted stored binding still drops its own worker, and costs no second inspect.
+            self.agent["args"][-1] = "opencode/mimo-other"
+            self.registry.write_text(json.dumps({"agents": [self.agent, second]}))
+            inspects.clear()
+            workers, problems = worker_ops.membership(self.store, self.config)
+            self.assertEqual(len(inspects), 2)
+            self.assertEqual(problems, [
+                "opencode-mimo-factory is enabled but its stored binding no longer matches this "
+                "config or image; run factory_check_worker"])
+            self.assertEqual(workers, (*self.config.workers, (second["id"], "hosted")))
 
     def test_an_enabled_row_with_malformed_registry_data_says_so(self):
         self.enable()
