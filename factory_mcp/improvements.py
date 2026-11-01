@@ -136,10 +136,20 @@ def publish(foreman, run):
             fresh = True
         else:
             fresh = False
+
+        def reopen():
+            # A fresh publication supersedes the old verdict: the next
+            # recurrence must comment on the new issue, not open another.
+            store.findings.reopen(store.findings.identity(repo, fingerprint),
+                                  "newer evidence outranks the earlier decision",
+                                  finding["lastSeen"])
         with store._lock:
             row = store._db.execute("SELECT doc FROM dream_issues WHERE fingerprint=?", (fingerprint,)).fetchone()
         record = json.loads(row[0]) if row else None
-        if record and record.get("issueNumber") and not fresh:
+        # An outstanding ambiguous create is always searched again, fresh or
+        # not; a fresh cause supersedes any other record the fingerprint has.
+        searchable = record is None or record.get("status") == "creating"
+        if record and record.get("issueNumber") and record.get("status") != "creating" and not fresh:
             if finding is not None and finding["occurrences"] > record.get("commentedOccurrences", 0):
                 gh.comment(repo, record["issueNumber"], evidence_note(candidate, run))
                 record["commentedOccurrences"] = finding["occurrences"]
@@ -156,11 +166,13 @@ def publish(foreman, run):
         if repo not in cache:
             cache[repo] = gh.all_issues(repo)
         # Rejected causes with newer evidence are never quietly re-adopted:
-        # the closed issue stays closed and the fresh proposal speaks for itself.
-        matches = [] if fresh else [issue for issue in cache[repo]
-                                    if f"<!-- factory-dream:{fingerprint} -->" in (issue.get("body") or "")]
+        # the closed issue stays closed and the fresh proposal speaks for itself;
+        # only an open issue from an outstanding create may still be adopted.
+        matches = [] if not searchable else [
+            *(issue for issue in cache[repo] if f"<!-- factory-dream:{fingerprint} -->" in (issue.get("body") or "")
+              and (not fresh or issue.get("state") == "open"))]
         # Exact related gate follow-ups can be reused, but are never auto-approved as new work.
-        if not matches and not fresh:
+        if not matches and searchable and not fresh:
             matches = [issue for issue in cache[repo] if issue.get("title", "").startswith("Follow-up to #")
                        and candidate["cause"].casefold() in (issue.get("body") or "").casefold()
                        and any(path in (issue.get("body") or "") for path in candidate["paths"])]
@@ -174,13 +186,21 @@ def publish(foreman, run):
                 deferred.append({"repo": repo, "fingerprint": fingerprint,
                                  "reason": f"the cap of {NEW_ISSUE_CAP} new issues per run was reached"})
                 continue
+            creating = {"repo": repo, "status": "creating", "runId": run["id"]}
             with store._lock, store._transaction():
-                if fresh:  # the closed issue is history; this fingerprint publishes a new proposal
-                    store._db.execute("DELETE FROM dream_issues WHERE fingerprint=?", (fingerprint,))
-                inserted = store._db.execute("INSERT OR IGNORE INTO dream_issues VALUES (?,?,?)", (
-                    fingerprint, repo, json.dumps({"repo": repo, "status": "creating", "runId": run["id"]}))).rowcount
+                if record is None:
+                    inserted = store._db.execute("INSERT OR IGNORE INTO dream_issues VALUES (?,?,?)", (
+                        fingerprint, repo, json.dumps(creating))).rowcount
+                elif record.get("status") == "creating":
+                    inserted = 0  # ambiguous prior create: never blindly retry
+                elif fresh:  # the superseded record is history; this fingerprint publishes a new proposal
+                    store._db.execute("UPDATE dream_issues SET doc=? WHERE fingerprint=?",
+                                      (json.dumps(creating), fingerprint))
+                    inserted = 1
+                else:
+                    inserted = 0
             if not inserted:
-                pending = True  # ambiguous prior create: search again later, never blindly retry
+                pending = True
                 continue
             made = foreman.propose_issue(repo, "Dream: " + candidate["cause"], expected)
             issue = gh.issue(repo, made["issue"])
@@ -188,6 +208,8 @@ def publish(foreman, run):
             created += 1
         if not config.trusts(repo, (issue.get("user") or {}).get("login")):
             raise ToolError("improvement issue author is not trusted")
+        if fresh:
+            reopen()
         record = {"repo": repo, "fingerprint": fingerprint, "issueNumber": issue["number"],
                   "runId": run["id"], "memoryId": candidate["memoryId"], "status": "proposed",
                   "paths": candidate["paths"],
@@ -205,6 +227,7 @@ def publish(foreman, run):
             started = datetime.fromtimestamp(run["startedAt"], timezone.utc)
             store.findings.record(repo, fingerprint, candidate["summary"], ",".join(candidate["evidence"]),
                                   started.isoformat(), issue=issue["number"])
+            finding = store.findings.get(store.findings.identity(repo, fingerprint))
         else:
             store.findings.link(store.findings.identity(repo, fingerprint), issue["number"])
         record = save(store, fingerprint, repo, record)

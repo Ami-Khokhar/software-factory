@@ -90,6 +90,45 @@ class ImprovementsTest(unittest.TestCase):
         self.assertEqual(finding["issue"], second["issues"][0]["issueNumber"])
         self.assertEqual(finding["occurrences"], 2)
 
+    def test_a_fresh_publication_reopens_the_finding_for_the_next_recurrence(self):
+        """The published fresh proposal speaks for every later recurrence."""
+        candidate = self.prepare()["result"]["improvements"][0]
+        first = improvements.publish(self.foreman, self.store.dreaming.latest())
+        self.store.findings.decide(self.identity(candidate), "rejected", "No; too costly",
+                                   "2026-10-29T00:00:00+00:00")
+        self.gh.issues[("o/r", first["issues"][0]["issueNumber"])]["state"] = "closed"
+        later = self.again(candidate, base.AT + timedelta(days=8))
+        second = improvements.publish(self.foreman, later)
+        # A recurrence must clear the seven-day reflection cooldown first.
+        recurrence = self.again(later["result"]["improvements"][0], base.AT + timedelta(days=16))
+        third = improvements.publish(self.foreman, recurrence)
+        self.assertEqual(third["issues"][0]["issueNumber"], second["issues"][0]["issueNumber"])
+        self.assertEqual(len(self.gh.issues), 2)
+        self.assertEqual(len(self.gh.posted), 1)
+        repo, number, note = self.gh.posted[0]
+        self.assertEqual((repo, number), ("o/r", second["issues"][0]["issueNumber"]))
+        self.assertEqual(note, improvements.evidence_note(
+            recurrence["result"]["improvements"][0], recurrence))
+
+    def test_lost_create_response_for_a_superseded_cause_is_adopted(self):
+        """A dropped create for a fresh cause is adopted on retry, never repeated."""
+        candidate = self.prepare()["result"]["improvements"][0]
+        first = improvements.publish(self.foreman, self.store.dreaming.latest())
+        self.store.findings.decide(self.identity(candidate), "rejected", "No; too costly",
+                                   "2026-10-29T00:00:00+00:00")
+        self.gh.issues[("o/r", first["issues"][0]["issueNumber"])]["state"] = "closed"
+        later = self.again(candidate, base.AT + timedelta(days=8))
+        create = self.gh.create_issue
+        def lost(*args):
+            create(*args)
+            raise GitHubError(502, "response lost")
+        with mock.patch.object(self.gh, "create_issue", side_effect=lost), self.assertRaises(GitHubError):
+            improvements.publish(self.foreman, later)
+        result = improvements.publish(self.foreman, later)
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(len(self.gh.issues), 2)
+        self.assertNotEqual(result["issues"][0]["issueNumber"], first["issues"][0]["issueNumber"])
+
     def test_at_most_three_new_issues_per_run(self):
         first = self.prepare()
         candidate = first["result"]["improvements"][0]

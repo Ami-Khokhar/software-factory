@@ -77,6 +77,27 @@ class Findings:
                        (identity, doc["version"], encoded))
         return doc
 
+    def reopen(self, identity, reason, at):
+        """Return a rejected or resolved cause to open because newer evidence arrived."""
+        reason = text(reason, "reason", 500)
+        with self.store._lock, self.store._transaction():
+            db = self.store._db
+            row = db.execute("SELECT doc FROM findings WHERE id = ?", (identity,)).fetchone()
+            if row is None:
+                raise ValueError(f"no finding {identity}")
+            doc = json.loads(row[0])
+            doc["verdict"] = "open"
+            doc["reason"] = reason
+            doc["at"] = at
+            doc.pop("rejectedAt", None)
+            doc["version"] += 1
+            encoded = json.dumps(doc, sort_keys=True)
+            db.execute("INSERT OR REPLACE INTO findings VALUES (?,?,?,?)",
+                       (identity, doc["repo"], doc["version"], encoded))
+            db.execute("INSERT INTO finding_versions VALUES (?,?,?)",
+                       (identity, doc["version"], encoded))
+        return doc
+
     def link(self, identity, issue):
         """Link one finding to its issue without touching occurrences or decision times."""
         with self.store._lock, self.store._transaction():
