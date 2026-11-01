@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .knowledge import Knowledge
+from .findings import Findings
 from .dreaming import Dreaming
 
 SCHEMA = """
@@ -32,6 +33,13 @@ CREATE TABLE IF NOT EXISTS memory_nodes (
  version INTEGER NOT NULL, doc TEXT NOT NULL, search TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS memory_scope ON memory_nodes(repo, project);
 CREATE TABLE IF NOT EXISTS memory_versions (
+ id TEXT NOT NULL, version INTEGER NOT NULL, doc TEXT NOT NULL,
+ PRIMARY KEY(id, version));
+
+CREATE TABLE IF NOT EXISTS findings (
+ id TEXT PRIMARY KEY, repo TEXT NOT NULL, version INTEGER NOT NULL, doc TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS findings_repo ON findings(repo);
+CREATE TABLE IF NOT EXISTS finding_versions (
  id TEXT NOT NULL, version INTEGER NOT NULL, doc TEXT NOT NULL,
  PRIMARY KEY(id, version));
 
@@ -232,6 +240,7 @@ class Store:
         self._db.executescript(SCHEMA)
         self._migrate()
         self.knowledge = Knowledge(self)
+        self.findings = Findings(self)
         self.dreaming = Dreaming(self)
 
     def _migrate(self):
