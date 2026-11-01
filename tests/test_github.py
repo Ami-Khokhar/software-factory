@@ -57,6 +57,14 @@ class Api(BaseHTTPRequestHandler):
             body, link = [{"number": 3}], ""
         elif self.path in ("/repos/o/r/issues/404", "/repos/o/r/contents/.github/missing.json"):
             body, link, status = {"message": "Not Found"}, "", 404
+        elif self.path == "/repos/o/r/pulls/3":
+            body, link = {"number": 3, "state": "closed", "merged_at": "M"}, ""
+        elif self.path == "/repos/o/r/pulls/77":
+            body, link, status = {"message": "Not Found"}, "", 404
+        elif self.path.startswith("/repos/o/r/issues/6/timeline"):
+            body, link = [{"event": "labeled"},
+                          {"event": "cross-referenced", "source": {"issue": {"number": 3, "pull_request": {}}}},
+                          {"event": "cross-referenced", "source": {"issue": {"number": 77, "pull_request": {}}}}], ""
         elif self.path == "/repos/o/r/git/matching-refs/":
             body, link = [{"ref": "refs/tags/v1"}], ""
         elif self.path == "/repos/o/empty/git/matching-refs/":
@@ -125,6 +133,10 @@ class GitHubClientTest(unittest.TestCase):
         self.assertEqual(self.github.issue_timeline("o/r", 5), [{"id": 1}, {"id": 2}])
         self.assertEqual(len(Api.seen), 2)
         self.assertTrue(all(auth == "Bearer tok" for _, auth in Api.seen))
+
+    def test_closing_pull_names_the_merged_pull_for_the_issue_or_none(self):
+        self.assertEqual(self.github.closing_pull("o/r", 6), {"number": 3, "merged_at": "M"})
+        self.assertIsNone(self.github.closing_pull("o/r", 5))  # its timeline has no pull reference
 
     def test_issues_by_an_author_and_label_come_from_every_repo_with_their_repo_named(self):
         found = self.github.labelled_issues_by("amteshwar", "factory:ready")

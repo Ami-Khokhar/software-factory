@@ -132,6 +132,22 @@ class GitHub:
     def issue_timeline(self, repo, number):
         return self._get_all(f"/repos/{repo}/issues/{number}/timeline")
 
+    def closing_pull(self, repo, number):
+        """The merged pull request that closed `number`, as {"number", "merged_at"}, or None.
+        It follows the issue's timeline cross-references and reads each pull request back from
+        GitHub: a missing or unmerged pull request is None, never a guess."""
+        for event in self.issue_timeline(repo, number):
+            source = (event.get("source") or {}).get("issue") or {}
+            if event.get("event") != "cross-referenced" or "pull_request" not in source:
+                continue
+            try:
+                pull = self.pull(repo, source["number"])
+            except GitHubError:
+                continue
+            if pull.get("state") == "closed" and pull.get("merged_at"):
+                return {"number": pull["number"], "merged_at": pull["merged_at"]}
+        return None
+
     def comments(self, repo, number):
         return self._get_all(f"/repos/{repo}/issues/{number}/comments")
 

@@ -2,8 +2,11 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
+from factory_mcp.findings import reconcile
 from factory_mcp.store import Store
+from tests.fakes import FakeGitHub
 
 
 class FindingsTest(unittest.TestCase):
@@ -17,8 +20,22 @@ class FindingsTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def record(self, repo="acme/demo", fingerprint="slow-verify", summary="Verify runs twice",
-               evidence="audit:1", at="2026-11-01T00:00:00+00:00"):
-        return self.store.findings.record(repo, fingerprint, summary, evidence, at)
+               evidence="audit:1", at="2026-11-01T00:00:00+00:00", issue=7):
+        return self.store.findings.record(repo, fingerprint, summary, evidence, at, issue=issue)
+
+    def gh(self):
+        gh = FakeGitHub()
+        gh.add_issue("acme/demo", 7, state="closed")
+        gh.timelines[("acme/demo", 7)] = [
+            {"event": "cross-referenced", "source": {"issue": {"number": 9, "pull_request": {}}}}]
+        return gh
+
+    def config(self):
+        return SimpleNamespace(owner="acme")
+
+    def versions(self, doc):
+        return [self.store.findings.version(doc["id"], v)
+                for v in range(1, doc["version"] + 1)]
 
     def test_the_same_cause_is_one_row_with_two_occurrences(self):
         first = self.record(evidence="audit:1")
@@ -69,6 +86,78 @@ class FindingsTest(unittest.TestCase):
         self.assertEqual(first["lastSeen"], "2026-11-20T00:00:00+00:00")
         self.assertIn(kept["verdict"], ("open",))
 
+
+    def test_a_merge_is_not_a_resolution(self):
+        """A merged pull request lands the fix; only a quiet window or the owner resolves it."""
+        finding = self.record(at="2026-11-01T00:00:00+00:00")
+        gh = self.gh()
+        gh.add_pr("acme/demo", 9, "fix", "sha9", state="closed", merged=True,
+                  merged_at="2026-11-01T12:00:00Z")
+        reconcile(self.store, gh, self.config(), "2026-11-02T00:00:00+00:00")
+        stored = self.store.findings.get(finding["id"])
+        self.assertEqual(stored["verdict"], "fix_landed")
+        self.assertEqual(stored["fixPr"], 9)
+        self.assertEqual(stored["landedAt"], "2026-11-01T12:00:00Z")
+        self.assertEqual(stored["repo"], "acme/demo")
+        self.assertEqual([v["verdict"] for v in self.versions(stored)], ["open", "fix_landed"])
+
+    def test_a_quiet_window_resolves_a_landed_fix(self):
+        """A fix_landed finding with no occurrence since the merge resolves after quiet_days."""
+        finding = self.record(at="2026-11-01T00:00:00+00:00")
+        gh = self.gh()
+        gh.add_pr("acme/demo", 9, "fix", "sha9", state="closed", merged=True,
+                  merged_at="2026-11-01T12:00:00Z")
+        reconcile(self.store, gh, self.config(), "2026-11-02T00:00:00+00:00")
+        reconcile(self.store, gh, self.config(), "2026-11-30T00:00:00+00:00")
+        stored = self.store.findings.get(finding["id"])
+        self.assertEqual(stored["verdict"], "resolved")
+        self.assertEqual(stored["fixPr"], 9)
+        self.assertEqual([v["verdict"] for v in self.versions(stored)],
+                         ["open", "fix_landed", "resolved"])
+
+    def test_a_recurrence_after_a_merge_names_the_failed_fix(self):
+        """An occurrence after the merge returns the finding to open and names the fix."""
+        finding = self.record(at="2026-11-01T00:00:00+00:00")
+        gh = self.gh()
+        gh.add_pr("acme/demo", 9, "fix", "sha9", state="closed", merged=True,
+                  merged_at="2026-11-01T12:00:00Z")
+        reconcile(self.store, gh, self.config(), "2026-11-02T00:00:00+00:00")
+        self.record(at="2026-11-10T00:00:00+00:00")
+        reconcile(self.store, gh, self.config(), "2026-11-12T00:00:00+00:00")
+        stored = self.store.findings.get(finding["id"])
+        self.assertEqual(stored["verdict"], "open")
+        self.assertEqual(stored["failedFix"], 9)
+
+    def test_a_closed_issue_without_a_merge_is_a_rejection(self):
+        """Only the owner's last comment is the reason, sanitized and bounded."""
+        finding = self.record(at="2026-11-01T00:00:00+00:00")
+        gh = self.gh()
+        gh.timelines[("acme/demo", 7)] = []
+        gh.issue_comments[("acme/demo", 7)] = [
+            {"body": "first take", "created_at": "t1", "user": {"login": "acme"}},
+            {"body": "why  'now'?\t" + "x" * 600, "created_at": "t2", "user": {"login": "helper"}},
+            {"body": "Not now;  the window is closed", "created_at": "t3", "user": {"login": "acme"}}]
+        reconcile(self.store, gh, self.config(), "2026-11-02T00:00:00+00:00")
+        stored = self.store.findings.get(finding["id"])
+        self.assertEqual(stored["verdict"], "rejected")
+        self.assertEqual(stored["reason"], "Not now; the window is closed")
+        self.assertLessEqual(len(stored["reason"]), 500)
+
+    def test_unavailable_github_facts_change_nothing(self):
+        """A missing issue or an unset owner leaves the row exactly as it was."""
+        finding = self.record(at="2026-11-01T00:00:00+00:00")
+        gh = self.gh()
+        gh.issues.clear()
+        reconcile(self.store, gh, self.config(), "2026-11-02T00:00:00+00:00")
+        self.assertEqual(self.store.findings.get(finding["id"]), finding)
+        gh = self.gh()
+        gh.timelines[("acme/demo", 7)] = []
+        reconcile(self.store, gh, self.config(), "2026-11-02T00:00:00+00:00")
+        self.assertEqual(self.store.findings.get(finding["id"]), finding)
+        gh = self.gh()
+        gh.issues[("acme/demo", 7)]["state"] = "open"
+        reconcile(self.store, gh, self.config(), "2026-11-02T00:00:00+00:00")
+        self.assertEqual(self.store.findings.get(finding["id"]), finding)
 
 if __name__ == "__main__":
     unittest.main()
