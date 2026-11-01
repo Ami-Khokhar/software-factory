@@ -162,7 +162,8 @@ def reconcile(store, github, config, at, quiet_days=28):
                     store.findings._write(identity, at, verdict="fix_landed",
                                           reason=f"fix landed in #{pull['number']}",
                                           fixPr=pull["number"], landedAt=merged_at)
-                elif _ts(merged_at) < _ts(at) - timedelta(days=quiet_days):
+                elif _ts(doc["lastSeen"]) <= _ts(merged_at) and _ts(merged_at) < _ts(at) - timedelta(days=quiet_days):
+                    # quiet only counts since the merge: a recurrence keeps the finding open
                     store.findings._write(identity, at, verdict="resolved",
                                           reason=f"quiet for {quiet_days} days after #{pull['number']}")
         except (GitHubError, ToolError):

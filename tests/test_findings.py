@@ -133,6 +133,11 @@ class FindingsTest(unittest.TestCase):
         self.assertEqual(self.store.findings.get(finding["id"]), stored)
         self.assertEqual([self.store.findings.version(stored["id"], v)
                           for v in range(1, stored["version"] + 1)], history)
+        # past the quiet window since the merge, the recurrence still keeps it open
+        reconcile(self.store, gh, self.config(), "2026-12-05T00:00:00+00:00")
+        recurred = self.store.findings.get(finding["id"])
+        self.assertEqual(recurred["verdict"], "open")
+        self.assertEqual(recurred["failedFix"], 9)
 
     def test_a_closed_issue_without_a_merge_is_a_rejection(self):
         """Only the owner's last comment is the reason, sanitized and bounded."""
