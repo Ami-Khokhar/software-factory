@@ -25,8 +25,15 @@ def _git(args, cwd, env, timeout=120):
 
 
 def is_protected(name, protected_paths):
-    """True if a repo path is a protected path, or is under a protected directory (one ending in /)."""
-    return any(name == p or (p.endswith("/") and name.startswith(p)) for p in protected_paths)
+    """True if a repo path is a protected path or under one (ADR-0125): a protected name matches a run
+    of whole path segments anywhere in the path, so worker/.env, worker/secrets/key and
+    .github/workflows/ci.yml are refused, and docs/secrets.md is not."""
+    parts = name.split("/")
+    for p in protected_paths:
+        stems = [s for s in p.split("/") if s]
+        if any(parts[i:i + len(stems)] == stems for i in range(len(parts) - len(stems) + 1)):
+            return True
+    return False
 
 
 def _env(token):

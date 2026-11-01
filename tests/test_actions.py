@@ -146,7 +146,8 @@ class ActionsTest(unittest.TestCase):
         self.assertIn("changes protected path worker/.env", wi["attempts"][0])
 
     def test_control_and_credential_results_remain_protected(self):
-        for path in (".github/workflows/ci.yml", ".env", "secrets/key", ".claude/settings.json"):
+        for path in (".github/workflows/ci.yml", ".env", "secrets/key", ".claude/settings.json",
+                     "worker/.env", "backend/.env.local", "worker/secrets/key"):
             with self.subTest(path=path):
                 self.setUp()
                 wi, task = self.dispatched()
@@ -155,6 +156,11 @@ class ActionsTest(unittest.TestCase):
                 wi = self.tick()
                 self.assertEqual(wi["state"], "ready")
                 self.assertIn("changes protected path", wi["attempts"][0])
+        self.setUp()
+        wi, task = self.dispatched()
+        self.git.files = (("worker/main.py", 1, 0),)  # a controller or credential name at depth
+        self.relay.finish(task["id"], output=result_line(wi["activeWorkOrderId"]))
+        self.assertEqual(self.tick()["state"], "pr_open")
 
     def test_a_change_must_fit_one_pr(self):
         """ADR-0070 over ADR-0002: the line count is a small-PR target, not a wall — a whole-PR

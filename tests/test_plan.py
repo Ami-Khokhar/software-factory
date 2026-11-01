@@ -109,8 +109,10 @@ class StartPlanTest(unittest.TestCase):
         cases = [("raw.githubusercontent.com", True), ("AGENTS.mdx", True),
                  ("edit .github/workflows/ci.yml", False), ("keep `AGENTS.md`.", True),
                  ("docs/AGENTS.md", True), (".env.example", True),
-                 ("src/secrets/handler.py", True), ("docs/secrets.md", True),
-                 (".env", False), (".env.local", False), ("secrets/keys", False)]
+                 ("src/secrets/handler.py", False), ("docs/secrets.md", True),
+                 (".env", False), (".env.local", False), ("secrets/keys", False),
+                 ("edit the .github folder", False), (".github/workflows", False),
+                 ("keep secrets out of logs", True), ("add the Actions secrets", True)]
         for mention, accepted in cases:
             with self.subTest(mention):
                 self.setUp()
