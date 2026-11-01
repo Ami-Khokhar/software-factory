@@ -110,7 +110,7 @@ class FollowupApprovalTest(unittest.TestCase):
                     "uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "b" * 40)
                 if flaw == "wrong reusable workflow": self.run["referenced_workflows"][0]["path"] = "forged"
                 if flaw == "duplicate base pin": self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")] = (
-                    "# uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "b" * 40
+                    "uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "a" * 40
                     + "\nuses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "a" * 40
                     + "\ngatekeeper_ref: " + "a" * 40)
                 if flaw == "late link": self.link["created_at"] = "2026-10-17T08:52:40Z"
@@ -138,6 +138,14 @@ class FollowupApprovalTest(unittest.TestCase):
         escalation = [h["detail"] for h in self.f.store.history("o/r#60")
                       if h["action"] == "approval_invalid"][-1]
         self.assertIn("provenance", escalation["escalation"])
+
+    def test_a_commented_old_pin_in_the_caller_still_approves(self):
+        """Guard: only anchored `uses:` lines count as pins, so an upgrade that preserves a
+        commented-out pin (ADR-0080) leaves a caller with exactly one live revision approvable."""
+        self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")] = (
+            "# upgrade kept the old pin: uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@"
+            + "b" * 40 + "\n" + self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")])
+        self.assertFalse(self.call()[0])
 
     def test_provenance_validates_once_per_approval_and_per_pass(self):
         """A counting fake sees one validation per approval and one per dispatched pass."""

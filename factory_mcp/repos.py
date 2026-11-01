@@ -26,9 +26,11 @@ GATE_WORKFLOW_SOURCE = TEMPLATE.parent.parent / GATE_WORKFLOW
 LABELS = ((READY, "0E8A16", "software-factory may work on this issue"),
           (PROPOSED, "C5DEF5", "proposed by the Planner; add factory:ready to accept"))
 # The two lines that pin the gate revision in a pr-gatekeeper caller workflow. The wrapper's
-# `uses:` sha and the `gatekeeper_ref:` input are the only lines an upgrade rewrites.
-GATE_USES = re.compile(r"(uses:\s*\S+/\.github/workflows/gatekeeper\.yml@)([0-9a-fA-F]{40})")
-GATE_REF = re.compile(r"(gatekeeper_ref:\s*)([0-9a-fA-F]{40})")
+# `uses:` sha and the `gatekeeper_ref:` input are the only lines an upgrade rewrites. Both are
+# anchored to real line starts with re.M, so text kept in a comment (ADR-0080 preserves
+# comments on upgrade) is never read as a pin and never makes a caller look ambiguous.
+GATE_USES = re.compile(r"(?m)^(\s*uses:\s*\S+/\.github/workflows/gatekeeper\.yml@)([0-9a-fA-F]{40})")
+GATE_REF = re.compile(r"(?m)^(\s*gatekeeper_ref:\s*)([0-9a-fA-F]{40})")
 
 
 def protected_paths(github, repo, base_sha, required):
