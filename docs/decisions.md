@@ -371,6 +371,10 @@ lesson. When WorkOrders carry lessons, they stay data under the worker rules, li
 
 ## ADR-0021 — Day Desk's shell runs in a Docker sandbox
 
+Superseded by ADR-0125 on the AGENTS.md entry of these shell limits: the installed SOUL and SKILL
+control lists drop it, so the shell may change AGENTS.md like any other instruction file under
+normal review.
+
 **Context.** ADR-0013 gave Day Desk no shell, because a host shell runs as the owner: it could
 read the profile's `.env` and call factory tools with no approval. So the owner had to make each
 repo's first commit by hand, and Day Desk could not read a repo to plan issues for it.
@@ -2976,7 +2980,10 @@ separate owner-reviewed PRs. Never silently delete custom protections during boo
 
 **Consequence.** Instruction changes can ship without filename-only escalation after activation.
 They do not authorise themselves, weaken review, or bypass a blocking finding. Existing orders
-retain their original fences. docs/RUNBOOK.md records migration and live acceptance.
+retain their original fences. docs/RUNBOOK.md records migration and live acceptance. A control or
+credential name matches whole path segments at any depth when a patch path or a plan mention is
+checked (worker/.env under `.env`, worker/secrets/key under `secrets/`, .github/workflows/ci.yml
+under `.github/`), so the plan consummately refuses what the patch guard would refuse.
 
 
 ## ADR-0126 — Owner-approved, health-bound worker membership
