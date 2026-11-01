@@ -3083,6 +3083,9 @@ patch on the checkpoint.
 **Consequence.** An unchanged successful implement continuation now finalizes its retained work
 instead of failing "no change", and extra edits apply on the original base. There is no new API,
 state or schema field: the Result's existing `patch.baseSha` carries the collection base, and
-the Foreman already prefers it. Rollout is evidence-bound: merged source is not a deployed
+the Foreman already prefers it, and the collection step keeps the launch checkpoint as a second
+ancestry guard (its own env beside the base check), so a harness that rewrites history below the
+checkpoint still fails with the history-rewrite error rather than completing with a patch that
+misses the retained work. Rollout is evidence-bound: merged source is not a deployed
 runner, so the relay item that triggered this stays blocked until the running revision and a
 representative guarded continuation are verified.

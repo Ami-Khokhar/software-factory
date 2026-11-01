@@ -819,7 +819,9 @@ and that the `factory-update` job names: `/usr/bin/python3 -m pip install -r req
   as a patch against the checkpoint's original default-branch base (its `patch.baseSha`), so the
   pushed commit keeps everything (ADR-0130). A fix continuation keeps the checkpoint as its
   applied base, its patch continuing the reviewed PR head; a timed-out pass still salvages
-  exactly as before, its partial patch applying on the checkpoint itself.
+  exactly as before, its partial patch applying on the checkpoint itself. The collection step
+  still refuses any kind of continuation whose checkout no longer descends from the launch
+  checkpoint, so a harness that resets below it cannot complete with the retained work dropped.
 
   A timed-out attempt routes the next pass to another model
   family and the block waits for the policy's failover, at most once per budget (ADR-0081): the

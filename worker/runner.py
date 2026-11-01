@@ -43,6 +43,9 @@ EXTRACT = """set -e
 git add -A
 if ! git diff --cached --quiet; then git -c core.hooksPath=/dev/null commit -q -m "$FACTORY_GOAL"; fi
 git merge-base --is-ancestor "$FACTORY_BASE" HEAD || exit 3
+if [ -n "$FACTORY_PARENT" ]; then
+  git merge-base --is-ancestor "$FACTORY_PARENT" HEAD || exit 3
+fi
 git diff --binary "$FACTORY_BASE" HEAD
 echo "FACTORY_PR_SIZE: $(git diff --shortstat "$(git merge-base "$FACTORY_DEFAULT" HEAD)" HEAD)" >&2
 git diff --numstat "$(git merge-base "$FACTORY_DEFAULT" HEAD)" HEAD | sed 's/^/FACTORY_PR_NUMSTAT: /' >&2
@@ -484,7 +487,7 @@ def numstat_totals(err):
     return change_totals(files)
 
 
-def collect(sandbox, work, base, default, goal, limits):
+def collect(sandbox, work, base, default, goal, limits, parent=None):
     """The harness's work as one unified diff against `base`, computed in the sandbox. Uncommitted
     changes are committed first, so a harness that forgot to commit still hands its work over.
     Refuses the work when the whole pull request — every commit on the branch against the default
@@ -492,10 +495,14 @@ def collect(sandbox, work, base, default, goal, limits):
     counts source additions and deletions only; tests and docs are reported separately (ADR-0079).
     Over the source target warns, over the source ceiling refuses as a size-only excess the Foreman
     routes to decomposition, and over the file count refuses: that stands in for an expensive verify,
-    and factory-mcp's own prepush check stays for a base that advanced under the pass."""
-    code, diff, err = sandbox.run(["sh", "-c", EXTRACT], 300, work,
-                                  env={"FACTORY_BASE": base, "FACTORY_DEFAULT": default,
-                                       "FACTORY_GOAL": goal})
+    and factory-mcp's own prepush check stays for a base that advanced under the pass. `parent`
+    names a second commit that must also be an ancestor of HEAD — for a completed implement
+    continuation, the launch checkpoint, so a harness that rewrote history below it cannot hand
+    back a patch that silently drops the retained work."""
+    env = {"FACTORY_BASE": base, "FACTORY_DEFAULT": default, "FACTORY_GOAL": goal}
+    if parent is not None and parent != base:
+        env["FACTORY_PARENT"] = parent
+    code, diff, err = sandbox.run(["sh", "-c", EXTRACT], 300, work, env=env)
     if code == 3:
         raise WorkerError("the harness rewrote history below the commit it was given", 3)
     if code != 0:
@@ -745,7 +752,8 @@ def main(argv=None):
             collected_base = order["baseSha"]
         patch_start = time.monotonic()
         try:
-            diff = collect(sandbox, work, collected_base, default, order["goal"], order["constraints"])
+            diff = collect(sandbox, work, collected_base, default, order["goal"], order["constraints"],
+                           parent=base)
         except WorkerError as exc:
             record("patch collection", patch_start, getattr(exc, "code", None), str(exc))
             raise

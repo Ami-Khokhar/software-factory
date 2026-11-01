@@ -203,7 +203,10 @@ and direct the caller to the approved template. Credential mounts over container
   verify. Its completed `patch` is the whole work — the retained implementation plus any new
   edits — as a diff against the original `baseSha`, and `patch.baseSha` names that original
   base, so the Foreman's apply keeps the checkpoint content. The pass refuses a checkpoint that
-  no longer builds on `baseSha` (ancestry), a moved scratch branch or a moved default. A truly
+  no longer builds on `baseSha` (ancestry), a moved scratch branch or a moved default, and the
+  collection step re-checks the launch checkpoint's ancestry itself: a harness that rewrote
+  history below the checkpoint fails with the history-rewrite error instead of a completed patch
+  that silently drops the retained work. A truly
   empty whole work, a failed verify and a timeout stay refused exactly as before — a timeout's
   unverified partial keeps its exact provenance, a patch on the checkpoint itself. A fix
   continuation keeps the checkpoint as the applied base: its patch continues the reviewed head.

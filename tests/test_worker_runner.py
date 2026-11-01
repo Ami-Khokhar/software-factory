@@ -41,7 +41,10 @@ if mode == "cheat":
     open("app.txt", "w").write("still broken\n")
 if mode == "extrafile":  # a continuation that adds work on top of the retained checkpoint
     open("extra.txt", "w").write("extra\n")
-if mode in ("fix", "noisy", "echo", "cheat", "extrafile"):
+if mode == "rewind":  # a continuation that rewrites history below the launch checkpoint first
+    git("reset", "--hard", "source/main")
+    open("extra.txt", "w").write("rewound\n")
+if mode in ("fix", "noisy", "echo", "cheat", "extrafile", "rewind"):
     git("add", "-A")
     git("-c", "user.name=h", "-c", "user.email=h@h", "commit", "-qm", "harness work")
 if mode == "plant":  # a filter driver and hooks, which run wherever git touches this tree
@@ -69,6 +72,10 @@ if mode == "salvage":  # a partial fix left uncommitted, then the harness runs o
     open("app.txt", "w").write("partial fix\n")
     sys.exit(124)
 if mode == "salvage-nomod":  # the clock runs out with the checkout unchanged
+    sys.exit(124)
+if mode == "rewind-salvage":  # rewrite history below the checkpoint, then run out of clock
+    git("reset", "--hard", "source/main")
+    open("app.txt", "w").write("partial fix\n")
     sys.exit(124)
 if mode == "timeout":
     print("step one", flush=True)
@@ -504,6 +511,41 @@ class RunnerTest(unittest.TestCase):
         fresh = self.apply_on(self.base, result["patch"]["diff"])
         self.assertEqual((fresh / "checkpoint.txt").read_text(), "checkpoint fix\n")
         self.assertEqual((fresh / "extra.txt").read_text(), "extra\n")
+
+    def test_an_implement_continuation_that_rewinds_below_the_checkpoint_is_refused(self):
+        """#451: collection runs against the original base, but the launch checkpoint still guards
+        it — a harness that resets its copy below the checkpoint (the wiki copy exposes source/*)
+        and commits its own work is refused with the same history-rewrite error as before, so the
+        retained checkpoint can never be silently dropped from a completed patch."""
+        checkpoint = self.implement_checkpoint("checkpoint fix\n")
+        result, order = self.implement_continuation_order(checkpoint, "rewind")
+        self.assertEqual((result["status"], result["error"]),
+                         ("failed", "the harness rewrote history below the commit it was given"))
+        self.assertNotIn("patch", result)
+        self.assertEqual(documents.check_result(result, order), [])
+
+    def test_a_fix_continuation_that_rewinds_below_the_checkpoint_is_refused(self):
+        """Guard: the launch checkpoint ancestry check holds for every continuation kind, not just
+        the collection-base rewrite of the implement kind."""
+        checkpoint = self.extra_commit("checkpoint\n")
+        sh(self.checkout, "push", "-q", "origin", f"{self.base}:refs/heads/factory/7")
+        sh(self.checkout, "push", "-q", "origin", f"{checkpoint}:refs/heads/factory-wip/7")
+        result, order = self.run_order("rewind", kind="fix", head=self.base, continuation=checkpoint)
+        self.assertEqual((result["status"], result["error"]),
+                         ("failed", "the harness rewrote history below the commit it was given"))
+        self.assertNotIn("patch", result)
+        self.assertEqual(documents.check_result(result, order), [])
+
+    def test_a_timeout_after_a_rewind_still_ends_failed_with_no_partial(self):
+        """Guard: the salvage path collects against the launch checkpoint with the same ancestry
+        guard, so a checkout that rewrote history below the checkpoint leaves no partial patch —
+        and the timeout provenance for an intact checkout is unchanged."""
+        checkpoint = self.implement_checkpoint("fixed\n")
+        sh(self.checkout, "push", "-q", "origin", f"{checkpoint}:refs/heads/factory-wip/7")
+        result, order = self.run_order("rewind-salvage", continuation=checkpoint)
+        self.assertEqual((result["status"], result["error"]), ("failed", "the harness timed out"))
+        self.assertNotIn("patch", result)
+        self.assertEqual(documents.check_result(result, order), [])
 
     def test_a_failing_verify_leaves_the_implement_continuation_unpublished(self):
         """#451: verification runs before any completed checkpoint; a failing verify is a failed
