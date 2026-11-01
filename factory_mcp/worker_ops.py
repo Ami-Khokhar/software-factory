@@ -379,19 +379,44 @@ def set_enabled(store, config, worker_id, enabled, by, note, *, agent=False, own
     return {"worker": worker_id, "enabled": enabled}
 
 
+def _honour(store, config, worker_id, row):
+    """(binding, None) when an enabled activation row can be honoured, else (None, why not).
+
+    The reason a person should read in factory_status or an escalation: the row is enabled, so
+    "no local worker" is never the truth about why it does not route (ADR-0113)."""
+    try:
+        binding = current_binding(config, worker_id)
+    except ToolError as exc:
+        return None, f"{worker_id} is enabled but cannot be used: {exc}"
+    health = store.worker_health(worker_id)
+    if binding != row["binding"]:
+        return None, (f"{worker_id} is enabled but its stored binding no longer matches this "
+                      "config or image; run factory_check_worker")
+    if not (health and health["status"] == "healthy" and health["binding"] == binding):
+        return None, (f"{worker_id} is enabled but it has no fresh healthy check for this binding; "
+                      "run factory_check_worker")
+    return binding, None
+
+
+def unusable_reasons(store, config):
+    """Why each enabled activation row is missing from effective workers; [] when none fails."""
+    reasons = []
+    for row in store.worker_activations():
+        if row["enabled"]:
+            _, reason = _honour(store, config, row["worker"], row)
+            if reason:
+                reasons.append(reason)
+    return reasons
+
+
 def effective_workers(store, config):
     workers = dict(config.workers)
     for row in store.worker_activations():
         worker_id = row["worker"]
         workers.pop(worker_id, None)
         if row["enabled"]:
-            try:
-                binding = current_binding(config, worker_id)
-            except ToolError:
-                continue
-            health = store.worker_health(worker_id)
-            if (binding == row["binding"] and health and health["status"] == "healthy"
-                    and health["binding"] == binding):
+            binding, reason = _honour(store, config, worker_id, row)
+            if reason is None:
                 workers[worker_id] = dict(config.workers).get(worker_id, "hosted")
     # Retain the configured preference order, appending newly activated hosted workers.
     order = dict.fromkeys([*(name for name, _ in config.workers), *workers])

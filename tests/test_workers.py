@@ -1,10 +1,12 @@
 """Routing by locality with failover, and patch Results that factory-mcp pushes with real git."""
+import json
 import os
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
-from factory_mcp import patches
+from factory_mcp import patches, worker_ops
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
@@ -342,6 +344,30 @@ class WorkerTest(unittest.TestCase):
         with self.assertRaisesRegex(patches.PatchError, "not UTF-8 text"):
             patches.apply(self.bare, "", "factory/7", "main", {"format": "unified", "diff": "diff \ud800\n"},
                           "Nothing", force=True)
+
+    def test_local_only_fallback_names_an_enabled_worker_it_cannot_honour(self):
+        """An enabled activation row that routing drops keeps its reason in the escalation:
+        a person reads the real cause, never "no local worker" when FACTORY_WORKERS is fine."""
+        credential = os.path.join(self.tmp.name, "auth.json")
+        open(credential, "w").write("auth")
+        registry = os.path.join(self.tmp.name, "agents.json")
+        with open(registry, "w") as handle:
+            json.dump({"agents": [{"id": "pi-glm", "command": "python3", "args": [
+                str(worker_ops.RUNNER), "--image", "factory-worker:latest",
+                "--credential", f"{credential}:/tmp/auth",
+                "--", "opencode", "run", "--model", "pi/glm"], "timeoutMs": 1000}]}, handle)
+        foreman = self.foreman(workers=WORKERS, local_only_repos=frozenset({REPO}), agents_file=registry)
+        foreman.store.set_worker_activation("pi-glm", 1, "any stored binding",
+                                            {"worker": "pi-glm", "enabled": True,
+                                             "binding": "any stored binding", "by": "Day Desk",
+                                             "note": "enabled for the test", "agent": True})
+        with mock.patch.object(worker_ops, "_image_id", return_value=None):
+            wi = foreman.tick(ID)["workItem"]
+        self.assertEqual(wi["state"], "human_waiting")
+        self.assertEqual([r["action"] for r in foreman.store.history(ID) if r["action"] == "no_worker"],
+                         ["no_worker"])
+        self.assertIn("pi-glm is enabled but cannot be used: worker image is unavailable; "
+                      "repair it and rerun factory_check_worker", wi["blockedOn"])
 
     def test_local_only_repo(self):
         # FACTORY_LOCAL_ONLY_REPOS may spell the repo in another case: GitHub repo names ignore case
