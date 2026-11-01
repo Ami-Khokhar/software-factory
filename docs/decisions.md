@@ -3040,3 +3040,21 @@ proposals the owner starts. A mention is only a notification and never approval;
 stays the owner's explicit signal, and documentation work never enters the automatic admission
 path. The candidate shape, the three-improvement cap, the evidence rule and existing prohibitions
 are unchanged.
+
+
+## ADR-0129 — An enabled worker that cannot be honoured names itself in the escalation
+
+**Context.** While routing, `effective_workers` dropped enabled activation rows whose health
+checking failed without keeping the reason (issue #458): Docker was down, yet every ready WorkItem
+escalated `... is local-only and FACTORY_WORKERS has no local worker`, and three items moved to
+`human_waiting` for a reason that was not true.
+
+**Decision.** Routing asks one helper why an enabled row is missing. Its text — the worker id and
+the cause: an unavailable worker image, a drifted stored binding, missing healthy checks, or
+malformed registry data — joins the `no_worker` escalation's `blockedOn` after the existing
+message. Routing itself is unchanged: no enabled row means no added text, and every existing
+check keeps its threshold.
+
+**Consequence.** A person reads the real cause in `factory_status` and the escalation instead of
+chasing FACTORY_WORKERS. No tool, schema or stored-data change; the reason is advisory text on an
+existing action.

@@ -962,9 +962,14 @@ class Foreman:
                 return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=(
                     "every allowed worker is in the reviewer family "
                     + ", ".join(sorted(excluded)) + dropped)), "no_worker", **audit)
-            return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=(
-                f"{wi['repo']} is local-only and FACTORY_WORKERS has no local worker" + dropped)),
-                "no_worker", **audit)
+            problems = worker_ops.unusable_reasons(self.store, self.config)
+            # An enabled row that could not be honoured says why, so a person never chases
+            # FACTORY_WORKERS when the real cause is Docker, a drifted binding or bad registry data.
+            no_worker = (f"{wi['repo']} is local-only and FACTORY_WORKERS has no local worker"
+                         + dropped
+                         + ("; " + "; ".join(problems) if problems else ""))
+            return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=no_worker),
+                               "no_worker", **audit)
         if wi.get("wallMsOverride") is not None:
             try:
                 self._check_timeout(wi["wallMsOverride"])

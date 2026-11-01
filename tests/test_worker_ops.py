@@ -9,6 +9,8 @@ from unittest import mock
 
 from factory_mcp import worker_ops
 from factory_mcp.config import Config
+
+BASELINE_WORKERS = (("codex", "hosted"),)  # Config's default worker order
 from factory_mcp.mcp import ToolError
 from factory_mcp.store import Store
 from tests.fakes import FakeRelay
@@ -37,10 +39,50 @@ class WorkerOpsTest(unittest.TestCase):
                            {"ts": "2026-10-19T10:00:01Z", "event": "probe", "tool": "opencode",
                             "status": "ok", "exitCode": 0, "retries": 0}]}
 
+    def enable(self):
+        """A healthy check and its exact binding, then the enabled activation row."""
+        with mock.patch.object(worker_ops, "_image_id", return_value="sha256:" + "a" * 64):
+            self.check()
+            worker_ops.set_enabled(self.store, self.config, "opencode-mimo-factory", True,
+                                   "Day Desk", "Enable the worker", agent=True)
+
     def check(self):
         with mock.patch.object(worker_ops, "_image_id", return_value="sha256:" + "a" * 64), \
              mock.patch.object(worker_ops, "_run", return_value=(self.health, True)):
             return worker_ops.check(self.store, self.config, "opencode-mimo-factory", "Day Desk", agent=True)
+
+    def test_an_image_an_enabled_row_cannot_see_says_so(self):
+        self.enable()
+        with mock.patch.object(worker_ops, "_image_id", return_value=None):
+            self.assertEqual(worker_ops.effective_workers(self.store, self.config), BASELINE_WORKERS)
+        self.assertEqual(worker_ops.unusable_reasons(self.store, self.config), [
+            "opencode-mimo-factory is enabled but cannot be used: worker image is unavailable; "
+            "repair it and rerun factory_check_worker"])
+
+    def test_an_enabled_row_whose_stored_binding_drifted_says_so(self):
+        self.enable()
+        self.agent["args"][-1] = "opencode/mimo-other"
+        self.registry.write_text(json.dumps({"agents": [self.agent]}))
+        with mock.patch.object(worker_ops, "_image_id", return_value="sha256:" + "a" * 64):
+            self.assertEqual(worker_ops.effective_workers(self.store, self.config), BASELINE_WORKERS)
+            self.assertEqual(worker_ops.unusable_reasons(self.store, self.config), [
+                "opencode-mimo-factory is enabled but its stored binding no longer matches this "
+                "config or image; run factory_check_worker"])
+
+    def test_an_enabled_row_with_malformed_registry_data_says_so(self):
+        self.enable()
+        self.agent["args"][0] = "echo"
+        self.registry.write_text(json.dumps({"agents": [self.agent]}))
+        with mock.patch.object(worker_ops, "_image_id", return_value="sha256:" + "a" * 64):
+            self.assertEqual(worker_ops.effective_workers(self.store, self.config), BASELINE_WORKERS)
+            self.assertEqual(worker_ops.unusable_reasons(self.store, self.config), [
+                "opencode-mimo-factory is enabled but cannot be used: worker does not run this "
+                "deployment's worker/runner.py"])
+
+    def test_a_disabled_row_yields_no_reasons(self):
+        self.store.set_worker_activation("opencode-mimo-factory", False, "", {"worker": "opencode-mimo-factory"})
+        self.assertEqual(worker_ops.unusable_reasons(self.store, self.config), [])
+        self.assertEqual(worker_ops.effective_workers(self.store, self.config), BASELINE_WORKERS)
 
     def test_a_health_check_persists_a_bounded_binding_without_dispatching_a_workorder(self):
         result = self.check()
