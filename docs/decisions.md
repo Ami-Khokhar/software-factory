@@ -3096,3 +3096,23 @@ checkpoint still fails with the history-rewrite error rather than completing wit
 misses the retained work. Rollout is evidence-bound: merged source is not a deployed
 runner, so the relay item that triggered this stays blocked until the running revision and a
 representative guarded continuation are verified.
+
+
+## ADR-0131 — Membership is walked once per routing decision, and drift names itself in the audit
+
+**Context.** Follow-up to #436 (issue #437): the Foreman computed `effective_workers`, and on the
+no-worker path asked `unusable_reasons` for why enabled rows were missing — two docker image
+inspects per enabled row per dispatch decision — and when a worker silently dropped out, no row
+distinguished `not activated` from `activated but failed closed`.
+
+**Decision.** `worker_ops.membership` returns the effective workers and the missing-row reasons
+(#458, ADR-0129) from one pass over the activation rows; the dispatch uses that pair, so routing
+order and thresholds never see a membership computed twice. A dropped enabled row writes a
+`worker_membership_drift` audit row naming the worker and the cause, at most once per worker and
+cause per short window, so a ticking instance does not flood the audit. No tool, schema, or
+threshold changes; a host with no enabled rows routes exactly as before.
+
+**Consequence.** A store with several activated workers costs one image inspect per row per
+decision instead of two, and an operator reads in the audit why an enabled member stopped being
+routed. The duplicated row is the price of visibility from any membership read, not only the
+no-worker escalation.

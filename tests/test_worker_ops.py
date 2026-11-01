@@ -69,6 +69,61 @@ class WorkerOpsTest(unittest.TestCase):
                 "opencode-mimo-factory is enabled but its stored binding no longer matches this "
                 "config or image; run factory_check_worker"])
 
+    def test_a_dropped_enabled_worker_logs_a_drift_row_naming_itself_and_its_cause(self):
+        self.enable()
+        self.agent["args"][-1] = "opencode/mimo-other"
+        self.registry.write_text(json.dumps({"agents": [self.agent]}))
+        with mock.patch.object(worker_ops, "_image_id", return_value="sha256:" + "a" * 64):
+            self.assertEqual(worker_ops.effective_workers(self.store, self.config), BASELINE_WORKERS)
+        rows = [row for row in self.store.global_history()
+                if row["action"] == "worker_membership_drift"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["detail"]["worker"], self.agent["id"])
+        self.assertIn("stored binding no longer matches", rows[0]["detail"]["reason"])
+
+    def test_an_unavailable_image_that_drops_a_worker_names_the_worker_in_a_drift_row(self):
+        self.enable()
+        with mock.patch.object(worker_ops, "_image_id", return_value=None):
+            self.assertEqual(worker_ops.unusable_reasons(self.store, self.config), [
+                "opencode-mimo-factory is enabled but cannot be used: worker image is unavailable; "
+                "repair it and rerun factory_check_worker"])
+        rows = [row for row in self.store.global_history()
+                if row["action"] == "worker_membership_drift"]
+        self.assertEqual([row["detail"]["worker"] for row in rows], [self.agent["id"]])
+        self.assertIn("cannot be used", rows[0]["detail"]["reason"])
+
+    def test_one_routing_decision_walks_two_enabled_rows_once_each_with_drift_still_dropping(self):
+        """Both the image inspect cost and the dropped row: a dispatch decision inspects each
+        enabled row at most once (#437), whatever happened to the routing that follows it."""
+        second = {"id": "opencode-pluto-factory", "command": "python3", "args": [
+            str(worker_ops.RUNNER), "--credential", f"{self.credential}:/tmp/auth",
+            "--", "opencode", "run", "--model", "opencode/pluto-free"], "timeoutMs": 1500000}
+        self.registry.write_text(json.dumps({"agents": [self.agent, second]}))
+        inspects = []
+        with mock.patch.object(worker_ops, "_image_id", side_effect=lambda image: (
+                inspects.append(image), "sha256:" + "a" * 64)[1]), \
+             mock.patch.object(worker_ops, "_run", return_value=(self.health, True)):
+            for worker_id in (self.agent["id"], second["id"]):
+                worker_ops.check(self.store, self.config, worker_id, "Day Desk", agent=True)
+                worker_ops.set_enabled(self.store, self.config, worker_id, True, "Day Desk",
+                                       "Enable the worker", agent=True)
+            inspects.clear()
+            workers, problems = worker_ops.membership(self.store, self.config)
+            self.assertEqual(len(inspects), 2)  # one docker inspect per enabled row, not more
+            self.assertEqual(workers, (*self.config.workers,
+                                       (self.agent["id"], "hosted"), (second["id"], "hosted")))
+            self.assertEqual(problems, [])
+            # A drifted stored binding still drops its own worker, and costs no second inspect.
+            self.agent["args"][-1] = "opencode/mimo-other"
+            self.registry.write_text(json.dumps({"agents": [self.agent, second]}))
+            inspects.clear()
+            workers, problems = worker_ops.membership(self.store, self.config)
+            self.assertEqual(len(inspects), 2)
+            self.assertEqual(problems, [
+                "opencode-mimo-factory is enabled but its stored binding no longer matches this "
+                "config or image; run factory_check_worker"])
+            self.assertEqual(workers, (*self.config.workers, (second["id"], "hosted")))
+
     def test_an_enabled_row_with_malformed_registry_data_says_so(self):
         self.enable()
         self.agent["args"][0] = "echo"
