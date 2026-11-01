@@ -813,12 +813,26 @@ and that the `factory-update` job names: `/usr/bin/python3 -m pip install -r req
   WorkOrder, scratch branch head, reviewed PR head, or default branch base no longer matches its
   saved provenance. `FACTORY_SALVAGE=off` turns this off. The wip moves forward at most
   twice, and a partial touching a protected path is never kept; a completed Result, a merge or an
-  end deletes the scratch branch and clears the `wip`. A timed-out attempt routes the next pass to another model
+  end deletes the scratch branch and clears the `wip`. An implement pass that resumes one of
+  these checkpoints (an implement continuation) launches from and verifies at the checkpoint, but
+  its completed Result carries the whole work — the retained implementation plus its new edits —
+  as a patch against the checkpoint's original default-branch base (its `patch.baseSha`), so the
+  pushed commit keeps everything (ADR-0130). A fix continuation keeps the checkpoint as its
+  applied base, its patch continuing the reviewed PR head; a timed-out pass still salvages
+  exactly as before, its partial patch applying on the checkpoint itself.
+
+  A timed-out attempt routes the next pass to another model
   family and the block waits for the policy's failover, at most once per budget (ADR-0081): the
   `recovery` audit rows say what was chosen, and `recovery_result` whether it held.
 - **Stuck in `dispatching` with `relay 401`.** The relay refused factory-mcp's token. factory-mcp
   sends `AGENT_RELAY_TOKEN` from its settings or secrets, else `~/.config/agent-relay/token`;
   make it match the relay's (`AGENT_RELAY_TOKEN` in the relay's environment, else that file).
+- **A relay item stuck behind a runner repair.** Merged source is not deployed runner evidence:
+  a fix to `worker/runner.py` that is merged keeps nothing on a running relay until the
+  *deployed* revision is verified against a representative guarded continuation. For example
+  (Nov 2026), relay work item agent-relay#155 and its successors stayed blocked until the running
+  revision after the launch-vs-collection-base repair (ADR-0130) had been verified that way
+  (ADR-0051); do not retry or close such an item because the fix merged.
 - **Ready or dispatched again after a relay restart.** The relay keeps its tasks and request ids in
   memory, so a restart loses an accepted task. factory-mcp reconciles the facts, then re-queues the
   same WorkOrder under the same idempotency key with no attempt recorded, up to `RELAY_RETRIES_MAX`

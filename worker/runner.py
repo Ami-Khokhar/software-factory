@@ -297,6 +297,16 @@ def prepare(cwd, order, branch, work):
             raise WorkerError("the checkpoint branch moved after it was checked")
         if default != order.get("baseSha"):
             raise WorkerError("the default branch base moved after the checkpoint was checked")
+        # A completed implement continuation collects the whole work against the original baseSha
+        # (#451), so the checkpoint must still build on that base or the collected patch would not
+        # apply on it, and the WorkOrder must name the base at all.
+        if order["kind"] == "implement":
+            if not order.get("baseSha"):
+                raise WorkerError("an implement continuation names no original base")
+            try:
+                git(cwd, "merge-base", "--is-ancestor", order["baseSha"], order["continuationSha"])
+            except WorkerError:
+                raise WorkerError("the checkpoint does not build on the WorkOrder's base") from None
     git(os.path.dirname(work), "clone", "-q", "--no-hardlinks", "--no-checkout", cwd, work)
     git(work, "fetch", "-q", cwd, "+refs/remotes/origin/*:refs/remotes/source/*")
     git(work, "remote", "remove", "origin")
@@ -726,9 +736,16 @@ def main(argv=None):
         if code != 0:
             detail = " ".join((err or out).split())[-300:]
             raise WorkerError(f"the harness exited {code}" + (f": {detail}" if detail else ""))
+        # A completed implement continuation finalizes the retained checkpoint plus any new edits
+        # against the WorkOrder's original baseSha, so the Foreman's apply path keeps the checkpoint
+        # content (#451); the pass still launched from and verifies the checkpoint (launch_base above).
+        # A fix keeps the checkpoint as the applied base: its patch continues the reviewed head.
+        collected_base = base
+        if order["kind"] == "implement" and order.get("continuationSha"):
+            collected_base = order["baseSha"]
         patch_start = time.monotonic()
         try:
-            diff = collect(sandbox, work, base, default, order["goal"], order["constraints"])
+            diff = collect(sandbox, work, collected_base, default, order["goal"], order["constraints"])
         except WorkerError as exc:
             record("patch collection", patch_start, getattr(exc, "code", None), str(exc))
             raise
@@ -745,7 +762,8 @@ def main(argv=None):
             if code != 0:
                 detail = redact(output[-400:], secrets, limit=400)
                 raise WorkerError(f"verify exited {code}: {detail}")
-        result.update(status="completed", patch={"format": "unified", "diff": diff, "baseSha": base})
+        result.update(status="completed",
+                      patch={"format": "unified", "diff": diff, "baseSha": collected_base})
     except WorkerError as exc:
         result["error"] = str(exc)
     except Exception as exc:  # noqa: BLE001 - any failure must still end in a Result line
