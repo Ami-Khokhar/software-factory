@@ -451,8 +451,10 @@ def cmd_status(args):
             changed = escalation.get("changedSince")
             if changed:
                 paths = changed.get("paths")
-                print(f"  changed since your last answer ({changed['from'][:7]}..{changed['to'][:7]}): "
-                      + (", ".join(paths) if paths is not None else str(changed.get("error"))))
+                who = f" by {changed['by']}" if changed.get("by") else ""
+                listing = str(changed.get("error")) if paths is None else ", ".join(paths) or "no file changed"
+                print(f"  changed since the last answer ({changed['from'][:7]}..{changed['to'][:7]}{who}): "
+                      + listing)
             print(f'  answer with: factory retry|regate|close {wi["id"]} "<note>"')
         print(f"  worker passes: {d['passes']}")
         for h in [h for h in d["history"] if not h["action"].startswith("tool:")][-8:]:

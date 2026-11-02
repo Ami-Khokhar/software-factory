@@ -41,16 +41,16 @@ def _changed(foreman, wi, history):
     comparison says so in the payload rather than failing the status call that shows it."""
     if wi["state"] not in WAITING:
         return None
-    pair = metrics.changed_since(wi, history)
-    if pair is None:
+    since = metrics.changed_since(wi, history)
+    if since is None:
         return None
-    base, head = pair
+    base, head = since["from"], since["to"]
     try:
         files = foreman.github.changed_files(wi["repo"], base, head)
     except GitHubError as exc:
-        return {"from": base, "to": head, "paths": None,
-                "error": f"GitHub could not compare {base[:7]}..{head[:7]}: {exc}"}
-    return {"from": base, "to": head, "paths": [f["filename"] for f in files]}
+        return dict(since, paths=None,
+                    error=f"GitHub could not compare {base[:7]}..{head[:7]}: {exc}")
+    return dict(since, paths=[f["filename"] for f in files])
 
 
 def _gate_pins(foreman):

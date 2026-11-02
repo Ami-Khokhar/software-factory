@@ -108,7 +108,7 @@ crosses 1001 (a `human_waiting` WorkItem whose `blockedOn` names the decompositi
 | `factory project <id>` | Six lines: title, state and pause reason, used/total passes, deadline in IST, members and states, acceptance item |
 | `factory extend <id> <passes> [<deadline>]` | Owner adds 1 to 60 passes and makes the Project active, even if stopped; optional ISO date-time with timezone replaces the deadline |
 | `factory stop-project <id> <note>` | Owner stops the Project and holds its members, recording the note |
-| `factory status [<repo#n>]` | What the factory is doing, and what it needs from you. For one WorkItem it also says how many of the gate's findings are new and which paths changed since your last answer |
+| `factory status [<repo#n>]` | What the factory is doing, and what it needs from you. For one WorkItem it also says how many of the gate's findings you have not answered yet, and which paths changed since the last answer, naming who gave it |
 | `factory retry\|regate\|close <repo#n> <note>` | Answers an escalation |
 | `factory add-repo <owner/repo>` | Makes a repo a factory target (it needs pr-gatekeeper) |
 | `factory bench <repo> [-w <worker>] ...` | Files the benchmark's tasks as `factory:ready` issues in a sandbox repo (see "Measuring workers") |
