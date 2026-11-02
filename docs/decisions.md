@@ -3135,9 +3135,10 @@ answered, so the very first ping for a problem that repeated said "0 new", and a
 findings counted as new again; and it labelled an answer Day Desk gave as the owner's own.
 
 **Decision.** `metrics.last_answer` reads one answer from the audit: the head and gate round GitHub
-reported before the newest `human_resolved`, and who gave it. `finding_counts` counts a blocking
-finding as new when it was first reported after that round, and every open finding as new when
-nobody has answered. `changed_since` returns `{from, to, by}` from that answer's head to the current
+reported before the newest `human_resolved`, and who gave it. An answer given before any accepted
+verdict has round 0, so a finding reported afterwards is new to it. `finding_counts` counts a
+blocking finding as new when it was first reported after that round, and every open finding as new
+when nobody has answered. `changed_since` returns `{from, to, by}` from that answer's head to the current
 head, and the status tool reads the paths for it in one `changed_files` call. The metric stays
 GitHub-free; a refused comparison is data in the payload, not an exception out of `factory_status`.
 
@@ -3145,5 +3146,4 @@ GitHub-free; a refused comparison is data in the payload, not an exception out o
 person and its head has moved since the last answer, and none otherwise. The numbers mean what the
 last answer covered, whoever gave it, rather than what the gate last said, and the CLI names the
 answerer, so an agent's answer is never shown as the owner's. A WorkItem whose last answer was Day
-Desk's compares from that answer and says so. An answer given before any accepted verdict has round
-0, so a finding reported afterwards is new to it (ADR-0132).
+Desk's compares from that answer and says so.

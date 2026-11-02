@@ -64,8 +64,8 @@ def finding_counts(wi, history):
 
 
 def escalation(wi, history, changed=None):
-    """What an escalation tells the owner: the reason, the one decision needed, what was tried,
-    how much of the gate's findings they have not seen, and which paths they have not read yet."""
+    """What an escalation tells the owner: the reason, the one decision needed, what was tried, the
+    findings that are new since the last answer, and the paths that changed since that answer."""
     if wi["state"] not in HUMAN_STATES:
         return None
     tried = list(wi.get("attempts") or []) or [
