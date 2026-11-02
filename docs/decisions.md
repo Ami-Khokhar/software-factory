@@ -3130,8 +3130,8 @@ walker, and the throttle survives a restart like `Foreman._refuse_repo`'s.
 
 **Context.** #480 gave an escalation two derived values: the gate's findings told apart by round,
 and the paths that changed since the last answer. Review of that change (#486) found the first
-version measured "new" against the gate's current round rather than against what the reader had
-answered, so the very first ping for a problem that repeated said "0 new", and a regate's repeated
+version measured "new" against the gate's current round rather than against the round that answer
+covered, so the very first ping for a problem that repeated said "0 new", and a regate's repeated
 findings counted as new again; and it labelled an answer Day Desk gave as the owner's own.
 
 **Decision.** `metrics.last_answer` reads one answer from the audit: the head and gate round GitHub

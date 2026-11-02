@@ -1,4 +1,5 @@
 """A WorkItem that no longer waits on a person drops its blockedOn, and factory_status shows it."""
+import re
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -130,7 +131,7 @@ class EscalationSaysWhatIsNewTest(unittest.TestCase):
 
     def test_new_counts_the_findings_first_reported_after_the_round_they_answered(self):
         """A first escalation is often raised at the round in which the same problem repeated
-        (ADR-0005), so "new" is measured from the round the reader answered, never from the gate's
+        (ADR-0005), so "new" is measured from the round the last answer covered, never from the gate's
         current one."""
         esc = metrics.escalation(self.workitem(), self.ANSWERED_AT_2)
         self.assertEqual(esc["findings"], {"new": 1, "reported": 2, "resolved": 0})
@@ -167,8 +168,8 @@ class EscalationSaysWhatIsNewTest(unittest.TestCase):
         self.assertIsNone(metrics.escalation(self.workitem(blockers=[]), [])["findings"])
 
     def test_it_owes_a_comparison_from_the_head_the_last_answer_was_given_on(self):
-        """The base is the head they answered, not the default branch and not the reviewed head:
-        what they have not read is what changed after that answer."""
+        """The base is the head the answer was given on, not the default branch and not the reviewed
+        head: what has not been read is what changed after that answer."""
         self.assertEqual(metrics.changed_since(self.workitem(headSha="c2"), self.ANSWERED_AT_2),
                          {"from": "c1", "to": "c2", "by": "owner"})
 
@@ -234,18 +235,21 @@ class EscalationWordingTest(unittest.TestCase):
     whoever gave it. Five pull requests reworded one instance at a time and missed another each
     round, so the rule is checked instead."""
 
-    BANNED = ("what the reader has", "the reader has not", "round they last answered",
-              "head they last answered", "findings they have not seen", "paths they have not read")
+    # Present and past tense both: a first pass matched exact substrings and the past tense it missed
+    # reached main.
+    BANNED = re.compile(r"the reader('s\b| has| had| answered| sees| saw)"
+                        r"|(round|head) they (last )?answered"
+                        r"|(findings|paths) they have not")
     ROOT = Path(__file__).resolve().parent.parent
 
     def test_no_doc_or_docstring_attributes_the_last_answer_to_its_reader(self):
         offenders = []
-        for folder in ("docs", "factory_mcp"):
+        for folder in ("docs", "factory_mcp", "tests"):
             for path in sorted((self.ROOT / folder).rglob("*")):
                 if path.suffix not in (".md", ".py") or not path.is_file():
                     continue
                 for number, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
-                    if any(banned in line for banned in self.BANNED):
+                    if self.BANNED.search(line):
                         offenders.append(f"{path.relative_to(self.ROOT)}:{number}: {line.strip()}")
         self.assertEqual(offenders, [])
 
