@@ -34,6 +34,7 @@ class FakeGitHub:
         self.timelines = {}
         self.workflow_run_list = {}  # (repo, sha) -> the gate's workflow runs, newest first
         self.posted = []  # (repo, number, body) of every comment the Foreman wrote
+        self.compares = []  # (repo, base, head) of every commit comparison the Foreman read
         self.branches, self.files = {}, {}  # (repo, branch) -> sha; (repo, sha) -> changed files
         self.repos = {}  # repo -> fields that differ from a pushable repo; None: GitHub has no such repo
         self.contents = {}  # (repo, path) -> file text on the default branch
@@ -169,6 +170,7 @@ class FakeGitHub:
                                    for f in files]
 
     def changed_files(self, repo, base, head):
+        self.compares.append((repo, base, head))
         return self.files[(repo, head)]
 
     def comment(self, repo, number, body):
