@@ -749,3 +749,9 @@ The control defaults live in factory_mcp/config.py: .github/, .env, .env.local, 
 or a directory prefix ending in /. These defaults do not promise basename matching at every
 depth. List actual nested controls, such as worker/.env or backend/secrets/, in the repository's
 base protected_paths. Its list can add to the factory floor, never subtract from it.
+
+A protected name matches whole path segments at any depth in a patch path. A plan mention is
+refused the same way, through the factory floor's entries: a file entry whole-word (.env,
+Dockerfile), a directory entry by its slash-joined spelling (secrets/, backend/secrets/), so the
+prose word "secrets" alone does not refuse a plan. The plan check reads no repo base list; a
+base-only entry is refused at push time instead.
