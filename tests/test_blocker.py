@@ -129,7 +129,7 @@ class EscalationSaysWhatIsNewTest(unittest.TestCase):
             {"severity": "blocking", "path": "src/app.py", "problem": "the parse drops a null"}])
         return self.tick()
 
-    def test_new_counts_the_findings_first_reported_after_the_round_they_answered(self):
+    def test_new_counts_the_findings_first_reported_after_the_round_the_answer_covered(self):
         """A first escalation is often raised at the round in which the same problem repeated
         (ADR-0005), so "new" is measured from the round the last answer covered, never from the gate's
         current one."""
@@ -183,7 +183,7 @@ class EscalationSaysWhatIsNewTest(unittest.TestCase):
         history = [{"action": "reconcile", "at": "t1", "detail": {"headSha": "c1"}}]
         self.assertIsNone(metrics.changed_since(self.workitem(headSha="c1"), history))
 
-    def test_it_owes_no_comparison_when_the_head_is_the_one_they_answered(self):
+    def test_it_owes_no_comparison_when_the_head_is_the_one_the_answer_covered(self):
         history = [{"action": "reconcile", "detail": {"headSha": "c1"}},
                    {"action": "human_resolved", "detail": {}},
                    {"action": "reconcile", "detail": {"headSha": "c1"}}]
@@ -239,7 +239,7 @@ class EscalationWordingTest(unittest.TestCase):
     # reached main.
     BANNED = re.compile(r"the reader('s\b| has| had| answered| sees| saw)"
                         r"|(round|head) they (last )?answered"
-                        r"|(findings|paths) they have not")
+                        r"|\bthey have not\b")
     ROOT = Path(__file__).resolve().parent.parent
 
     def test_no_doc_or_docstring_attributes_the_last_answer_to_its_reader(self):
