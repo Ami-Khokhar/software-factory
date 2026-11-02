@@ -177,6 +177,13 @@ and direct the caller to the approved template. Credential mounts over container
   terminal or not waiting has `blockedOn` `null`. WorkItems stored before #110
   could keep a stale `blockedOn`; the store's migration 2 drops it from any
   WorkItem whose state is not `human_waiting` or `blocked`.
+- **An escalation says what is new.** Alongside the reason and the decision, it counts the gate's
+  blocking findings by round: `new` (first seen in the current round), `reported` (an earlier
+  round) and `resolved` (the latest verdict no longer reports it). When the pull request head moved
+  after the person's last `human_resolved`, it also lists the paths between the head they answered
+  and the current head. That comparison is one read, made only for an escalation whose head moved;
+  a comparison GitHub refuses is reported as an error in the payload rather than failing the status
+  call that shows it. The metric itself makes no GitHub call.
 - **Budgets have two ceilings.** `WorkOrder.budget` requires `maxPasses` and
   `wallMs`. Reaching `maxPasses` moves the WorkItem to `exhausted`, except the
   first fix WorkOrder of a gate round, which is free for a non-member

@@ -35,6 +35,24 @@ def last_allowance_use(history):
             "evidence": detail.get("evidence"), "remaining": detail.get("remaining")}
 
 
+def _changed(foreman, wi, history):
+    """The paths the escalation's reader has not seen yet (#480): from the head they last answered
+    to the current head, in one read that only an escalation whose head moved is owed. A failed
+    comparison says so in the payload rather than failing the status call that shows it."""
+    if wi["state"] not in WAITING:
+        return None
+    pair = metrics.changed_since(wi, history)
+    if pair is None:
+        return None
+    base, head = pair
+    try:
+        files = foreman.github.changed_files(wi["repo"], base, head)
+    except GitHubError as exc:
+        return {"from": base, "to": head, "paths": None,
+                "error": f"GitHub could not compare {base[:7]}..{head[:7]}: {exc}"}
+    return {"from": base, "to": head, "paths": [f["filename"] for f in files]}
+
+
 def _gate_pins(foreman):
     """Each repo's pr-gatekeeper revision pin (its gatekeeper_ref, ADR-0080), as the weekly report
     stamps it on every gauge (ADR-0083), so two windows under different pins never read as one
@@ -99,7 +117,8 @@ def build(store, foreman, agent=False):
         if wi is None:
             raise ToolError(f"No WorkItem {workitem_id}")
         history = store.history(workitem_id)
-        return {"workItem": wi, "escalation": metrics.escalation(wi, history),
+        return {"workItem": wi, "escalation": metrics.escalation(
+                    wi, history, changed=_changed(foreman, wi, history)),
                 "passes": len(store.workorders(workitem_id)), "history": history,
                 "allowanceUse": last_allowance_use(history)}
 

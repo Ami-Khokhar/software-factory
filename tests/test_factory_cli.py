@@ -1204,6 +1204,35 @@ class StatusTest(unittest.TestCase):
         lines = self.status(lessonsError="lessons.json is not JSON: Expecting value")
         self.assertEqual(lines[-1], "lessons: lessons.json is not JSON: Expecting value")
 
+    def one(self, escalation):
+        """The lines `factory status <id>` prints, given what factory_status returns for one."""
+        value = {"workItem": {"id": "o/r#13", "state": "human_waiting", "prNumber": 42,
+                               "gateRound": 2, "blockedOn": "pr-gatekeeper decided HUMAN"},
+                 "escalation": escalation, "passes": 2, "history": []}
+        printed = io.StringIO()
+        with mock.patch.object(cli, "call", lambda tool, arguments=None: value), \
+                contextlib.redirect_stdout(printed):
+            cli.cmd_status(["o/r#13"])
+        return printed.getvalue().splitlines()
+
+    def test_an_escalation_says_what_is_new_since_the_last_answer(self):
+        lines = self.one({"reason": "pr-gatekeeper decided HUMAN",
+                          "findings": {"new": 1, "reported": 3, "resolved": 1},
+                          "changedSince": {"from": "a" * 40, "to": "b" * 40,
+                                            "paths": ["src/app.py", "tests/test_app.py"]}})
+        self.assertIn("  gate findings: 1 new, 3 already reported, 1 resolved", lines)
+        self.assertIn("  changed since your last answer (aaaaaaa..bbbbbbb): src/app.py, tests/test_app.py",
+                      lines)
+
+    def test_an_escalation_with_nothing_new_prints_only_what_it_always_did(self):
+        """Neither line may print an empty or missing value: an escalation the gate never reported
+        on, or a head nobody has answered, says nothing rather than "None"."""
+        lines = self.one({"reason": "pr-gatekeeper decided HUMAN", "findings": None,
+                          "changedSince": None})
+        self.assertIn("  needs you: pr-gatekeeper decided HUMAN", lines)
+        self.assertEqual([line for line in lines if "gate findings" in line or "changed since" in line],
+                         [])
+
 
 class Relay(BaseHTTPRequestHandler):
     """agent-relay's task API: one running task for each of two agents."""

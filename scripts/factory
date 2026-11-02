@@ -442,7 +442,17 @@ def cmd_status(args):
         wi = d["workItem"]
         print(f"{wi['id']}  {wi['state']}  PR #{wi.get('prNumber') or '-'}  gate round {wi.get('gateRound', 0)}")
         if d.get("escalation"):
-            print(f"  needs you: {d['escalation']['reason']}")
+            escalation = d["escalation"]
+            print(f"  needs you: {escalation['reason']}")
+            findings = escalation.get("findings")
+            if findings:
+                print(f"  gate findings: {findings['new']} new, {findings['reported']} already reported,"
+                      f" {findings['resolved']} resolved")
+            changed = escalation.get("changedSince")
+            if changed:
+                paths = changed.get("paths")
+                print(f"  changed since your last answer ({changed['from'][:7]}..{changed['to'][:7]}): "
+                      + (", ".join(paths) if paths is not None else str(changed.get("error"))))
             print(f'  answer with: factory retry|regate|close {wi["id"]} "<note>"')
         print(f"  worker passes: {d['passes']}")
         for h in [h for h in d["history"] if not h["action"].startswith("tool:")][-8:]:

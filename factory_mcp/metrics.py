@@ -19,8 +19,44 @@ MOMENT = "%Y-%m-%dT%H:%M:%SZ"
 IST = timezone(timedelta(hours=5, minutes=30))  # the owner reads windows in Asia/Kolkata, no DST
 
 
-def escalation(wi, history):
-    """What an escalation tells the owner: the reason, the one decision needed, and what was tried."""
+def last_answered_head(history):
+    """The pull request head a person last answered an escalation on: the newest head GitHub
+    reported before the newest `human_resolved` row. None when nobody has answered this WorkItem,
+    or when no reconcile recorded a head before they did."""
+    answered, head = None, None
+    for row in history:
+        if row["action"] == "reconcile" and row["detail"].get("headSha"):
+            head = row["detail"]["headSha"]
+        elif row["action"] == "human_resolved":
+            answered = head
+    return answered
+
+
+def changed_since(wi, history):
+    """What the escalation's reader has not seen yet: (base, head) from the head the person last
+    answered to the current head, or None when nobody has answered or the head is the one they
+    answered. The caller reads the paths; this decides whether a read is owed at all."""
+    base, head = last_answered_head(history), wi.get("headSha")
+    return (base, head) if base and head and base != head else None
+
+
+def finding_counts(wi):
+    """The gate's blocking findings an escalation carries: how many first appeared in the current
+    round, how many an earlier round already reported, and how many the latest verdict no longer
+    reports (ADR-0005). None for a WorkItem the gate has never reported a finding on."""
+    blockers = wi.get("blockers") or []
+    if not blockers:
+        return None
+    current = wi.get("gateRound") or 0
+    open_now = [b for b in blockers if not b.get("resolved")]
+    new = sum(1 for b in open_now if b.get("firstSeenRound") == current)
+    return {"new": new, "reported": len(open_now) - new,
+            "resolved": sum(1 for b in blockers if b.get("resolved"))}
+
+
+def escalation(wi, history, changed=None):
+    """What an escalation tells the owner: the reason, the one decision needed, what was tried,
+    how much of the gate's findings are new, and which paths they have not read yet."""
     if wi["state"] not in HUMAN_STATES:
         return None
     tried = list(wi.get("attempts") or []) or [
@@ -30,7 +66,8 @@ def escalation(wi, history):
             "needFromYou": f"Decide {wi['id']}: call factory_resolve_human with retry (the factory "
                            "tries again), regate (re-run the gate: on a fix you pushed, or on the same head "
                            "when the gate failed itself) or close.",
-            "owner": wi.get("owner"), "tried": tried}
+            "owner": wi.get("owner"), "tried": tried,
+            "findings": finding_counts(wi), "changedSince": changed}
 
 
 def autonomy(workitems, history_of):
