@@ -177,13 +177,18 @@ and direct the caller to the approved template. Credential mounts over container
   terminal or not waiting has `blockedOn` `null`. WorkItems stored before #110
   could keep a stale `blockedOn`; the store's migration 2 drops it from any
   WorkItem whose state is not `human_waiting` or `blocked`.
-- **An escalation says what is new.** Alongside the reason and the decision, it counts the gate's
-  blocking findings by round: `new` (first seen in the current round), `reported` (an earlier
-  round) and `resolved` (the latest verdict no longer reports it). When the pull request head moved
-  after the person's last `human_resolved`, it also lists the paths between the head they answered
-  and the current head. That comparison is one read, made only for an escalation whose head moved;
-  a comparison GitHub refuses is reported as an error in the payload rather than failing the status
-  call that shows it. The metric itself makes no GitHub call.
+- **An escalation says what the reader has not seen yet (ADR-0132).** It counts the gate's blocking
+  findings by what the reader has already answered: `new` (first reported after the round they last
+  answered, and every open one when nobody has answered), `reported` (an answer already covered it)
+  and `resolved` (the latest verdict no longer reports it). The base is the round of the newest
+  `human_resolved`, not the gate's current round: a first escalation is often raised at the round
+  in which the same problem repeated (ADR-0005), and a regate keeps its round (ADR-0113). When the
+  pull request head moved after that answer, the payload also carries `changedSince`
+  `{from, to, by, paths}`: the head the answer was given on, the current head, who gave the answer,
+  and the paths between them. An answer may be Day Desk's, which is why `by` travels and the reader
+  is never told they answered when they did not. That comparison is one read, made only for an
+  escalation whose head moved; a comparison GitHub refuses is reported as an error in the payload
+  rather than failing the status call that shows it. The metric itself makes no GitHub call.
 - **Budgets have two ceilings.** `WorkOrder.budget` requires `maxPasses` and
   `wallMs`. Reaching `maxPasses` moves the WorkItem to `exhausted`, except the
   first fix WorkOrder of a gate round, which is free for a non-member

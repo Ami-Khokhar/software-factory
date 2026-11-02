@@ -1218,11 +1218,34 @@ class StatusTest(unittest.TestCase):
     def test_an_escalation_says_what_is_new_since_the_last_answer(self):
         lines = self.one({"reason": "pr-gatekeeper decided HUMAN",
                           "findings": {"new": 1, "reported": 3, "resolved": 1},
-                          "changedSince": {"from": "a" * 40, "to": "b" * 40,
+                          "changedSince": {"from": "a" * 40, "to": "b" * 40, "by": "owner",
                                             "paths": ["src/app.py", "tests/test_app.py"]}})
         self.assertIn("  gate findings: 1 new, 3 already reported, 1 resolved", lines)
-        self.assertIn("  changed since your last answer (aaaaaaa..bbbbbbb): src/app.py, tests/test_app.py",
+        self.assertIn("  changed since the last answer (aaaaaaa..bbbbbbb by owner): "
+                      "src/app.py, tests/test_app.py", lines)
+
+    def test_an_agents_answer_is_named_as_the_base_of_the_comparison(self):
+        lines = self.one({"reason": "pr-gatekeeper decided HUMAN", "findings": None,
+                          "changedSince": {"from": "a" * 40, "to": "b" * 40, "by": "day-desk",
+                                            "paths": ["src/app.py"]}})
+        self.assertIn("  changed since the last answer (aaaaaaa..bbbbbbb by day-desk): src/app.py",
                       lines)
+
+    def test_an_empty_comparison_does_not_print_a_dangling_colon(self):
+        lines = self.one({"reason": "pr-gatekeeper decided HUMAN", "findings": None,
+                          "changedSince": {"from": "a" * 40, "to": "b" * 40, "by": "owner",
+                                            "paths": []}})
+        self.assertIn("  changed since the last answer (aaaaaaa..bbbbbbb by owner): no file changed",
+                      lines)
+
+    def test_a_comparison_github_refused_prints_the_reason(self):
+        lines = self.one({"reason": "pr-gatekeeper decided HUMAN", "findings": None,
+                          "changedSince": {"from": "a" * 40, "to": "b" * 40, "by": "owner",
+                                            "paths": None,
+                                            "error": "GitHub could not compare aaaaaaa..bbbbbbb: "
+                                                     "GitHub 404: Not Found"}})
+        self.assertIn("  changed since the last answer (aaaaaaa..bbbbbbb by owner): "
+                      "GitHub could not compare aaaaaaa..bbbbbbb: GitHub 404: Not Found", lines)
 
     def test_an_escalation_with_nothing_new_prints_only_what_it_always_did(self):
         """Neither line may print an empty or missing value: an escalation the gate never reported

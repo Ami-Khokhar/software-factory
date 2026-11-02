@@ -3123,3 +3123,26 @@ no-worker escalation. Follow-up (r3, #437): the short-window throttle is not mod
 worker_ops; it is one atomic check-and-log in the store (`Store.log_worker_drift`), so a
 concurrent membership walk from another request thread cannot double-log or crash an iterating
 walker, and the throttle survives a restart like `Foreman._refuse_repo`'s.
+
+---
+
+## ADR-0132 — An escalation reports what its reader has not seen
+
+**Context.** #480 gave an escalation two derived values: the gate's findings told apart by round,
+and the paths that changed since the last answer. Review of that change (#486) found the first
+version measured "new" against the gate's current round rather than against what the reader had
+answered, so the very first ping for a problem that repeated said "0 new", and a regate's repeated
+findings counted as new again; and it labelled an answer Day Desk gave as the owner's own.
+
+**Decision.** `metrics.last_answer` reads one answer from the audit: the head and gate round GitHub
+reported before the newest `human_resolved`, and who gave it. `finding_counts` counts a blocking
+finding as new when it was first reported after that round, and every open finding as new when
+nobody has answered. `changed_since` returns `{from, to, by}` from that answer's head to the current
+head, and the status tool reads the paths for it in one `changed_files` call. The metric stays
+GitHub-free; a refused comparison is data in the payload, not an exception out of `factory_status`.
+
+**Consequence.** `factory_status <id>` costs one GitHub read per call while a WorkItem waits on a
+person and its head has moved since the last answer, and none otherwise. The numbers mean what the
+reader has answered rather than what the gate last said, and the CLI names the answerer, so an
+agent's answer is never shown as the owner's. A WorkItem whose last answer was Day Desk's compares
+from that answer and says so.
