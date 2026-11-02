@@ -177,10 +177,10 @@ and direct the caller to the approved template. Credential mounts over container
   terminal or not waiting has `blockedOn` `null`. WorkItems stored before #110
   could keep a stale `blockedOn`; the store's migration 2 drops it from any
   WorkItem whose state is not `human_waiting` or `blocked`.
-- **An escalation says what the reader has not seen yet (ADR-0132).** It counts the gate's blocking
-  findings by what the reader has already answered: `new` (first reported after the round they last
-  answered, and every open one when nobody has answered), `reported` (an answer already covered it)
-  and `resolved` (the latest verdict no longer reports it). The base is the round of the newest
+- **An escalation says what is new since the last answer (ADR-0132).** It counts the gate's
+  blocking findings against that answer, whoever gave it: `new` (first reported after the round the
+  answer covered, and every open one when nobody has answered), `reported` (the answer already
+  covered it) and `resolved` (the latest verdict no longer reports it). The base is the round of the newest
   `human_resolved`, not the gate's current round: a first escalation is often raised at the round
   in which the same problem repeated (ADR-0005), and a regate keeps its round (ADR-0113). When the
   pull request head moved after that answer, the payload also carries `changedSince`
