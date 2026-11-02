@@ -1,5 +1,6 @@
 """A WorkItem that no longer waits on a person drops its blockedOn, and factory_status shows it."""
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from factory_mcp import metrics, tools
@@ -226,6 +227,35 @@ class EscalationSaysWhatIsNewTest(unittest.TestCase):
         self.assertEqual(escalation["changedSince"],
                          {"from": "c1", "to": "c2", "by": "owner", "paths": None,
                           "error": "GitHub could not compare c1..c2: GitHub 404: Not Found"})
+
+
+class EscalationWordingTest(unittest.TestCase):
+    """ADR-0132 has one wording: the counts and the comparison are measured from the last answer,
+    whoever gave it. Five pull requests reworded one instance at a time and missed another each
+    round, so the rule is checked instead."""
+
+    BANNED = ("what the reader has", "the reader has not", "round they last answered",
+              "head they last answered", "findings they have not seen", "paths they have not read")
+    ROOT = Path(__file__).resolve().parent.parent
+
+    def test_no_doc_or_docstring_attributes_the_last_answer_to_its_reader(self):
+        offenders = []
+        for folder in ("docs", "factory_mcp"):
+            for path in sorted((self.ROOT / folder).rglob("*")):
+                if path.suffix not in (".md", ".py") or not path.is_file():
+                    continue
+                for number, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+                    if any(banned in line for banned in self.BANNED):
+                        offenders.append(f"{path.relative_to(self.ROOT)}:{number}: {line.strip()}")
+        self.assertEqual(offenders, [])
+
+    def test_the_adr_does_not_cite_itself(self):
+        """Another document may cite it; its own section may not."""
+        text = (self.ROOT / "docs" / "decisions.md").read_text()
+        start = text.index("## ADR-0132")
+        end = text.find("\n## ADR-", start + 1)
+        self.assertNotIn("(ADR-0132)", text[start:end if end > 0 else len(text)])
+        self.assertIn("(ADR-0132)", (self.ROOT / "docs" / "contracts.md").read_text())
 
 
 if __name__ == "__main__":
