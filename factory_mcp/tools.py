@@ -36,7 +36,7 @@ def last_allowance_use(history):
 
 
 def _changed(foreman, wi, history):
-    """The paths the escalation's reader has not seen yet (#480): from the head they last answered
+    """The paths that are new since the last answer (#480): from the head that answer was given on
     to the current head, in one read that only an escalation whose head moved is owed. A failed
     comparison says so in the payload rather than failing the status call that shows it."""
     if wi["state"] not in WAITING:
