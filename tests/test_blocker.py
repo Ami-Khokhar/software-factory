@@ -151,6 +151,16 @@ class EscalationSaysWhatIsNewTest(unittest.TestCase):
         esc = metrics.escalation(self.workitem(blockers=blockers), self.ANSWERED_AT_2)
         self.assertEqual(esc["findings"], {"new": 1, "reported": 2, "resolved": 1})
 
+    def test_a_reader_who_answered_before_any_verdict_sees_every_finding_as_new(self):
+        """An answer can come before any accepted verdict, so the answered round defaults to 0
+        rather than to nothing: comparing a finding's round against None would raise."""
+        history = [{"action": "reconcile", "at": "t1", "detail": {"headSha": "c1"}},
+                   {"action": "human_resolved", "at": "t2", "detail": {"by": "owner"}}]
+        blockers = [{"fingerprint": "a1", "firstSeenRound": 2, "resolved": False},
+                    {"fingerprint": "b2", "firstSeenRound": 2, "resolved": False}]
+        esc = metrics.escalation(self.workitem(blockers=blockers, gateRound=2), history)
+        self.assertEqual(esc["findings"], {"new": 2, "reported": 0, "resolved": 0})
+
     def test_a_workitem_the_gate_never_reported_on_says_nothing_about_findings(self):
         self.assertIsNone(metrics.escalation(self.workitem(blockers=[]), [])["findings"])
 
