@@ -36,10 +36,10 @@ def last_answer(history):
 
 
 def changed_since(wi, history):
-    """What the escalation's reader has not seen yet, as `{from, to, by}`: the head the last answer
-    was given on, the current head, and who gave it. None when nobody has answered, or when the head
-    is still the one they answered. The caller reads the paths; this decides whether a read is owed
-    at all."""
+    """What is new since the last answer, as `{from, to, by}`: the head that answer was given on,
+    the current head, and who gave it. None when nobody has answered, or when the head is still the
+    one that answer covered. The caller reads the paths; this decides whether a read is owed at
+    all."""
     answer, head = last_answer(history), wi.get("headSha")
     if not (answer and answer["head"] and head and answer["head"] != head):
         return None
@@ -47,11 +47,11 @@ def changed_since(wi, history):
 
 
 def finding_counts(wi, history):
-    """The gate's blocking findings an escalation carries, told apart by what the reader has seen:
-    how many were first reported after the round they last answered, how many an earlier answer
-    already covered, and how many the latest verdict no longer reports (ADR-0005). A round, not the
-    gate's current one, because a first escalation is often raised at the round in which the same
-    problem repeated, and a regate keeps its round (ADR-0113). None for a WorkItem the gate has never
+    """The gate's blocking findings an escalation carries, counted against the last answer, whoever
+    gave it: how many were first reported after the round that answer covered, how many it already
+    covered, and how many the latest verdict no longer reports (ADR-0005). A round, not the gate's
+    current one, because a first escalation is often raised at the round in which the same problem
+    repeated, and a regate keeps its round (ADR-0113). None for a WorkItem the gate has never
     reported a finding on."""
     blockers = wi.get("blockers") or []
     if not blockers:

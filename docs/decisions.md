@@ -3126,7 +3126,7 @@ walker, and the throttle survives a restart like `Foreman._refuse_repo`'s.
 
 ---
 
-## ADR-0132 — An escalation reports what its reader has not seen
+## ADR-0132 — An escalation reports what is new since the last answer
 
 **Context.** #480 gave an escalation two derived values: the gate's findings told apart by round,
 and the paths that changed since the last answer. Review of that change (#486) found the first
@@ -3143,6 +3143,7 @@ GitHub-free; a refused comparison is data in the payload, not an exception out o
 
 **Consequence.** `factory_status <id>` costs one GitHub read per call while a WorkItem waits on a
 person and its head has moved since the last answer, and none otherwise. The numbers mean what the
-reader has answered rather than what the gate last said, and the CLI names the answerer, so an
-agent's answer is never shown as the owner's. A WorkItem whose last answer was Day Desk's compares
-from that answer and says so.
+last answer covered, whoever gave it, rather than what the gate last said, and the CLI names the
+answerer, so an agent's answer is never shown as the owner's. A WorkItem whose last answer was Day
+Desk's compares from that answer and says so. An answer given before any accepted verdict has round
+0, so a finding reported afterwards is new to it (ADR-0132).
