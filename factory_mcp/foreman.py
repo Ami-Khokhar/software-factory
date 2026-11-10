@@ -1059,8 +1059,9 @@ class Foreman:
         """Hold the WorkItem on the worker's own fault instead of raising out of the tick (#522). The
         order and its idempotency key stay on record with the pointer to them, so the resume submits
         that order rather than buying a second one, and no attempt has concluded, so an open recovery
-        is left to conclude when the pass actually runs. The reason is stable, so an unchanged fault
-        writes once and the next tick does nothing."""
+        waits for the pass that runs instead of being closed here: `_recheck_worker` resumes it, the
+        pass's outcome concludes it, and an answer by a person concludes it in `resolve_human`. The
+        reason is stable, so an unchanged fault writes once and the next tick does nothing."""
         return self._write(wi, dict(wi, state="human_waiting", blockedOn=reason,
                                     question=None),
                            "worker_unavailable", worker=wi.get("worker"))
@@ -1069,8 +1070,10 @@ class Foreman:
         """A held worker fault is re-read each tick, the way `_recheck_dependency` re-reads a
         dependency (ADR-0081): one that has cleared resumes the WorkOrder already on record, under its
         own idempotency key, so the relay can hold at most one task for it; one that has not cleared
-        writes nothing. A rebuilt image changes the binding an activation pins, so that repair still
-        needs a re-enable before this resumes (ADR-0094, ADR-0133)."""
+        writes nothing. A relay that cannot answer leaves the hold as it is: the WorkItem already waits
+        on this exact subject, so a second environment fault must not become a row per tick. A rebuilt
+        image changes the binding an activation pins, so that repair still needs a re-enable
+        (ADR-0094, ADR-0133)."""
         incident = wi.get("incident") or {}
         if incident.get("action") != "worker_unavailable" or not wi.get("activeWorkOrderId"):
             return wi
@@ -1078,8 +1081,15 @@ class Foreman:
                       if o["id"] == wi["activeWorkOrderId"]), None)
         if order is None:
             return wi
-        if self._worker_fault(wi, wi.get("worker")):  # still unusable: the same incident, unchanged
+        try:
+            fault = self._worker_fault(wi, wi.get("worker"))
+        except RelayError:
             return wi
+        if fault:  # still unusable: the same incident, unchanged
+            return wi
+        refused = self._guard_followup(wi)  # the issue may have changed while this waited
+        if refused is not None:
+            return refused
         resumed = dict(incident, id=incident.get("id", 0) + 1, action="worker_resumed",
                        reason=self._norm_reason(wi), since=now(), agentAnswered=True)
         wi = self._write(wi, dict(wi, state="dispatching", blockedOn=None, incident=resumed),
@@ -1736,6 +1746,7 @@ class Foreman:
             if agent and not owner_asked and not lead_ok and wi.get("incident") is not None:
                 # Day Desk's answer is spent on this incident; the next one it may answer is a new record
                 new = dict(new, incident=dict(wi["incident"], agentAnswered=True))
+            self._finish_recovery(wi, False)  # an answer ends the attempt a recovery chose before it ran
             return self._write(wi, dict(new, blockedOn=None, attempts=[], recovery=None, pendingRetry=None,
                                         infraRetries=0), "human_resolved",
                                resolution=resolution, note=note, by=by, **rerun, **({"agent": True} if agent else {}),
@@ -2754,7 +2765,13 @@ class Foreman:
         """A worker pass may still be running on the WorkItem: an active WorkOrder, a live relay
         task, or a state whose next step dispatches or polls one. The per-WorkItem lease in
         replace_issue already excludes a concurrent tick. Past attempts that failed or were
-        exhausted and wrote no live marker are history, not a live worker."""
+        exhausted and wrote no live marker are history, not a live worker. A WorkItem held on a
+        worker fault is the exception: it keeps `activeWorkOrderId` so its resume submits that same
+        order instead of buying a second one (#522), and nothing runs while it waits, so the repairs
+        its escalation asks for are not refused as live work."""
+        if (wi["state"] == "human_waiting"
+                and (wi.get("incident") or {}).get("action") == "worker_unavailable"):
+            return False
         return bool(wi.get("activeWorkOrderId") or wi.get("providerTaskId")) or wi["state"] in WORKING
 
     def _check_dependency(self, wi, number):

@@ -3186,6 +3186,16 @@ followed by a retry, which does build a new order, because the recorded one carr
 of the attempt that never ran; a Project member counts that new order as a pass, which is the
 existing ordering rule for a saved order and is not changed here. A held item that is answered by a
 person rather than resumed keeps the order on record and its key unused.
+
+Three consequences the review of #522 forced out, because the hold changes what the rest of the
+file may assume. `_worker_live` exempts the hold: an item in `human_waiting` on a
+`worker_unavailable` incident has an order on record and nothing running, so it is not refused as
+"has a worker running now", which would block `factory_set_worker`, `factory_set_timeout`, an
+allowance retry and `factory_replace_issue` — exactly what its person needs. Every other reading of
+a live marker is unchanged, because a waiting item can still hold a relay task. `resolve_human` concludes an open recovery, so a `recovery` decision
+row always finds its `recovery_result` even when a person answers instead of the resume. And the
+per-tick re-read treats a relay that cannot answer as "still held": the WorkItem already waits on
+this subject, so a second environment fault adds no row.
 ## ADR-0134 — The gate revision is the release channel's, not a caller's pin
 
 **Context.** ADR-0080 made the factory the owner of an installed caller's two gate revision pins: it

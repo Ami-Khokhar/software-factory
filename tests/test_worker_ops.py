@@ -581,11 +581,22 @@ class WorkerOpsTest(unittest.TestCase):
             for _ in range(10):  # an unchanged fault never re-arms, so a tick writes nothing
                 self.assertEqual(foreman.tick("o/r#7")["workItem"]["state"], "human_waiting")
             self.assertEqual(len(self.store.history("o/r#7")), rows)
+            self.relay.down = True  # a relay that cannot answer adds nothing either
+            for _ in range(5):
+                self.assertEqual(foreman.tick("o/r#7")["workItem"]["state"], "human_waiting")
+            self.assertEqual(len(self.store.history("o/r#7")), rows)
+            self.relay.down = False
+            # nothing runs while it waits, so the repairs a person needs are not refused as live work
+            self.assertFalse(foreman._worker_live(held))
+            self.assertEqual(foreman.set_timeout("o/r#7", None, "owner")["id"], "o/r#7")
         self.assertEqual(len(self.store.workorders("o/r#7")), 1)  # one order, no second task
         self.assertEqual(self.relay.tasks, {})
         # the fault clears by itself: the next tick resumes that same order, under its own key
         resumed = foreman.tick("o/r#7")["workItem"]
         self.assertEqual(resumed["state"], "implementing")
+        self.assertTrue(foreman._worker_live(resumed))  # a running pass is still live
+        with self.assertRaisesRegex(ToolError, "worker running now"):
+            foreman.set_timeout("o/r#7", None, "owner")
         self.assertEqual(len(self.store.workorders("o/r#7")), 1)
         self.assertEqual(self.store.workorders("o/r#7")[0]["idempotencyKey"], order["idempotencyKey"])
         self.assertEqual(len(self.relay.tasks), 1)
