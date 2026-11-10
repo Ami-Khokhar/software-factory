@@ -3183,10 +3183,12 @@ the channel's revision, and the weekly gauges stamp the revision each repo actua
 **One consumer had to follow.** The gate follow-up approval (#422) bound an approval to the exact
 commit the source PR's base caller pinned, and read it with the deleted helper. It now requires
 the base caller to call this factory's wrapper exactly once, and takes the commit that ran from
-GitHub's own `referenced_workflows` record of the run. A caller that froze a commit still binds
-the run to it, so nothing is looser for a frozen repo; for a caller on the channel, the anchor is
-the wrapper's identity in a record neither the issue nor the PR head can write, rather than one
-commit the factory would have to know in advance.
+GitHub's own `referenced_workflows` record of the run. A caller that froze a commit binds the run
+to that commit. A caller on the channel binds it to the commit `v1` names at the time of the
+approval, because a pull request head writes its own `uses:` line and GitHub faithfully records
+whatever it wrote: the head chooses the commit in the record, so the tag has to choose the
+commit that may approve. A tag that cannot be read refuses rather than trusts, which keeps the
+guarantee the deleted pin gave this approval (ADR-0042).
 
 **Consequence.** Updating the gate is one file in one repo, with no caller change and no factory
 involvement, and nothing in the factory can refuse or rewrite a caller's workflow. A repo that

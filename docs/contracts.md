@@ -739,7 +739,9 @@ The gate comment must carry a pr-gatekeeper marker whose fields the approval rea
 minor/nit work, and `reviewed: true`. The gate revision comes from the release channel:
 `Ami-Khokhar/pr-gatekeeper-workflow/gatekeeper-version.json` names the commit the gate's own
 `pr_body` job passes to `gates` and `review`, and a caller carries no pin. `factory_repo_check`
-reports the commit the channel resolves to now. A marker without `reviewed` is treated as
+reports the commit the channel resolves to now. An approval binds the run to the wrapper commit
+the base caller froze, or, for a caller on the channel, to the commit `v1` names at the time of
+the approval: a head can write its own `uses:` line, so only the tag may choose what approves. A marker without `reviewed` is treated as
 missing, forged or ambiguous provenance and the approval refuses: do not approve; check which
 gate revision produced the marker against the channel's `gate_revision` and report before
 retrying.

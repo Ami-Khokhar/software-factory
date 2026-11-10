@@ -88,14 +88,18 @@ def validate(github, repo, issue, source_pr):
     # that froze a commit binds the run to that commit. A commented line is not a `uses:` line.
     if len(CALLER_USES.findall(caller)) != 1:
         refuse()
-    pinned = repos.wrapper_revision(caller)  # the commit a run's referenced_workflows names
+    # A caller that froze the wrapper commit binds the run to it. A caller on the release channel
+    # binds it to the commit `v1` names now: the head may write its own `uses:` line and GitHub
+    # records whatever it wrote, but it cannot move the tag, so the approval keeps the guarantee the
+    # deleted pin gave it (#422, ADR-0134).
+    pinned = repos.wrapper_revision(caller) or repos.channel_wrapper(github)
     runs = []
     for run in github.workflow_runs(repo, pr["head"]["sha"]):
         refs = run.get("referenced_workflows") or []
         trusted = [ref for ref in refs if re.fullmatch(
             r"Ami-Khokhar/pr-gatekeeper-workflow/\.github/workflows/gatekeeper\.yml@[0-9a-f]{40}",
             ref.get("path", "")) and ref["path"].endswith("@" + ref.get("sha", "missing"))
-            and (pinned is None or ref.get("sha") == pinned)]
+            and ref.get("sha") == pinned]
         if (run.get("path") == ".github/workflows/pr-gatekeeper.yml"
                 and run.get("head_sha") == pr["head"]["sha"]
                 and run.get("event") == "pull_request" and run.get("conclusion") == "success"

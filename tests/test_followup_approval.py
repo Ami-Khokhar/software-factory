@@ -5,6 +5,7 @@ import unittest
 
 from factory_mcp import followups, mcp, tools
 from tests.test_safety import REPO, foreman
+from factory_mcp.repos import GATE_WRAPPER
 from tests.fakes import FakeGitHub, FakeRelay, ISSUE_BODY
 
 BOT = {"login": "github-actions[bot]", "id": 41898282}
@@ -60,6 +61,7 @@ class FollowupApprovalTest(unittest.TestCase):
         self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")] = (
             "    uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@"
             + "a" * 40 + "\n    with:\n      gatekeeper_ref: " + "b" * 40 + "\n")
+        self.github.branches[(GATE_WRAPPER, "v1")] = "c" * 40  # a frozen caller ignores the tag
         failed, result = self.call()
         self.assertFalse(failed, result)
         self.assertEqual(result["workItem"]["id"], "o/r#60")
@@ -71,6 +73,7 @@ class FollowupApprovalTest(unittest.TestCase):
     def test_a_pin_kept_in_a_comment_is_not_a_pin(self):
         """A commented `uses:` or `gatekeeper_ref:` line survives the edits that once rewrote pins, so
         it must never read as one: it would bind an approval to a commit no run can match."""
+        self.github.branches[(GATE_WRAPPER, "v1")] = "a" * 40
         self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")] = (
             "# uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "c" * 40
             + "\n    uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@v1\n")
@@ -83,12 +86,22 @@ class FollowupApprovalTest(unittest.TestCase):
         own referenced_workflows record of the run. Any other wrapper is still refused."""
         self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")] = (
             "    uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@v1\n")
+        self.github.branches[(GATE_WRAPPER, "v1")] = "a" * 40  # the tag the caller's v1 resolves to
         failed, result = self.call()
         self.assertFalse(failed, result)
         self.assertEqual(result["workItem"]["id"], "o/r#60")
+        # a pull request head can write its own `uses:` line, so the run may name any wrapper commit:
+        # only the one the tag names may approve an issue
+        self.github.branches[(GATE_WRAPPER, "v1")] = "c" * 40
+        self.assertTrue(self.call()[0])  # the tag moved: the run is not the released gate
+        self.github.branches[(GATE_WRAPPER, "v1")] = "a" * 40
         self.run["referenced_workflows"] = [{"sha": "b" * 40, "path":
             "someone/other/.github/workflows/gatekeeper.yml@" + "b" * 40}]
         self.assertTrue(self.call()[0])  # not this factory's wrapper: refused
+        self.run["referenced_workflows"] = [{"sha": "a" * 40, "path":
+            "Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "a" * 40}]
+        del self.github.branches[(GATE_WRAPPER, "v1")]
+        self.assertTrue(self.call()[0])  # a tag nobody can read refuses rather than trusts
 
     def test_owner_admits_original_and_repeated_approval_is_idempotent(self):
         for _ in range(2):
@@ -177,8 +190,8 @@ class FollowupApprovalTest(unittest.TestCase):
         self.assertIn("provenance", escalation["escalation"])
 
     def test_the_canonical_indented_caller_still_approves(self):
-        """The caller `bootstrap_plan` installs indents its job-level `uses:` line; the anchored check
-        strips the indentation `GATE_USES` captures, so approval does not refuse it."""
+        """The caller `bootstrap_plan` installs indents its job-level `uses:` line; the anchored
+        `CALLER_USES` matches that indented line directly, so approval does not refuse it."""
         self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")] = (
             "  jobs:\n"
             "    gatekeeper:\n"

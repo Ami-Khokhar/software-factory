@@ -31,7 +31,7 @@ LABELS = ((READY, "0E8A16", "software-factory may work on this issue"),
 # weekly gauges and for the follow-up approval, never to compare it with a revision it owns. Both
 # patterns are anchored to real line starts, so a pin left in a comment is never read as one: a
 # comment survives the edits that once rewrote pins.
-GATE_WRAPPER = "Ami-Khokhar/pr-gatekeeper-workflow"
+GATE_WRAPPER, GATE_CHANNEL = "Ami-Khokhar/pr-gatekeeper-workflow", "v1"
 GATE_RELEASE_REPO, GATE_RELEASE = GATE_WRAPPER, "gatekeeper-version.json"
 GATE_REF_PIN = re.compile(r"(?m)^\s*gatekeeper_ref:\s*([0-9a-f]{40})")
 GATE_USES_PIN = re.compile(r"(?m)^\s*uses:\s*" + re.escape(GATE_WRAPPER)
@@ -78,6 +78,17 @@ def wrapper_revision(text):
     ADR-0134); it is not the `gatekeeper_ref`, which names the gate the wrapper then ran."""
     match = GATE_USES_PIN.search(text or "")
     return match.group(1) if match else None
+
+
+def channel_wrapper(github):
+    """The wrapper commit the release channel's `v1` names now, or None when it cannot be read. A
+    caller that names `v1` leaves the wrapper commit to the tag, so this is the one commit a follow-up
+    approval may trust: a pull request head can write its own `uses:` line and GitHub records whatever
+    it wrote, but a head cannot move the tag (#422, ADR-0134)."""
+    try:
+        return github.branch_head(GATE_WRAPPER, GATE_CHANNEL)
+    except GitHubError:
+        return None
 
 
 def frozen_revision(text):
