@@ -53,6 +53,18 @@ class FollowupApprovalTest(unittest.TestCase):
         value = json.loads(result["content"][0]["text"])
         return result["isError"], value
 
+    def test_a_caller_on_the_release_channel_approves_on_the_runs_own_record(self):
+        """ADR-0134: a caller names the channel and carries no pin, so the commit that ran is GitHub's
+        own referenced_workflows record of the run. Any other wrapper is still refused."""
+        self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")] = (
+            "    uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@v1\n")
+        failed, result = self.call()
+        self.assertFalse(failed, result)
+        self.assertEqual(result["workItem"]["id"], "o/r#60")
+        self.run["referenced_workflows"] = [{"sha": "b" * 40, "path":
+            "someone/other/.github/workflows/gatekeeper.yml@" + "b" * 40}]
+        self.assertTrue(self.call()[0])  # not this factory's wrapper: refused
+
     def test_owner_admits_original_and_repeated_approval_is_idempotent(self):
         for _ in range(2):
             failed, result = self.call()

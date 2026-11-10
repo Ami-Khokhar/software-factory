@@ -1,6 +1,7 @@
 """The weekly report's numbers (metrics.weekly) over fixed audit histories and a fixed clock, the
 reason the Foreman records when a WorkItem goes to a person, the first-pass gauges (ADR-0083), and
 the factory_report tool."""
+import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -11,6 +12,7 @@ from factory_mcp import lessons, metrics, tools
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
+from factory_mcp.repos import GATE_RELEASE, GATE_RELEASE_REPO
 from factory_mcp.store import Store
 from tests.fakes import FakeGit, FakeGitHub, FakeRelay, result_line, workitem
 
@@ -277,6 +279,15 @@ class ReportToolTest(unittest.TestCase):
     def test_the_gate_pin_is_read_from_the_repos_gate_workflow(self):
         self.github.contents[("o/r", ".github/workflows/pr-gatekeeper.yml")] = WORKFLOW
         self.assertEqual(self.report({})["gauges"]["firstVerdictMerge"]["gatePin"], {"o/r": "b" * 40})
+
+    def test_a_caller_on_the_release_channel_stamps_the_revision_the_channel_resolves(self):
+        """One file decides the gate revision now (ADR-0134). A caller that names the channel stamps
+        what the gate's own pr_body job will pass, and a file nobody can read stamps "unknown"."""
+        self.github.contents[("o/r", ".github/workflows/pr-gatekeeper.yml")] = (
+            "jobs:\n  r:\n    uses: o/w/.github/workflows/gatekeeper.yml@v1\n")
+        self.assertEqual(self.report({})["gauges"]["firstVerdictMerge"]["gatePin"], {"o/r": "unknown"})
+        self.github.contents[(GATE_RELEASE_REPO, GATE_RELEASE)] = json.dumps({"gate_revision": "d" * 40})
+        self.assertEqual(self.report({})["gauges"]["firstVerdictMerge"]["gatePin"], {"o/r": "d" * 40})
 
     def test_an_accepted_verdicts_outcome_and_round_ride_the_reconcile_row(self):
         self.foreman.intake("o/r", 7)

@@ -53,18 +53,27 @@ def _changed(foreman, wi, history):
     return dict(since, paths=[f["filename"] for f in files])
 
 
-def _gate_pins(foreman):
-    """Each repo's pr-gatekeeper revision pin (its gatekeeper_ref, ADR-0080), as the weekly report
-    stamps it on every gauge (ADR-0083), so two windows under different pins never read as one
-    trend. Best effort: a repo the factory cannot read yields "unknown", never a failed report."""
-    pins = {}
+def _gate_revisions(foreman):
+    """Each repo's gate revision, for the first-pass gauges (ADR-0083, ADR-0134): the commit its
+    caller froze, or the revision the release channel resolves to when it names the channel. Two
+    windows under different gate revisions are not one trend, so every gauge carries what it ran.
+    Reading is all this does: nothing compares a pin, upgrades one, or refuses a caller, and a repo
+    the factory cannot read is "unknown", never a failed report."""
+    channel, revisions = None, {}
     for repo in sorted(foreman.config.repos):
         try:
-            text = foreman.github.file(repo, ".github/workflows/pr-gatekeeper.yml")
-            pins[repo] = (repos._gate_pins(text) or {}).get("refSha") or "unknown"
+            caller = foreman.github.file(repo, repos.GATE_WORKFLOW)
         except GitHubError:
-            pins[repo] = "unknown"
-    return pins
+            revisions[repo] = "unknown"
+            continue
+        frozen = repos.frozen_revision(caller)
+        if frozen:
+            revisions[repo] = frozen
+            continue
+        if channel is None:
+            channel = repos.channel_revision(foreman.github) or "unknown"
+        revisions[repo] = channel
+    return revisions
 
 
 def build(store, foreman, agent=False):
@@ -166,6 +175,7 @@ def build(store, foreman, agent=False):
         checks = repos.check(foreman.github, repo)
         return {"repo": repo, "enabled": foreman.config.listed(repo) is not None,
                 "ready": all(c["ok"] for c in checks), "checks": checks,
+                "gateRevision": repos.channel_revision(foreman.github) or "unknown",
                 "setupMergeAuthorized": foreman.store.setup_merge(repo) is not None}
 
     def show_lessons(args):
@@ -190,7 +200,7 @@ def build(store, foreman, agent=False):
                       for candidate in lessons.candidates(store, repo)]
         return metrics.weekly(store.all(), store.history, candidates,
                               metrics.lesson_effect(approved, store.all_workorders),
-                              datetime.now(timezone.utc), store.all_workorders, _gate_pins(foreman))
+                              datetime.now(timezone.utc), store.all_workorders, _gate_revisions(foreman))
 
     tools = [
         Tool("factory_docker_status", "Check whether the host Docker engine is running.",
@@ -239,10 +249,9 @@ def build(store, foreman, agent=False):
              "write", lambda args: foreman.add_repo(args["repo"], args["by"])),
         Tool("factory_bootstrap_repo",
              "Prepare an owner-reviewed setup PR containing only missing gate files and the "
-             "factory-standard block. An installed pr-gatekeeper caller whose gate revision pins "
-             "are older than the approved revision is upgraded on the same PR, changing only those "
-             "two pins and leaving its verify command, permissions, secrets and unrelated files as "
-             "they are. Never merges or enables the repo. Requires a verify command "
+             "factory-standard block. An installed pr-gatekeeper caller is left exactly as the repo "
+             "wrote it: the gate revision follows the release channel, so no caller carries a pin to "
+             "keep current (ADR-0134). Never merges or enables the repo. Requires a verify command "
              "when the gate config is missing. An empty repo first gets one commit with only a "
              "README.md on its default branch; the result names it as initialCommit. An open setup "
              "PR is adopted; when its files differ from the plan, a commit is added to it (updatedSha), "

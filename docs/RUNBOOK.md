@@ -1170,12 +1170,13 @@ Do not rewrite stored WorkOrders to bypass their fences.
 Migrate each installation through a separate owner-reviewed configuration PR following
 pr-gatekeeper's docs/documentation-policy-migration.md. Remove only the specifically approved
 AGENTS.md entry. Keep custom directories, permission files, credentials, models, budgets and
-verification commands. Pin the reviewed gate revision only after it merges. Base-branch rules
+verification commands. The gate revision follows the release channel, so nothing in a caller is
+pinned: a release updates `gatekeeper-version.json` in the wrapper (ADR-0134). Base-branch rules
 review the migration PR. Bootstrap never rewrites an existing protection list to adopt this policy.
 Recheck readiness after any prerequisite setup PR, including pr-gatekeeper#75. The current
 agent-relay factory-standard block already meets readiness. Its conflicting #42 is not required.
 
 After activation, create one small documentation-only issue through factory_start_plan, record its
 WorkOrder protections, worker result, successful configured verification, independent review and
-bot merge. Report merged code, deployed factory/gate pins, migrated settings, and verified-in-use
+bot merge. Report merged code, the factory and gate revisions in use, migrated settings, and verified-in-use
 proof separately. A local test or green code PR does not establish activation.

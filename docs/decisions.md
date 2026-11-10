@@ -3147,3 +3147,51 @@ person and its head has moved since the last answer, and none otherwise. The num
 last answer covered, whoever gave it, rather than what the gate last said, and the CLI names the
 answerer, so an agent's answer is never shown as the owner's. A WorkItem whose last answer was Day
 Desk's compares from that answer and says so.
+
+---
+
+## ADR-0134 — The gate revision is the release channel's, not a caller's pin
+
+**Context.** ADR-0080 made the factory the owner of an installed caller's two gate revision pins: it
+rewrote the wrapper's `uses:` sha and the `gatekeeper_ref:` input on the same reviewed setup PR. That
+worked while every caller pinned a commit. Then `Ami-Khokhar/pr-gatekeeper` v1 became a release
+channel: job `pr_body` reads `gatekeeper-version.json` from the public wrapper and passes the commit
+it names to `gates` and `review`, and the caller template carries no pin (pr-gatekeeper #105). The
+declared interface is unchanged, so a caller that freezes a sha still runs that gate.
+
+Against that, the factory's pin machinery turned into damage:
+
+- `repos._gate_pins` needs both a 40-hex `uses:` and a `gatekeeper_ref:`. A caller on `@v1` has
+  neither, so it read as "not a caller the factory manages" and its workflow check passed for the
+  wrong reason. Three tests that pin the upgrade path fail on `main`, which makes the gate report
+  `HUMAN / verify fails on head and base` for every pull request in this repo, so none can merge.
+- Four enabled repos still carry both pins, so `_upgraded_workflow` reached its `want is None` branch
+  and raised `ValueError: the software-factory gate workflow pins no gate revision` out of
+  `repos.check`, which `factory_repo_check`, `factory_add_repo`, `factory_bootstrap_repo` and
+  `merge_setup_pr` all call without expecting it.
+
+**Decision.** The caller is left exactly as the repo wrote it. `_gate_pins` and `_upgraded_workflow`
+are gone, `bootstrap_plan` adds the workflow only when the repo has none, and the `gate_workflow`
+check asks only whether it is installed, so it cannot raise on a caller it cannot parse. The plan no
+longer carries an `updates` list, and the setup PR's body says "bootstrap" only. `repos` gains
+`channel_revision`, which reads `gatekeeper-version.json` and returns the commit it names, and
+`frozen_revision`, which reads a commit a caller froze for reporting. `factory_repo_check` reports
+the channel's revision, and the weekly gauges stamp the revision each repo actually ran: its frozen
+`gatekeeper_ref` or wrapper commit when it has one, else what the channel resolves to, else
+`unknown`. ADR-0080 is superseded.
+
+**One consumer had to follow.** The gate follow-up approval (#422) bound an approval to the exact
+commit the source PR's base caller pinned, and read it with the deleted helper. It now requires
+the base caller to call this factory's wrapper exactly once, and takes the commit that ran from
+GitHub's own `referenced_workflows` record of the run. A caller that froze a commit still binds
+the run to it, so nothing is looser for a frozen repo; for a caller on the channel, the anchor is
+the wrapper's identity in a record neither the issue nor the PR head can write, rather than one
+commit the factory would have to know in advance.
+
+**Consequence.** Updating the gate is one file in one repo, with no caller change and no factory
+involvement, and nothing in the factory can refuse or rewrite a caller's workflow. A repo that
+deliberately froze a sha keeps running that gate and the factory neither notices nor objects; the
+weekly report still names the revision it ran, so a frozen repo's numbers never read as the
+channel's. The factory no longer checks that an installed caller is current, so a repo left on an
+older frozen commit is a person's business, not the factory's. Reading the release file costs one
+GitHub call per report.
