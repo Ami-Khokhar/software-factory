@@ -24,6 +24,9 @@ from .verdict import blocking, fingerprint
 # States that need a person. Entering one posts a comment on the issue, so the owner hears of it.
 ATTENTION = ("human_waiting", "blocked", "exhausted")
 WORKING = ("dispatching", "implementing")
+QUEUE_POLL = 2.0  # seconds between store reads inside a waiting claim (ADR-0135)
+QUEUE_WAIT_MAX = 300  # the longest a claim blocks, so a stuck caller cannot hold a thread
+QUEUE_LEASE = 900  # a claim older than this goes back to the queue
 # A node holds its `Paths:` files while it is one of these (ADR-0088); waiting for a person
 # holds nothing, so a stalled node never blocks its neighbours' files.
 PATHS_HOLDING = ("dispatching", "implementing", "pr_open", "reviewing", "changes_requested",
@@ -140,6 +143,8 @@ class Foreman:
         if existing:
             return self._joined(existing)
         wi = self._admit(repo, issue or self._issue(repo, number), proof)
+        if not self.config.queue and wi.get("state") == "queued":
+            wi = dict(wi, state="ready", queue=None)  # nothing would drain it (ADR-0135)
         try:
             wi = self.store.put(wi)
         except Conflict:  # a concurrent tick took it in first
@@ -542,7 +547,7 @@ class Foreman:
             return before, wi
         try:
             facts = workitem.observe(self.github, wi)
-            new = workitem.reconcile(wi, facts)
+            new = workitem.reconcile(wi, facts, queue=self.config.queue)
             detail = {"headSha": new.get("headSha")}
             if self._gate_merged_base(wi, new.get("headSha")):  # not a person's commit (ADR-0039)
                 detail["mergedBase"] = True
@@ -673,6 +678,10 @@ class Foreman:
             self.store.log("notify_failed", {"error": str(exc)}, wi["id"])
 
     def act(self, wi, facts):
+        if wi["state"] == "queued" and not self.config.queue:
+            # no orchestrator is configured to drain the queue, so a label keeps its old meaning:
+            # one write to ready, and this same tick dispatches it (ADR-0135)
+            wi = self._write(wi, dict(wi, state="ready", queue=None), "queue_off")
         if wi["state"] == "ready":
             wi = self._wait_for(wi, facts["issue"]["dependsOn"])
             if wi["state"] != "ready" or wi.get("waitingOn"):
@@ -864,6 +873,123 @@ class Foreman:
         The check must be the last one before a worker runs: an operation may pause the graph after
         the dispatch decision and before the relay call, so submit() rechecks at the submission point."""
         return self.store.active_pauses(wi["id"])
+
+    def next_queued(self, by, wait_seconds=0):
+        """The next WorkItem the orchestrator should look at: urgent first, then oldest, claimed under
+        its lease so two calls never take the same one (ADR-0135). It waits up to `wait_seconds`, and
+        while the store is empty it reads `factory:urgent` from GitHub itself, so an urgent label is
+        seen without waiting for the next tick. That is all the factory can do to wake an agent it
+        cannot call."""
+        if not isinstance(by, str) or not by.strip():
+            raise ToolError("a claim needs the name of the agent that took it")
+        wait = max(0, min(int(wait_seconds or 0), QUEUE_WAIT_MAX))
+        deadline = time.time() + wait
+        looked = False
+        while True:
+            found = self._claim_next(by)
+            if found is not None:
+                return found
+            if time.time() >= deadline:
+                return None
+            if not looked:  # one GitHub read for urgent work, then the store only
+                looked = True
+                self._intake_urgent()
+                found = self._claim_next(by)
+                if found is not None:
+                    return found
+                if time.time() >= deadline:
+                    return None
+            time.sleep(QUEUE_POLL)
+
+    def _claim_next(self, by):
+        """Claim the first free queue entry. A `Conflict` from the write is another claim winning the
+        same entry, so it moves on rather than double-booking, and a claim past `QUEUE_LEASE` is
+        free again so a crashed agent cannot strand an entry."""
+        def order(wi):
+            entry = wi.get("queue") or {}
+            return (0 if entry.get("urgent") else 1, entry.get("at") or wi["updatedAt"])
+        for wi in sorted((wi for wi in self.store.all() if wi["state"] == "queued"), key=order):
+            entry = wi.get("queue") or {}
+            if entry.get("claimedBy") and not self._claim_expired(entry.get("claimedAt")):
+                continue
+            if not self.store.acquire(wi["id"], self.holder):
+                continue  # a tick holds it: the next entry may be free
+            try:
+                fresh = self.store.get(wi["id"])
+                if fresh is None or fresh["state"] != "queued":
+                    continue
+                before = fresh.get("queue") or {}
+                if before.get("claimedBy") and not self._claim_expired(before.get("claimedAt")):
+                    continue  # another agent claimed it while this call waited for the lease
+                taken = dict(before, urgent=bool(before.get("urgent")),
+                             at=before.get("at") or fresh["updatedAt"], claimedBy=by, claimedAt=now())
+                try:
+                    return self._queued_view(self._write(fresh, dict(fresh, queue=taken),
+                                                         "queue_claimed", by=by))
+                except Conflict:
+                    continue
+            finally:
+                self.store.release(wi["id"], self.holder)
+        return None
+
+    @staticmethod
+    def _claim_expired(claimed_at):
+        """Whether a claim is old enough to take over. An unreadable stamp is expired, so a broken
+        field never strands an entry."""
+        try:
+            at = calendar.timegm(time.strptime(claimed_at, "%Y-%m-%dT%H:%M:%SZ"))
+        except (TypeError, ValueError):
+            return True
+        return time.time() - at > QUEUE_LEASE
+
+    def _queued_view(self, wi):
+        """A claimed entry as its agent needs it: the work, what it waits on and what is behind it.
+        The dependency is read, never acted on: the agent decides."""
+        try:
+            body = self._issue(wi["repo"], wi["issueNumber"]).get("body")
+        except (ToolError, GitHubError):
+            body = None
+        deps = [{"issue": number, "status": status, "how": how}
+                for number in workitem.depends_on(body)
+                for status, how in [self._dependency(wi["repo"], number)]]
+        return {"workItem": wi, "dependsOn": deps,
+                "queued": sum(1 for other in self.store.all() if other["state"] == "queued")}
+
+    def _intake_urgent(self):
+        """Take in a `factory:urgent` issue of an enabled repo the store does not know, so a waiting
+        claim sees it at once. A refused intake is the tick's business, not this call's: the tick says
+        why, once."""
+        for repo in sorted(self.config.repos):
+            try:
+                issues = self.github.labelled_issues(repo, workitem.URGENT)
+            except GitHubError as exc:
+                self.store.log("search_failed", {"author": "urgent", "error": str(exc)}, None)
+                continue
+            for issue in issues:
+                if self.store.get(workitem.workitem_id(repo, issue["number"])) is not None:
+                    continue
+                try:
+                    self.intake(repo, issue["number"], issue)
+                except (ToolError, ValueError):
+                    continue
+
+    def approve_queued(self, workitem_id, by, note=""):
+        """The orchestrator's yes: the entry leaves the queue for `ready`, and the next tick dispatches
+        it through every existing guard, so one action per tick still holds (ADR-0135)."""
+        if not isinstance(by, str) or not by.strip():
+            raise ToolError("an approval needs the name of the agent that gave it")
+        if not self.store.acquire(workitem_id, self.holder):
+            raise ToolError(f"{workitem_id} is being ticked; try again")
+        try:
+            wi = self.store.get(workitem_id)
+            if wi is None:
+                raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
+            if wi["state"] != "queued":
+                raise ToolError(f"{workitem_id} is {wi['state']}; only a queued WorkItem is approved")
+            return self._write(wi, dict(wi, state="ready", queue=None), "queue_approved", by=by,
+                               **({"note": note} if note else {}))
+        finally:
+            self.store.release(workitem_id, self.holder)
 
     def dispatch(self, wi, kind, findings=(), named=()):
         with self.runtime_lock:

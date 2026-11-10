@@ -10,6 +10,7 @@ from .mcp import Tool, ToolError
 # What Day Desk may call when it drives the factory with FACTORY_AGENT_TOKEN (ADR-0030). Setting up
 # a repo, its gate secrets, and the lessons workers read stay with the owner's token.
 AGENT_TOOLS = frozenset({"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons",
+                         "factory_queue_next", "factory_queue_approve",
                          "factory_report", "factory_memory_events", "factory_memory_search", "factory_dream_status",
                          "factory_improvement_status",
                          "factory_check_worker", "factory_reload_workers", "factory_set_worker_enabled",
@@ -305,6 +306,28 @@ def build(store, foreman, agent=False):
                              "requestId": {"type": "string", "minLength": 1,
                                            "description": "stable ID for the request; every retry carries it"}}},
              "write", lambda args: foreman.merge_setup_pr(args["repo"], args["by"], args["requestId"])),
+        Tool("factory_queue_next",
+             "Claim the next WorkItem waiting for an orchestrator's decision (ADR-0135): urgent first, "
+             "then oldest, and none when the queue is empty. A claim is exclusive for 15 minutes, so "
+             "two agents never take the same one, and this call can wait up to 300 seconds: while the "
+             "queue is empty it reads `factory:urgent` from GitHub itself, so an urgent label is seen "
+             "without waiting for a tick. It changes nothing about the work.",
+             {"type": "object", "required": ["by"], "additionalProperties": False,
+              "properties": {"by": {"type": "string", "minLength": 1,
+                                    "description": "the agent taking it, like day-desk"},
+                             "waitSeconds": {"type": "integer", "minimum": 0, "maximum": 300}}},
+             "write", lambda args: {"next": foreman.next_queued(args["by"], args.get("waitSeconds", 0))}),
+        Tool("factory_queue_approve",
+             "Approve a claimed queue entry so the factory works on it: it leaves the queue for ready, "
+             "and the next tick dispatches it through every existing guard. Refused for any WorkItem "
+             "that is not queued. Use it when the issue is worth a worker pass as it stands; to change "
+             "the issue first, edit it on GitHub and leave the entry queued.",
+             {"type": "object", "required": ["id", "by"], "additionalProperties": False,
+              "properties": {"id": {"type": "string"},
+                             "by": {"type": "string", "minLength": 1},
+                             "note": {"type": "string", "description": "why it is approved"}}},
+             "write", lambda args: {"workItem": foreman.approve_queued(
+                 args["id"], args["by"], args.get("note", ""))}),
         Tool("factory_intake",
              "Create a WorkItem from an open GitHub issue in an allowlisted repo. The issue needs an "
              "'## Acceptance' list of '- <claim> — done when: <check>' bullets. Idempotent.",

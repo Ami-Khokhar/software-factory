@@ -168,6 +168,17 @@
         "provenanceVersion": { "type": "integer", "enum": [0, 1] }
       }
     },
+    "queue": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "description": "Set while the state is `queued` (ADR-0135): the orchestrator's queue entry. `urgent` puts it first and comes from factory:urgent, `at` is when it entered and is its place in the order, and a claim writes who took it and when. A claim past its lease is free again. Null in every other state.",
+      "properties": {
+        "urgent": { "type": "boolean" },
+        "at": { "type": ["string", "null"] },
+        "claimedBy": { "type": ["string", "null"] },
+        "claimedAt": { "type": ["string", "null"] }
+      }
+    },
     "state": { "$ref": "#/$defs/state" },
     "stateVersion": {
       "type": "integer",
@@ -240,6 +251,7 @@
       "enum": [
         "issued",
         "planned",
+        "queued",
         "ready",
         "dispatching",
         "implementing",

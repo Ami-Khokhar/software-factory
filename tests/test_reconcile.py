@@ -105,7 +105,7 @@ def v(outcome, head="s2", round_=1):
 class ReconcileTableTest(unittest.TestCase):
     CASES = [
         # (state before, facts, state after)
-        ("issued", facts(), "ready"),
+        ("issued", facts(), "queued"),  # factory:ready queues it for the orchestrator (ADR-0135)
         ("issued", facts(labels=("factory:proposed",)), "planned"),
         ("ready", facts(issue_state="closed"), "cancelled"),
         ("ready", facts(pr=PR), "pr_open"),
@@ -128,6 +128,11 @@ class ReconcileTableTest(unittest.TestCase):
             with self.subTest(before=before, after=after):
                 wi = {"state": before, "gateRound": 0, "reviewedSha": None}
                 self.assertEqual(reconcile(wi, observed)["state"], after)
+
+    def test_a_label_means_ready_when_no_orchestrator_drains_the_queue(self):
+        """With FACTORY_QUEUE off nothing would drain the queue, so a label keeps its old meaning."""
+        wi = {"state": "issued", "gateRound": 0, "reviewedSha": None}
+        self.assertEqual(reconcile(wi, facts(), queue=False)["state"], "ready")
 
     def test_old_round_is_stale(self):
         wi = {"state": "reviewing", "gateRound": 3, "reviewedSha": "s1"}

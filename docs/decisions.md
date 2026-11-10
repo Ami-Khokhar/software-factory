@@ -3202,3 +3202,44 @@ weekly report still names the revision it ran, so a frozen repo's numbers never 
 channel's. The factory no longer checks that an installed caller is current, so a repo left on an
 older frozen commit is a person's business, not the factory's. Reading the release file costs one
 GitHub call per report.
+## ADR-0135 — `factory:ready` queues the work for the orchestrator, and `factory:urgent` is read first
+
+**Context.** ADR-0030 makes Day Desk the factory's front door, and the audit of this repo found that
+six subsystems were attempting its judgement in code — Projects, dreaming, improvement publication,
+the retry queue, Jev ranking and the knowledge graph — while the one decision that mattered had no
+durable home. `factory:ready` went from a label to a worker pass inside a single tick: `act` saw
+`ready`, `_dispatch` built a WorkOrder and `submit` handed it to the relay. No agent ever had the
+chance to decide whether the issue should be worked at all, in what order, or with which worker, and
+`factory_replace_issue` already showed the cost of having no state between "taken in" and "pushed to
+a worker".
+
+ADR-0095 had already tried a queue and failed the other way: `pendingRetry` was written by
+`factory_queue_retry` and read by nothing, which is why #512 deletes it. The lesson was not "no
+queue" but "a queue needs a consumer in the same change".
+
+**Decision.** A labelled issue enters a new state, `queued`, and nothing dispatches from it. The
+queue is the store: a WorkItem in `queued` **is** an entry, ordered urgent first then by `queue.at`,
+so there is no second table and no second drain path to keep true, and the queue inherits the
+store's durability, its rebuild from GitHub and its per-WorkItem lease. `factory:ready` and
+`factory:urgent` both queue an issue, and `urgent` is the flag that puts it first. `Foreman.next_queued`
+claims the first free entry under that lease and writes `queue.claimedBy`/`claimedAt`, so the store's
+optimistic version makes a second claim lose instead of double-booking; a claim older than
+`QUEUE_LEASE` (fifteen minutes) is free again. `Next_queued` waits up to five minutes, and while the
+store is empty it reads `factory:urgent` from GitHub itself, so an urgent label is seen by a waiting
+agent without waiting for the tick. `factory_queue_approve` moves the entry to `ready`, and the next
+tick dispatches it through every existing guard: one action per tick, one WorkOrder, and the routing,
+budget and gate rules unchanged. `factory:urgent` is created with the other factory labels.
+
+**Switch.** `FACTORY_QUEUE=on` turns the queue on and it is off by default, because a factory no
+orchestrator drives must not strand work in a queue nobody drains: with it off, a label means
+`ready` as it did before, and one bridge in `act` moves any `queued` item a store already holds.
+Production turns it on with the same deployment that gives Day Desk its token.
+
+**Consequence.** The label no longer starts work by itself: between the label and a worker there is
+one orchestrator decision and one tick, and an issue nobody claims waits indefinitely in `queued`
+with the queue length visible in `factory_status`. An agent that is already waiting on a claim sees
+urgent work within about two seconds; an agent that is asleep sees it on its next call. The factory
+cannot wake an agent it has no way to call, so a push channel — Telegram from the factory to Day
+Desk — is a separate decision and is not assumed here. The queue is not ADR-0095's: it is the
+WorkItem's own state, drained by the tools added in the same change, and `test_queue` fails if a
+tick ever dispatches a queued item again.

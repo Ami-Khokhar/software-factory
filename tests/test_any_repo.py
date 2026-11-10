@@ -49,7 +49,7 @@ class AnyRepoTest(unittest.TestCase):
         self.assertIn(NEW, self.foreman.config.repos)
         self.assertEqual([(e["name"], e["added_by"]) for e in load(str(self.manifest))],
                          [(NEW, f"{OWNER}, who marked {NEW}#3 factory:ready")])
-        self.assertEqual(self.github.labels[NEW], {"factory:ready", "factory:proposed"})
+        self.assertEqual(self.github.labels[NEW], {"factory:ready", "factory:proposed", "factory:urgent"})
 
     def test_a_repo_that_fails_the_check_gets_one_comment_and_no_workitem(self):
         self.github.add_issue(BARE, 3, author=OWNER)

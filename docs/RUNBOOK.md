@@ -130,7 +130,9 @@ crosses 1001 (a `human_waiting` WorkItem whose `blockedOn` names the decompositi
 Limits: a WorkItem gets at most 4 worker passes (then `exhausted`); your `retry` gives it 4 more, also from
 `exhausted` (ADR-0035). One exception (ADR-0112): a PR the gate returned CHANGES on keeps one fix pass per gate
 round past that count. You may also ask Day Desk in Telegram to retry it (ADR-0043). Two failed attempts in a
-row block it. Each pass has 20 minutes. Two passes of one repo run at once (`FACTORY_PASSES_PER_REPO`). A PR
+row block it. Each pass has 20 minutes. Two passes of one repo run at once (`FACTORY_PASSES_PER_REPO`).
+`FACTORY_QUEUE=on` makes `factory:ready` wait for an orchestrator's claim instead of dispatching
+at once, and `factory:urgent` puts an issue first in that queue. A PR
 with no gate verdict for 2 hours goes to you. For a Project member, the Project's shared budget and the 8-pass
 lifetime cap apply instead (see [the Project contract](contracts.md#project), ADR-0101).
 

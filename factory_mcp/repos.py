@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 
 from .github import GitHubError
-from .workitem import PROPOSED, READY
+from .workitem import PROPOSED, READY, URGENT
 
 NAME = re.compile(r"^(?!\.\.?/)[A-Za-z0-9_.-]+/(?!\.\.?$)[A-Za-z0-9_.-]+$")  # not "." or ".."
 STANDARD = re.compile(r"<!-- factory-standard:begin -->.*?<!-- factory-standard:end -->", re.S)
@@ -24,7 +24,8 @@ ENTRY_KEYS = {"name", "added_by", "added_at"}
 GATE_CONFIG, GATE_WORKFLOW = ".github/pr-gatekeeper.json", ".github/workflows/pr-gatekeeper.yml"
 GATE_WORKFLOW_SOURCE = TEMPLATE.parent.parent / GATE_WORKFLOW
 LABELS = ((READY, "0E8A16", "software-factory may work on this issue"),
-          (PROPOSED, "C5DEF5", "proposed by the Planner; add factory:ready to accept"))
+          (PROPOSED, "C5DEF5", "proposed by the Planner; add factory:ready to accept"),
+          (URGENT, "D93F0B", "wake the orchestrator now and decide this first"))
 # The gate revision is not a caller's pin any more (ADR-0134): `v1` is the release channel, and the
 # gate's own `pr_body` job reads this one file in the public wrapper and passes the commit it names
 # to `gates` and `review`. A caller may still freeze a commit, and the factory reads it for the
