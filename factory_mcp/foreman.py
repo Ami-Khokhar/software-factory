@@ -1735,6 +1735,10 @@ class Foreman:
             if resolution == "retry":
                 new = dict(wi, state="changes_requested" if wi.get("prNumber") else "ready", terminalReason=None,
                            passesBefore=wi.get("passesBefore") if agent and not owner_asked else passes)
+                if (wi.get("incident") or {}).get("action") == "worker_unavailable":
+                    # the held order was never submitted, and a retry builds a new one (ADR-0133), so
+                    # the pointer must not make the WorkItem look like a running pass
+                    new = dict(new, activeWorkOrderId=None, providerTaskId=None)
             elif resolution == "regate" and wi.get("prNumber"):
                 regated_at = now()  # before the edit, so the run the edit starts begins after it
                 rerun = {"gateRerun": self._rerun_gate(wi)}
