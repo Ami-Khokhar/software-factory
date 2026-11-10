@@ -1033,17 +1033,37 @@ class Foreman:
             self.store.log("submit_paused", {"order": order["id"],
                                              "pausedBy": [row["requestId"] for row in paused]}, wi["id"])
             return wi
-        if any(row["worker"] == wi["worker"] for row in self.store.worker_activations()):
-            # Reload before a controlled worker runs, then recheck disk/image/credential drift.
-            self.relay.reload()
-            if (wi["worker"] not in dict(worker_ops.effective_workers(self.store, self.config))
-                    or routing.family(wi["worker"]) in self._reviewer_families(wi["repo"])):
-                raise ToolError("worker activation changed or drifted; recheck health and activation")
+        fault = self._worker_fault(wi, wi.get("worker"))
+        if fault:  # the worker cannot run this pass, so no raise out of the tick (#522)
+            return self._hold_worker(wi, fault)
         task = self.relay.submit(wi["worker"], documents.worker_input(order, wi["branch"]),
                                  order["idempotencyKey"], order["budget"]["wallMs"],
                                  cwd=self.config.checkout(wi["repo"]))
         return self._write(wi, dict(wi, state="implementing", providerTaskId=task["id"]),
                            "submitted", task=task["id"])
+
+    def _worker_fault(self, wi, worker):
+        """Why `worker` may not run this pass now, or None (ADR-0085, ADR-0094). An activated worker is
+        revalidated against the live registry, image and credential immediately before the relay call;
+        a worker the configuration pins has no activation that can drift."""
+        if not any(row["worker"] == worker for row in self.store.worker_activations()):
+            return None
+        self.relay.reload()  # the registry may have changed since the WorkOrder was built
+        excluded = self._reviewer_families(wi["repo"])
+        if routing.family(worker) in excluded:
+            return (f"{worker} names the gate reviewer's model family "
+                    f"({', '.join(sorted(excluded))}), so a pass there would answer its own reviewer")
+        return worker_ops.unusable_reason(self.store, self.config, worker)
+
+    def _hold_worker(self, wi, reason):
+        """Hold the WorkItem on the worker's own fault instead of raising out of the tick (#522). No
+        pass runs, so the open recovery finds no outcome. The WorkOrder stays on record with its
+        idempotency key unused, so a later retry cannot start a second task. The reason is stable, so
+        an unchanged fault writes once and the next tick does nothing."""
+        self._finish_recovery(wi, False)
+        return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=reason,
+                                    activeWorkOrderId=None, providerTaskId=None),
+                           "worker_unavailable", worker=wi.get("worker"))
 
     def worker_memory(self, token, args):
         found = self.store.order_by_ask_token(token)
