@@ -3153,6 +3153,39 @@ Desk's compares from that answer and says so.
 
 ---
 
+## ADR-0133 — A worker that cannot run holds its WorkItem, and the hold is re-read each tick
+
+**Context.** `Foreman.submit` rechecked the routed worker immediately before the relay call and
+raised a bare `ToolError` when it had been disabled, when its image or credential had changed since
+it was enabled, when its health was stale for that binding, or when its family was the gate
+reviewer's. The raise came after the `dispatching` write and the WorkOrder save, and `tick_one`
+catches only `Conflict`, `GitHubError` and `RelayError`, so it reached `Foreman.tick`'s per-WorkItem
+handler: one `tick_error` row per tick, and the WorkItem left in `dispatching` with no reason on it.
+ADR-0129 had already throttled the `worker_membership_drift` row; the raise and the stranded state
+were not addressed. On the live store on 10 Nov 2026 that one condition had produced 2,221
+`tick_error` rows and 2,359 drift rows, and `Ami-Khokhar/agent-relay#287` had held `dispatching` for
+over eight hours.
+
+**Decision.** `Foreman._worker_fault` answers with the reason instead of raising, and
+`worker_ops.unusable_reason` answers the per-worker form of the reasons `membership` already
+computes. It writes no drift row, because here the WorkItem's own escalation is the incident.
+`Foreman._hold_worker` writes `human_waiting` with that reason and keeps `activeWorkOrderId`, so the
+order and its idempotency key stay live. `Foreman._recheck_worker` re-reads a `worker_unavailable`
+hold on each tick, as `_recheck_dependency` re-reads a dependency: a fault that has cleared resumes
+`dispatching` and submits the order already on record, under its own key, so the relay can hold at
+most one task for it; a fault that has not cleared writes nothing. The hold is not a rollback to
+`ready`: `ready` would re-dispatch every tick, which is the same flood under another label, and it
+would spend a pass on a fault no pass can fix.
+
+**Consequence.** One fault is one escalation and one audit row, and no `tick_error`. The WorkItem
+leaves `dispatching`, so `factory_status` and the issue say why. A resume cannot save a second
+WorkOrder or start a second relay task. A fault that clears on its own resumes with nobody, and one
+that needs a rebuild does not, because a rebuilt image changes the binding an activation pins
+(ADR-0094), so that repair waits for Day Desk or the owner to re-enable it. That re-enable is
+followed by a retry, which does build a new order, because the recorded one carries the base commit
+of the attempt that never ran; a Project member counts that new order as a pass, which is the
+existing ordering rule for a saved order and is not changed here. A held item that is answered by a
+person rather than resumed keeps the order on record and its key unused.
 ## ADR-0134 — The gate revision is the release channel's, not a caller's pin
 
 **Context.** ADR-0080 made the factory the owner of an installed caller's two gate revision pins: it

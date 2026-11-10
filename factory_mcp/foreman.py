@@ -685,7 +685,7 @@ class Foreman:
             return self.dispatch(wi, "implement", self._human_findings(wi) + self._attempt_findings(wi),
                                  facts["issue"]["workers"])
         if wi["state"] == "human_waiting":
-            return self._recheck_dependency(wi)
+            return self._recheck_worker(self._recheck_dependency(wi))
         # GitHub runs no workflow on a PR that conflicts with its base, so the gate would never answer;
         # an accepted MERGE never happens there either, so merge_pending takes the same redo (ADR-0114)
         conflict = (wi["state"] in ("pr_open", "reviewing", "changes_requested", "merge_pending")
@@ -1056,14 +1056,35 @@ class Foreman:
         return worker_ops.unusable_reason(self.store, self.config, worker)
 
     def _hold_worker(self, wi, reason):
-        """Hold the WorkItem on the worker's own fault instead of raising out of the tick (#522). No
-        pass runs, so the open recovery finds no outcome. The WorkOrder stays on record with its
-        idempotency key unused, so a later retry cannot start a second task. The reason is stable, so
-        an unchanged fault writes once and the next tick does nothing."""
-        self._finish_recovery(wi, False)
-        return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=reason,
-                                    activeWorkOrderId=None, providerTaskId=None),
+        """Hold the WorkItem on the worker's own fault instead of raising out of the tick (#522). The
+        order and its idempotency key stay on record with the pointer to them, so the resume submits
+        that order rather than buying a second one, and no attempt has concluded, so an open recovery
+        is left to conclude when the pass actually runs. The reason is stable, so an unchanged fault
+        writes once and the next tick does nothing."""
+        return self._write(wi, dict(wi, state="human_waiting", blockedOn=reason,
+                                    question=None),
                            "worker_unavailable", worker=wi.get("worker"))
+
+    def _recheck_worker(self, wi):
+        """A held worker fault is re-read each tick, the way `_recheck_dependency` re-reads a
+        dependency (ADR-0081): one that has cleared resumes the WorkOrder already on record, under its
+        own idempotency key, so the relay can hold at most one task for it; one that has not cleared
+        writes nothing. A rebuilt image changes the binding an activation pins, so that repair still
+        needs a re-enable before this resumes (ADR-0094, ADR-0133)."""
+        incident = wi.get("incident") or {}
+        if incident.get("action") != "worker_unavailable" or not wi.get("activeWorkOrderId"):
+            return wi
+        order = next((o for o in self.store.workorders(wi["id"])
+                      if o["id"] == wi["activeWorkOrderId"]), None)
+        if order is None:
+            return wi
+        if self._worker_fault(wi, wi.get("worker")):  # still unusable: the same incident, unchanged
+            return wi
+        resumed = dict(incident, id=incident.get("id", 0) + 1, action="worker_resumed",
+                       reason=self._norm_reason(wi), since=now(), agentAnswered=True)
+        wi = self._write(wi, dict(wi, state="dispatching", blockedOn=None, incident=resumed),
+                         "worker_resumed", worker=wi.get("worker"))
+        return self.submit(wi, order, guarded=True)
 
     def worker_memory(self, token, args):
         found = self.store.order_by_ask_token(token)

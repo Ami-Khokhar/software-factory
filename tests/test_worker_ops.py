@@ -549,7 +549,7 @@ class WorkerOpsTest(unittest.TestCase):
         self.relay.down = False
         self.activate(False)
         held = foreman.submit(wi, order)
-        self.assertEqual((held["state"], held["activeWorkOrderId"]), ("human_waiting", None))
+        self.assertEqual((held["state"], held["activeWorkOrderId"]), ("human_waiting", order["id"]))
         self.assertRegex(held["blockedOn"], "is disabled")
         self.assertEqual(len(self.store.workorders("o/r#7")), 1)
         self.assertEqual(self.relay.tasks, {})
@@ -583,8 +583,12 @@ class WorkerOpsTest(unittest.TestCase):
             self.assertEqual(len(self.store.history("o/r#7")), rows)
         self.assertEqual(len(self.store.workorders("o/r#7")), 1)  # one order, no second task
         self.assertEqual(self.relay.tasks, {})
-        foreman.resolve_human("o/r#7", "retry", "the image is rebuilt", "owner")
-        self.assertEqual(foreman.tick("o/r#7")["workItem"]["state"], "implementing")
+        # the fault clears by itself: the next tick resumes that same order, under its own key
+        resumed = foreman.tick("o/r#7")["workItem"]
+        self.assertEqual(resumed["state"], "implementing")
+        self.assertEqual(len(self.store.workorders("o/r#7")), 1)
+        self.assertEqual(self.store.workorders("o/r#7")[0]["idempotencyKey"], order["idempotencyKey"])
+        self.assertEqual(len(self.relay.tasks), 1)
 
 
 if __name__ == "__main__":
