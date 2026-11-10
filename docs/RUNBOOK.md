@@ -535,11 +535,9 @@ and it refuses a repo with several open setup PRs: close all but one.
 A repo the factory already set up keeps its caller exactly as it wrote it. The gate revision comes
 from the release channel: `gatekeeper-version.json` in the public wrapper names the commit the
 gate's own `pr_body` job passes to `gates` and `review`, and `factory_repo_check` reports the
-revision the channel resolves to now. The factory never compares, rewrites or refuses a caller
-(ADR-0134). The
-update merges only by your hand or an explicit setup-merge grant, like any setup PR, and it can
-move a repo only to the revision a person has merged into this checkout; correcting that revision
-to the 700/1000 policy is a protected `.github/` change you own.
+revision the channel resolves to now. The factory never compares, rewrites or refuses a caller, so a
+setup PR it opens holds only the files a repo was missing (ADR-0134). It merges only by your hand or
+an explicit setup-merge grant, like any setup PR.
 
 The merge stays manual unless you grant it. To let Day Desk merge this repo's setup PR itself,
 say so to the owner's tool `factory_authorize_setup_merge` (with the verify command when the

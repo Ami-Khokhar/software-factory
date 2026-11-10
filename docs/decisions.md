@@ -1933,6 +1933,9 @@ policy are deployed together.
 
 ## ADR-0080 — An installed gate caller is upgraded by its two revision pins, on the same reviewed setup PR
 
+**Superseded by ADR-0134:** the gate revision follows the release channel, so a caller carries no pin
+for the factory to upgrade.
+
 **Context.** `factory_bootstrap_repo` wrote a control file only when the repo lacked it, so a repo
 that already had `.github/workflows/pr-gatekeeper.yml` kept whatever gate revision it pinned. The
 factory's own caller and self-maintaining-apis pinned an older wrapper and `gatekeeper_ref`, and
