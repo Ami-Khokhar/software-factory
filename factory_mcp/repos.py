@@ -27,11 +27,15 @@ LABELS = ((READY, "0E8A16", "software-factory may work on this issue"),
           (PROPOSED, "C5DEF5", "proposed by the Planner; add factory:ready to accept"))
 # The gate revision is not a caller's pin any more (ADR-0134): `v1` is the release channel, and the
 # gate's own `pr_body` job reads this one file in the public wrapper and passes the commit it names
-# to `gates` and `review`. A caller that freezes a sha still runs it; the factory reads that sha for
-# the weekly gauges and never compares, upgrades or refuses it.
-GATE_RELEASE_REPO, GATE_RELEASE = "Ami-Khokhar/pr-gatekeeper-workflow", "gatekeeper-version.json"
-GATE_FROZEN_REF = re.compile(r"gatekeeper_ref:\s*([0-9a-f]{40})")
-GATE_FROZEN_USES = re.compile(r"gatekeeper\.yml@([0-9a-f]{40})")
+# to `gates` and `review`. A caller may still freeze a commit, and the factory reads it for the
+# weekly gauges and for the follow-up approval, never to compare it with a revision it owns. Both
+# patterns are anchored to real line starts, so a pin left in a comment is never read as one: a
+# comment survives the edits that once rewrote pins.
+GATE_WRAPPER = "Ami-Khokhar/pr-gatekeeper-workflow"
+GATE_RELEASE_REPO, GATE_RELEASE = GATE_WRAPPER, "gatekeeper-version.json"
+GATE_REF_PIN = re.compile(r"(?m)^\s*gatekeeper_ref:\s*([0-9a-f]{40})")
+GATE_USES_PIN = re.compile(r"(?m)^\s*uses:\s*" + re.escape(GATE_WRAPPER)
+                           + r"/\.github/workflows/gatekeeper\.yml@([0-9a-f]{40})")
 GATE_REVISION = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -61,15 +65,25 @@ def _fingerprint(plan):
     return hashlib.sha256(encoded).hexdigest()
 
 
+def gate_ref_revision(text):
+    """The gate commit a caller froze in `gatekeeper_ref`, or None: the revision the gate ran, which is
+    what a first-pass gauge names (ADR-0083)."""
+    match = GATE_REF_PIN.search(text or "")
+    return match.group(1) if match else None
+
+
+def wrapper_revision(text):
+    """The wrapper commit a caller froze on its `uses:` line, or None. This is the commit GitHub
+    records in a run's `referenced_workflows`, so it is the one a follow-up approval binds to (#422,
+    ADR-0134); it is not the `gatekeeper_ref`, which names the gate the wrapper then ran."""
+    match = GATE_USES_PIN.search(text or "")
+    return match.group(1) if match else None
+
+
 def frozen_revision(text):
-    """The gate commit a caller froze: its `gatekeeper_ref` input when it names one, else the wrapper
-    commit its `uses:` line pins, else None when it follows the release channel. This reads for the
-    weekly gauges and nothing else (ADR-0134)."""
-    for pattern in (GATE_FROZEN_REF, GATE_FROZEN_USES):
-        match = pattern.search(text or "")
-        if match:
-            return match.group(1)
-    return None
+    """The gate revision a caller ran, for the weekly gauges: its `gatekeeper_ref` when it names one,
+    else the wrapper commit it pins, else None when it follows the release channel (ADR-0134)."""
+    return gate_ref_revision(text) or wrapper_revision(text)
 
 
 def channel_revision(github):

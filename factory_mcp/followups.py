@@ -8,7 +8,6 @@ from . import repos
 from .mcp import ToolError
 from .verdict import GATE_LOGIN, parse_marker
 
-WRAPPER = "Ami-Khokhar/pr-gatekeeper-workflow"
 # A caller line that calls this factory's gate wrapper, on the release channel or a frozen commit.
 CALLER_USES = re.compile(
     r"(?m)^\s*uses:\s*Ami-Khokhar/pr-gatekeeper-workflow/\.github/workflows/gatekeeper\.yml@\S+")
@@ -89,14 +88,14 @@ def validate(github, repo, issue, source_pr):
     # that froze a commit binds the run to that commit. A commented line is not a `uses:` line.
     if len(CALLER_USES.findall(caller)) != 1:
         refuse()
-    frozen = repos.frozen_revision(caller)
+    pinned = repos.wrapper_revision(caller)  # the commit a run's referenced_workflows names
     runs = []
     for run in github.workflow_runs(repo, pr["head"]["sha"]):
         refs = run.get("referenced_workflows") or []
         trusted = [ref for ref in refs if re.fullmatch(
             r"Ami-Khokhar/pr-gatekeeper-workflow/\.github/workflows/gatekeeper\.yml@[0-9a-f]{40}",
             ref.get("path", "")) and ref["path"].endswith("@" + ref.get("sha", "missing"))
-            and (frozen is None or ref.get("sha") == frozen)]
+            and (pinned is None or ref.get("sha") == pinned)]
         if (run.get("path") == ".github/workflows/pr-gatekeeper.yml"
                 and run.get("head_sha") == pr["head"]["sha"]
                 and run.get("event") == "pull_request" and run.get("conclusion") == "success"

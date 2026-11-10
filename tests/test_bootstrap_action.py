@@ -9,7 +9,7 @@ from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.github import GitHubError
 from factory_mcp.mcp import ToolError
-from factory_mcp.repos import GATE_CONFIG, GATE_WORKFLOW, TEMPLATE, GATE_WORKFLOW_SOURCE
+from factory_mcp.repos import GATE_CONFIG, GATE_WORKFLOW, TEMPLATE
 from factory_mcp.store import Store
 from tests.fakes import FakeBootstrapGit, FakeGitHub, FakeRelay
 

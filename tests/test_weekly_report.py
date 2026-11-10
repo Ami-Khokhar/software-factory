@@ -281,13 +281,30 @@ class ReportToolTest(unittest.TestCase):
         self.assertEqual(self.report({})["gauges"]["firstVerdictMerge"]["gatePin"], {"o/r": "b" * 40})
 
     def test_a_caller_on_the_release_channel_stamps_the_revision_the_channel_resolves(self):
-        """One file decides the gate revision now (ADR-0134). A caller that names the channel stamps
-        what the gate's own pr_body job will pass, and a file nobody can read stamps "unknown"."""
-        self.github.contents[("o/r", ".github/workflows/pr-gatekeeper.yml")] = (
-            "jobs:\n  r:\n    uses: o/w/.github/workflows/gatekeeper.yml@v1\n")
-        self.assertEqual(self.report({})["gauges"]["firstVerdictMerge"]["gatePin"], {"o/r": "unknown"})
-        self.github.contents[(GATE_RELEASE_REPO, GATE_RELEASE)] = json.dumps({"gate_revision": "d" * 40})
-        self.assertEqual(self.report({})["gauges"]["firstVerdictMerge"]["gatePin"], {"o/r": "d" * 40})
+        """One file decides the gate revision now (ADR-0134), and three things must never weaken the
+        stamp: a repo with no caller ran no gate, a malformed release file never fails a report, and a
+        pin left in a comment is not a pin, because a comment survives the edits that rewrote pins."""
+        workflow = ("jobs:\n  r:\n    uses: Ami-Khokhar/pr-gatekeeper-workflow/"
+                    ".github/workflows/gatekeeper.yml@v1\n")
+        caller = ("o/r", ".github/workflows/pr-gatekeeper.yml")
+        release = (GATE_RELEASE_REPO, GATE_RELEASE)
+
+        def pin():
+            return self.report({})["gauges"]["firstVerdictMerge"]["gatePin"]["o/r"]
+
+        self.github.contents[caller] = workflow
+        self.assertEqual(pin(), "unknown")  # the file the gate reads is not there
+        self.github.contents[release] = json.dumps({"gate_revision": "d" * 40})
+        self.assertEqual(pin(), "d" * 40)
+        del self.github.contents[caller]
+        self.assertEqual(pin(), "unknown")  # no caller installed: this repo ran no gate at all
+        self.github.contents[caller] = workflow
+        for bad in ("not json", '{"gate_revision": "nope"}', '["d"]'):
+            self.github.contents[release] = bad
+            self.assertEqual(pin(), "unknown")  # a malformed file names no revision
+        self.github.contents[release] = json.dumps({"gate_revision": "d" * 40})
+        self.github.contents[caller] = ("# gatekeeper_ref: " + "e" * 40 + "\n" + workflow)
+        self.assertEqual(pin(), "d" * 40)  # a commented pin is not a freeze: the channel decides
 
     def test_an_accepted_verdicts_outcome_and_round_ride_the_reconcile_row(self):
         self.foreman.intake("o/r", 7)

@@ -66,6 +66,9 @@ def _gate_revisions(foreman):
         except GitHubError:
             revisions[repo] = "unknown"
             continue
+        if not caller:  # no caller installed: this repo ran no gate, so it names none
+            revisions[repo] = "unknown"
+            continue
         frozen = repos.frozen_revision(caller)
         if frozen:
             revisions[repo] = frozen
