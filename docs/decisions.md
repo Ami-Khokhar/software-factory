@@ -3331,7 +3331,12 @@ entry goes back to the agent as a plain line when the owner acts on the issue: G
 is the only durable signal for that, and `reconcile` clears the mark when it moves.
 
 **Consequence.** The agent has three queue verbs — claim, approve, leave — and the store, not the
-prompt, is what keeps them apart. The cost is a third write tool and one field on the entry, and the
+prompt, is what keeps them apart. Two rules make the mark safe. A claim never takes an entry that
+carries it, and a claim is reported before the mark, so a hidden claim can never strand an entry. The
+mark is stamped with the issue's own `updated_at` at the moment it is left and compared stamp to stamp,
+so this machine's clock cannot clear it early or hold it for ever; any issue activity counts as the
+owner moving, not only the owner's own, because the alternative is a timeline read on every reconcile
+and a re-leave re-stamps the mark, so the wake is bounded by real activity rather than by time. The cost is a third write tool and one field on the entry, and the
 dependence on `updated_at`: an owner action that does not touch the issue, such as a chat instruction,
 is not seen. That is accepted, because a chat instruction is a decision the agent records itself.
 

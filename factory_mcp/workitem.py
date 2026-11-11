@@ -186,12 +186,16 @@ def queue_entry(urgent, at, left_for_owner=None):
 
 
 def owner_acted(entry, issue):
-    """Whether the owner has touched the issue since the agent left it there, so the entry goes back to
-    the agent: the issue's update stamp is the only durable signal GitHub gives us for it."""
+    """Whether the issue has moved since the agent left it there, so the entry goes back to the agent.
+    Both stamps come from GitHub, so a skewed local clock cannot clear the mark or strand it; a mark
+    with no stamp was written by an older build or a truncated store, and is taken as moved rather than
+    left for ever (ADR-0137). Any issue activity counts, not only the owner's own: the alternative is a
+    timeline read on every reconcile, and a re-leave re-stamps the mark, so the wake is bounded."""
     left = (entry or {}).get("leftForOwner") or {}
-    if not left.get("at") or not issue.get("updatedAt"):
-        return False
-    return issue["updatedAt"] > left["at"]
+    stamp = left.get("issueUpdatedAt")
+    if not stamp:
+        return True
+    return issue.get("updatedAt") != stamp
 
 
 def intake(repo, issue, queue=True):

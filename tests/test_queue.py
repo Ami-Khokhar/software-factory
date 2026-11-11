@@ -275,6 +275,41 @@ class QueueTest(unittest.TestCase):
         with self.assertRaisesRegex(ToolError, "one line the owner reads"):
             self.foreman.leave_for_owner(ID, "day-desk", "  ")
 
+    def test_a_claim_never_hands_back_an_entry_the_owner_holds(self):
+        """The review's blocking finding: a claim on an owner-left entry rebuilt the flap it exists to
+        stop, and then hid the claim behind the mark so a lapsed one was invisible (ADR-0137)."""
+        self.claim()
+        self.foreman.leave_for_owner(ID, "day-desk", "the owner decides")
+        self.assertIsNone(self.claim())  # not the agent's to take
+        self.assertEqual(self.foreman.queue_state(self.store.get(ID))["leftForOwner"], "the owner decides")
+
+    def test_the_owner_acting_clears_the_mark_from_the_stamps_it_wrote(self):
+        """Both stamps come from GitHub, so the comparison does not depend on this machine's clock: any
+        movement of the issue's stamp gives the entry back (ADR-0137)."""
+        self.github.issues[(REPO, 7)]["updated_at"] = "2026-11-11T08:00:00Z"
+        self.claim()
+        self.foreman.leave_for_owner(ID, "day-desk", "needs a decision")
+        self.assertEqual(self.store.get(ID)["queue"]["leftForOwner"]["issueUpdatedAt"],
+                         "2026-11-11T08:00:00Z")
+        self.foreman.tick(ID)  # the issue has not moved: the mark stands
+        self.assertIsNotNone(self.store.get(ID)["queue"]["leftForOwner"])
+        self.github.issues[(REPO, 7)]["updated_at"] = "2026-11-11T09:00:00Z"  # the owner acts
+        self.foreman.tick(ID)
+        self.assertIsNone((self.store.get(ID)["queue"] or {}).get("leftForOwner"))
+
+    def test_only_the_agent_holding_the_claim_leaves_it_to_the_owner(self):
+        self.claim()
+        with self.assertRaisesRegex(ToolError, "is claimed by day-desk until its claim lapses"):
+            self.foreman.leave_for_owner(ID, "someone-else", "why")
+        self.assertEqual(self.store.get(ID)["queue"]["claimedBy"], "day-desk")
+
+    def test_a_mark_with_no_stamp_is_taken_as_moved_rather_than_left_for_ever(self):
+        """A truncated or hand-written entry must not strand: the same rule as an unreadable claim."""
+        wi = self.store.get(ID)
+        self.store.put(dict(wi, queue=dict(wi["queue"], leftForOwner={"by": "day-desk", "why": "x"})))
+        self.foreman.tick(ID)
+        self.assertIsNone((self.store.get(ID)["queue"] or {}).get("leftForOwner"))
+
     def test_the_two_queue_tools_are_the_agent_writes(self):
         built = tools.build(self.store, self.foreman, agent=True)
         self.assertEqual(built["factory_queue_next"].fn({"by": "day-desk"})["next"]["workItem"]["id"], ID)
