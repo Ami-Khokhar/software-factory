@@ -78,7 +78,7 @@ WIP_MOVES_MAX = 2  # how far a salvage wip may move forward before timeouts stop
 PARTIAL_WORK = ("A worker ran out of time. Its unfinished work is the commit you start from. "
                 "Check each acceptance bullet against the code, not against any report. "
                 "Keep what is right, fix or remove the rest, and finish.")
-FENCE_MISSING = "the paths fence names paths absent at the base"  # a hint, never a refusal (#544)
+FENCE_MISSING = "the paths fence names paths the pass starts without"  # a hint, never a refusal (#544)
 # Reason text is incident identity (ADR-0081), and a commit sha or the attempt count a reason
 # narrates is not material: both read the same every time they are said again.
 SHA40 = re.compile(r"\b[0-9a-f]{40}\b")

@@ -156,7 +156,7 @@ and direct the caller to the approved template. Credential mounts over container
   which carries no worker key.
 - **A dispatch reads the tree the pass starts from, and says when a fence glob matches nothing in it
   (ADR-0139).** The finding is in `findingsToAddress` with fingerprint `the paths fence names paths
-  absent at the base`, and the audit row is `fence_missing` with the commit and the globs. Nothing is
+  the pass starts without`, and the audit row is `fence_missing` with the commit and the globs. Nothing is
   refused: a fence may name a file the pass creates. One tree read per repo and commit per process.
 - **`WorkItem.queue` is the orchestrator's queue entry (ADR-0135).** Set while the state is
   `queued`, and null in every other state. `urgent` comes from `factory:urgent`, `at` is when it

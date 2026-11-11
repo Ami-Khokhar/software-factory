@@ -320,9 +320,35 @@ class QueueTest(unittest.TestCase):
         self.foreman.tick(ID)
         order = self.store.workorders(ID)[0]
         problems = [f["problem"] for f in order.get("findingsToAddress") or []]
-        self.assertTrue(any("src/absent.py" in p and "not in the tree" in p for p in problems),
-                        problems)
+        self.assertTrue(any("src/absent.py" in p and "this pass creates them" in p
+                            and "scoped against another branch" in p for p in problems), problems)
         self.assertIn("fence_missing", {row["action"] for row in self.store.history(ID)})
+
+    def test_a_fix_pass_does_not_call_a_fence_path_the_branch_already_added_missing(self):
+        """A fix pass starts at the PR head, where the file its own implement pass created is (#544).
+        Reading the default branch instead would report it missing on every later pass."""
+        self.github.contents[(REPO, "src/app.py", "head1")] = "x = 1\n"  # only at the PR head
+        self.store.put(dict(self.store.get(ID), paths=["src/app.py"], headSha="head1"))
+        self.foreman.dispatch(self.store.get(ID), "fix")
+        order = self.store.workorders(ID)[-1]
+        self.assertEqual(order["kind"], "fix")
+        self.assertNotIn("fence_missing", {row["action"] for row in self.store.history(ID)})
+        self.assertFalse([f for f in order["findingsToAddress"]
+                          if "not in the tree" in (f.get("problem") or "")])
+
+    def test_a_rescue_pass_reads_the_kept_partial_and_not_the_base(self):
+        """A rescue pass starts at the continuation commit, where the kept partial put the file
+        (#544): the base tree would call it missing."""
+        self.github.contents[(REPO, "src/app.py", "wip1")] = "x = 1\n"
+        self.store.put(dict(self.store.get(ID), paths=["src/app.py"], headSha="head1", wip={
+            "branch": "factory-wip/7", "sha": "wip1", "kind": "fix", "headSha": "head1",
+            "baseSha": "base0", "moves": 0, "provenanceVersion": 1,
+            "workOrder": f"{ID}:r0:fix:a0"}))
+        self.foreman.dispatch(self.store.get(ID), "fix")
+        order = self.store.workorders(ID)[-1]
+        self.assertEqual(order.get("continuationSha"), "wip1")
+        self.assertNotIn("fence_missing", {row["action"] for row in self.store.history(ID)})
+        self.assertEqual(self.github.tree_reads, [(REPO, "wip1")])
 
     def test_a_fence_that_matches_the_base_says_nothing_and_costs_no_tree_read(self):
         self.github.contents[(REPO, "src/app.py")] = "x = 1\n"
@@ -333,8 +359,8 @@ class QueueTest(unittest.TestCase):
         self.assertNotIn("fence_missing", {row["action"] for row in self.store.history(ID)})
 
     def test_the_fence_tree_is_read_once_per_commit(self):
-        """A commit's tree never changes, so the check must not cost a GitHub call on every pass: the
-        cache is the reason a fix pass after an implement pass stays free (#544)."""
+        """A commit's tree never changes, so two checks against the same commit read it once: the
+        cache is why a repeat check on that commit costs no GitHub call (#544)."""
         self.github.contents[(REPO, "src/app.py")] = "x = 1\n"
         before = len(self.github.tree_reads)
         self.foreman._fence_missing(self.store.get(ID), ["src/*.py"], "base0")
