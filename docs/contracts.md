@@ -736,12 +736,15 @@ GitHub timeline, merged PR, reviewed gate comment and pinned reusable workflow r
 records must uniquely corroborate original creation and reviewed non-blocking work.
 The gate comment must carry a pr-gatekeeper marker whose fields the approval reads:
 `outcome: MERGE`, `head_sha` equal to the source PR's head, `findings` with the residual
-minor/nit work, and `reviewed: true`. The pinned gate revision in this repo's
-`.github/workflows/pr-gatekeeper.yml` (`uses @59540639…`, `gatekeeper_ref 2a53e2c3…`) emits
-`reviewed` on its MERGE markers; an approval against the gate's #456 head passed with it.
-A marker without `reviewed` is treated as missing, forged or ambiguous provenance and the
-approval refuses: do not approve; check which gate revision produced the marker (the pin on
-the source PR's base workflow) and upgrade or report before retrying.
+minor/nit work, and `reviewed: true`. The gate revision comes from the release channel:
+`Ami-Khokhar/pr-gatekeeper-workflow/gatekeeper-version.json` names the commit the gate's own
+`pr_body` job passes to `gates` and `review`, and a caller carries no pin. `factory_repo_check`
+reports the commit the channel resolves to now. An approval binds the run to the wrapper commit
+the base caller froze, or, for a caller on the channel, to the commit `v1` names at the time of
+the approval: a head can write its own `uses:` line, so only the tag may choose what approves. A marker without `reviewed` is treated as
+missing, forged or ambiguous provenance and the approval refuses: do not approve; check which
+gate revision produced the marker against the channel's `gate_revision` and report before
+retrying.
 Acceptance remains mandatory. Approval is stored in audit records, not WorkItem
 fields. The source review body digest also binds provenance against later comment edits.
 No schema or stored WorkItem migration is required. The digest and source

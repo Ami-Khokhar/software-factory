@@ -8,7 +8,9 @@ from . import repos
 from .mcp import ToolError
 from .verdict import GATE_LOGIN, parse_marker
 
-WRAPPER = "Ami-Khokhar/pr-gatekeeper-workflow"
+# A caller line that calls this factory's gate wrapper, on the release channel or a frozen commit.
+CALLER_USES = re.compile(
+    r"(?m)^\s*uses:\s*Ami-Khokhar/pr-gatekeeper-workflow/\.github/workflows/gatekeeper\.yml@\S+")
 
 
 def digest(issue):
@@ -79,23 +81,25 @@ def validate(github, repo, issue, source_pr):
         refuse()
     comment, marker = reviews[0]
     # Trust the caller pinned on the source PR's base, never a pin supplied by the issue/PR head.
-    # The pin itself is parsed by the repo helper, so the two parsers of one file cannot drift.
     caller = github.file(repo, ".github/workflows/pr-gatekeeper.yml", pr["base"]["sha"]) or ""
-    # `GATE_USES` matches only real `uses:` lines, so a comment kept by an upgrade is never a pin;
-    # two jobs or an old live pin would still be ambiguous, so count the live pins and refuse any
-    # caller that does not pin exactly one gate revision.
-    pins = repos._gate_pins(caller)
-    # `GATE_USES` keeps each line's indentation in group 1 for _upgraded_workflow, so compare stripped
-    if (pins is None or len(repos.GATE_USES.findall(caller)) != 1
-            or pins["uses"].strip() != f"uses: {WRAPPER}/.github/workflows/gatekeeper.yml@"):
+    # The caller must call this factory's wrapper exactly once (ADR-0134). A caller that names the
+    # release channel leaves the commit to the gate's own `pr_body` job, so the commit comes from
+    # GitHub's `referenced_workflows` record below, never from the caller or the PR text; a caller
+    # that froze a commit binds the run to that commit. A commented line is not a `uses:` line.
+    if len(CALLER_USES.findall(caller)) != 1:
         refuse()
-    pin = pins["usesSha"]
+    # A caller that froze the wrapper commit binds the run to it. A caller on the release channel
+    # binds it to the commit `v1` names now: the head may write its own `uses:` line and GitHub
+    # records whatever it wrote, but it cannot move the tag, so the approval keeps the guarantee the
+    # deleted pin gave it (#422, ADR-0134).
+    pinned = repos.wrapper_revision(caller) or repos.channel_wrapper(github)
     runs = []
     for run in github.workflow_runs(repo, pr["head"]["sha"]):
         refs = run.get("referenced_workflows") or []
         trusted = [ref for ref in refs if re.fullmatch(
             r"Ami-Khokhar/pr-gatekeeper-workflow/\.github/workflows/gatekeeper\.yml@[0-9a-f]{40}",
-            ref.get("path", "")) and ref["path"].endswith("@" + ref.get("sha", "missing")) and ref.get("sha") == pin]
+            ref.get("path", "")) and ref["path"].endswith("@" + ref.get("sha", "missing"))
+            and ref.get("sha") == pinned]
         if (run.get("path") == ".github/workflows/pr-gatekeeper.yml"
                 and run.get("head_sha") == pr["head"]["sha"]
                 and run.get("event") == "pull_request" and run.get("conclusion") == "success"

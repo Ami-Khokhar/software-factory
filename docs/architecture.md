@@ -61,9 +61,10 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
   pushes one README-only commit to an empty repo's default branch; the owner merges the PR before
   normal worker passes start (ADR-0019), or grants an auditable, revocable per-repo authorization
   and then only that PR may merge without a person, digest-checked and read back (ADR-0074). An
-  installed gate caller that pins an older gate revision is upgraded on the same PR by rewriting
-  only its two revision pins, so its verify command, permissions and secrets stay untouched
-  (ADR-0080). One
+  installed gate caller is left exactly as the repo wrote it: the gate revision follows the release
+  channel, where the gate's own `pr_body` job reads `gatekeeper-version.json` from the public
+  wrapper and passes the commit it names to `gates` and `review`, so no caller carries a pin to
+  keep current (ADR-0134). One
  owner approval of `factory_start_plan` opens all the
   issues of a plan, and they run in order (ADR-0024); `factory_set_dependencies` then frees the
   independent ones before a worker starts them, and re-points one stranded on a dependency that
@@ -103,7 +104,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/github.py` | The GitHub REST client |
 | `factory_mcp/relay.py` | The agent-relay task client, and where it finds the relay's token |
 | `factory_mcp/patches.py` | The git work factory-mcp does: cloning a worker checkout, pushing a patch Result, and the owner-approved bootstrap pushes (`initial_commit`, `bootstrap`, `update_bootstrap`) |
-| `factory_mcp/repos.py` | The repo check, the bootstrap plan (`bootstrap_plan`, `plan_on`) that installs missing controls and upgrades stale gate revision pins, and `repos.json` (ADR-0014, ADR-0080) |
+| `factory_mcp/repos.py` | The repo check, the bootstrap plan (`bootstrap_plan`, `plan_on`) that installs only missing controls, the release channel's gate revision, and `repos.json` (ADR-0014, ADR-0134) |
 | `factory_mcp/setup_merge.py` | The owner-authorized merge of a repo's one canonical setup PR, digest-checked, fail-closed, journalled by request ID, with readback and readiness (ADR-0074) |
 | `factory_mcp/gate_secrets.py` | A repo's gate Actions secrets, set from the owner's Keychain through `gh` (ADR-0022) |
 | `factory_mcp/lessons.py` | Lesson candidates from the audit log, and `lessons.json` (ADR-0020) |

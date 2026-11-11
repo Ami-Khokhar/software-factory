@@ -532,15 +532,12 @@ the tool adds one commit with them to that PR and returns it as `updatedSha`. Wh
 or the secret statuses change, it rewrites the PR body to match (ADR-0023). It never force-pushes,
 and it refuses a repo with several open setup PRs: close all but one.
 
-A repo the factory already set up can still pin an older gate. When the installed caller names
-a `uses: .../gatekeeper.yml@<sha>` and a `gatekeeper_ref: <sha>` older than the revision this
-checkout ships in `.github/workflows/pr-gatekeeper.yml`, `factory_repo_check` reports the caller
-as stale and the same bootstrap PR rewrites only those two pins, leaving the repo's `verify`
-command, permissions, secrets, runner and every other line exactly as they are (ADR-0080). A
-workflow the factory did not write, or one already at the current revision, is left alone. The
-update merges only by your hand or an explicit setup-merge grant, like any setup PR, and it can
-move a repo only to the revision a person has merged into this checkout; correcting that revision
-to the 700/1000 policy is a protected `.github/` change you own.
+A repo the factory already set up keeps its caller exactly as it wrote it. The gate revision comes
+from the release channel: `gatekeeper-version.json` in the public wrapper names the commit the
+gate's own `pr_body` job passes to `gates` and `review`, and `factory_repo_check` reports the
+revision the channel resolves to now. The factory never compares, rewrites or refuses a caller, so a
+setup PR it opens holds only the files a repo was missing (ADR-0134). It merges only by your hand or
+an explicit setup-merge grant, like any setup PR.
 
 The merge stays manual unless you grant it. To let Day Desk merge this repo's setup PR itself,
 say so to the owner's tool `factory_authorize_setup_merge` (with the verify command when the
@@ -1170,12 +1167,13 @@ Do not rewrite stored WorkOrders to bypass their fences.
 Migrate each installation through a separate owner-reviewed configuration PR following
 pr-gatekeeper's docs/documentation-policy-migration.md. Remove only the specifically approved
 AGENTS.md entry. Keep custom directories, permission files, credentials, models, budgets and
-verification commands. Pin the reviewed gate revision only after it merges. Base-branch rules
+verification commands. The gate revision follows the release channel, so nothing in a caller is
+pinned: a release updates `gatekeeper-version.json` in the wrapper (ADR-0134). Base-branch rules
 review the migration PR. Bootstrap never rewrites an existing protection list to adopt this policy.
 Recheck readiness after any prerequisite setup PR, including pr-gatekeeper#75. The current
 agent-relay factory-standard block already meets readiness. Its conflicting #42 is not required.
 
 After activation, create one small documentation-only issue through factory_start_plan, record its
 WorkOrder protections, worker result, successful configured verification, independent review and
-bot merge. Report merged code, deployed factory/gate pins, migrated settings, and verified-in-use
+bot merge. Report merged code, the factory and gate revisions in use, migrated settings, and verified-in-use
 proof separately. A local test or green code PR does not establish activation.

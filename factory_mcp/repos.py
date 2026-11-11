@@ -25,12 +25,18 @@ GATE_CONFIG, GATE_WORKFLOW = ".github/pr-gatekeeper.json", ".github/workflows/pr
 GATE_WORKFLOW_SOURCE = TEMPLATE.parent.parent / GATE_WORKFLOW
 LABELS = ((READY, "0E8A16", "software-factory may work on this issue"),
           (PROPOSED, "C5DEF5", "proposed by the Planner; add factory:ready to accept"))
-# The two lines that pin the gate revision in a pr-gatekeeper caller workflow. The wrapper's
-# `uses:` sha and the `gatekeeper_ref:` input are the only lines an upgrade rewrites. Both are
-# anchored to real line starts with re.M, so text kept in a comment (ADR-0080 preserves
-# comments on upgrade) is never read as a pin and never makes a caller look ambiguous.
-GATE_USES = re.compile(r"(?m)^(\s*uses:\s*\S+/\.github/workflows/gatekeeper\.yml@)([0-9a-fA-F]{40})")
-GATE_REF = re.compile(r"(?m)^(\s*gatekeeper_ref:\s*)([0-9a-fA-F]{40})")
+# The gate revision is not a caller's pin any more (ADR-0134): `v1` is the release channel, and the
+# gate's own `pr_body` job reads this one file in the public wrapper and passes the commit it names
+# to `gates` and `review`. A caller may still freeze a commit, and the factory reads it for the
+# weekly gauges and for the follow-up approval, never to compare it with a revision it owns. Both
+# patterns are anchored to real line starts, so a pin left in a comment is never read as one: a
+# comment survives the edits that once rewrote pins.
+GATE_WRAPPER, GATE_CHANNEL = "Ami-Khokhar/pr-gatekeeper-workflow", "v1"
+GATE_RELEASE_REPO, GATE_RELEASE = GATE_WRAPPER, "gatekeeper-version.json"
+GATE_REF_PIN = re.compile(r"(?m)^\s*gatekeeper_ref:\s*([0-9a-f]{40})")
+GATE_USES_PIN = re.compile(r"(?m)^\s*uses:\s*" + re.escape(GATE_WRAPPER)
+                           + r"/\.github/workflows/gatekeeper\.yml@([0-9a-f]{40})")
+GATE_REVISION = re.compile(r"^[0-9a-f]{40}$")
 
 
 def protected_paths(github, repo, base_sha, required):
@@ -59,30 +65,53 @@ def _fingerprint(plan):
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _gate_pins(text):
-    """A pr-gatekeeper caller's two gate revision pins, or None when `text` is not a caller this
-    factory manages: the reusable workflow's `uses: .../gatekeeper.yml@<sha>` and its
-    `gatekeeper_ref: <sha>` input, both 40-hex."""
-    uses, ref = GATE_USES.search(text or ""), GATE_REF.search(text or "")
-    if uses is None or ref is None:
-        return None
-    return {"uses": uses.group(1), "usesSha": uses.group(2), "ref": ref.group(1), "refSha": ref.group(2)}
+def gate_ref_revision(text):
+    """The gate commit a caller froze in `gatekeeper_ref`, or None: the revision the gate ran, which is
+    what a first-pass gauge names (ADR-0083)."""
+    match = GATE_REF_PIN.search(text or "")
+    return match.group(1) if match else None
 
 
-def _upgraded_workflow(installed, canonical):
-    """`installed` with only its two gate revision pins set to `canonical`'s, or None when it is not
-    a managed caller or already current. Every other line of the installed file — permissions,
-    secrets, runner, comments — stays exactly as the repo wrote it, so a control update never
-    widens a permission or drops a setting the work did not review (ADR-0080)."""
-    have = _gate_pins(installed)
-    if have is None:
+def wrapper_revision(text):
+    """The wrapper commit a caller froze on its `uses:` line, or None. This is the commit GitHub
+    records in a run's `referenced_workflows`, so it is the one a follow-up approval binds to (#422,
+    ADR-0134); it is not the `gatekeeper_ref`, which names the gate the wrapper then ran."""
+    match = GATE_USES_PIN.search(text or "")
+    return match.group(1) if match else None
+
+
+def channel_wrapper(github):
+    """The wrapper commit the release channel's `v1` names now, or None when it cannot be read. A
+    caller that names `v1` leaves the wrapper commit to the tag, so this is the one commit a follow-up
+    approval may trust: a pull request head can write its own `uses:` line and GitHub records whatever
+    it wrote, but a head cannot move the tag (#422, ADR-0134)."""
+    try:
+        return github.ref_revision(GATE_WRAPPER, GATE_CHANNEL)
+    except GitHubError:
         return None
-    want = _gate_pins(canonical)
-    if want is None:
-        raise ValueError("the software-factory gate workflow pins no gate revision")
-    updated = GATE_USES.sub(lambda _match: have["uses"] + want["usesSha"], installed, count=1)
-    updated = GATE_REF.sub(lambda _match: have["ref"] + want["refSha"], updated, count=1)
-    return None if updated == installed else updated
+
+
+def frozen_revision(text):
+    """The gate revision a caller ran, for the weekly gauges: its `gatekeeper_ref` when it names one,
+    else the wrapper commit it pins, else None when it follows the release channel (ADR-0134)."""
+    return gate_ref_revision(text) or wrapper_revision(text)
+
+
+def channel_revision(github):
+    """The commit the gate release channel resolves to now, or None: read from the one file the
+    gate's own `pr_body` job reads (ADR-0134), so a person never has to guess which gate runs."""
+    try:
+        text = github.file(GATE_RELEASE_REPO, GATE_RELEASE)
+    except GitHubError:
+        return None
+    if not text:
+        return None
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return None
+    revision = doc.get("gate_revision") if isinstance(doc, dict) else None
+    return revision if isinstance(revision, str) and GATE_REVISION.match(revision) else None
 
 
 def _standard_to_append(agents):
@@ -129,23 +158,15 @@ def bootstrap_plan(github, repo, verify=None):
                 or not config_doc["verify"].strip():
             raise ValueError(".github/pr-gatekeeper.json has no verify command")
 
-    updates = []
-    workflow = github.file(canonical, GATE_WORKFLOW)
-    if workflow is None:
+    if github.file(canonical, GATE_WORKFLOW) is None:
         files[GATE_WORKFLOW] = GATE_WORKFLOW_SOURCE.read_text()
-    else:  # an installed caller: upgrade only a stale gate revision, never the rest of the file
-        updated = _upgraded_workflow(workflow, GATE_WORKFLOW_SOURCE.read_text())
-        if updated is not None:
-            files[GATE_WORKFLOW] = updated
-            updates.append(GATE_WORKFLOW)
+    # an installed caller follows the release channel, so nothing in it is rewritten (ADR-0134)
 
     agents = _standard_to_append(github.file(canonical, "AGENTS.md"))
     if agents is not None:
         files["AGENTS.md"] = agents
 
     plan = {"repo": canonical, "default_branch": branch, "base_sha": base, "files": files}
-    if updates:  # only when something is upgraded, so an install keeps its stored fingerprint
-        plan["updates"] = updates
     if not base:  # a PR needs a base commit; the controls still go on the setup PR (ADR-0019)
         plan["initial_files"] = {"README.md": f"# {canonical.split('/')[1]}\n"}
     return dict(plan, fingerprint=_fingerprint(plan))
@@ -155,7 +176,7 @@ def plan_on(plan, base_sha):
     """The plan once an empty repo's default branch has its initial commit `base_sha`: the plan
     bootstrap_plan returns from then on, so a retry finds the same setup branch."""
     plan = {"repo": plan["repo"], "default_branch": plan["default_branch"], "base_sha": base_sha,
-            "files": plan["files"], **({k: plan[k] for k in ("updates",) if k in plan})}
+            "files": plan["files"]}
     return dict(plan, fingerprint=_fingerprint(plan))
 
 
@@ -201,13 +222,8 @@ def check(github, repo):
         gate_workflow = _result("gate_workflow", False, f"{repo} has no {GATE_WORKFLOW}",
                                 by_hand or "Call factory_bootstrap_repo: it opens a setup PR with the gate workflow "
                                 "for you to review and merge. Without the workflow no PR gets a verdict.")
-    else:
-        stale = _upgraded_workflow(workflow, GATE_WORKFLOW_SOURCE.read_text()) is not None
-        gate_workflow = _result("gate_workflow", not stale,
-                                "the gate workflow pins an older gate revision" if stale else
-                                "the gate workflow is installed",
-                                "Call factory_bootstrap_repo: it opens a setup PR that rewrites only the "
-                                "gate revision pins to the approved ones, for you to review and merge.")
+    else:  # installed is enough: the caller follows the release channel and carries no revision to
+        gate_workflow = _result("gate_workflow", True, "the gate workflow is installed", None)  # check
     agents = github.file(repo, "AGENTS.md")
     found, wanted = standard_blocks(agents), standard_blocks(TEMPLATE.read_text())
     if agents is None:

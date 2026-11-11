@@ -10,21 +10,17 @@ from factory_mcp import tools
 from factory_mcp.config import Config
 from factory_mcp.foreman import Foreman
 from factory_mcp.mcp import ToolError
-from factory_mcp.repos import (GATE_CONFIG, GATE_WORKFLOW, TEMPLATE, bootstrap_plan, check, load,
-                               plan_on, standard_blocks)
+from factory_mcp.repos import (GATE_CONFIG, GATE_RELEASE, GATE_RELEASE_REPO, GATE_WORKFLOW, TEMPLATE,
+                               bootstrap_plan, check, load, plan_on, standard_blocks)
 from factory_mcp.store import Store
 from tests.fakes import FakeGitHub, FakeRelay
 
 ENTRY = {"name": "o/tool-added", "added_by": "amteshwar", "added_at": "2026-09-25T18:00:00Z"}
 REPO = "o/r"
+RELEASE_REPO = GATE_RELEASE_REPO
 CANONICAL_WORKFLOW = (TEMPLATE.parent.parent / GATE_WORKFLOW).read_text()
-CANONICAL_USES = "59540639b38a08733f7222adfdcde36d3a8552e1"
-CANONICAL_REF = "2a53e2c369baf88e63f993e27ada45bae0faeedb"
-
-
-def stale_workflow(canonical=CANONICAL_WORKFLOW):
-    """A pr-gatekeeper caller that pins an older wrapper and gate revision than the checkout."""
-    return canonical.replace(CANONICAL_USES, "a" * 40).replace(CANONICAL_REF, "b" * 40)
+CHANNEL_CALLER = (CANONICAL_WORKFLOW.replace("gatekeeper.yml@v1", "gatekeeper.yml@" + "a" * 40)
+                  .replace("workflow_dispatch:", "gatekeeper_ref: " + "b" * 40 + "\n  workflow_dispatch:"))
 
 
 def gated(github, repo=REPO, config='{"verify": "make test"}'):
@@ -107,37 +103,6 @@ class BootstrapPlanTest(unittest.TestCase):
 
         self.assertEqual(plan["files"], {})
 
-    def test_a_stale_gate_caller_is_upgraded_and_every_other_workflow_line_is_kept(self):
-        github = gated(FakeGitHub())
-        installed = stale_workflow().replace("  actions: write\n", "  actions: write\n  id-token: write\n")
-        github.contents[(REPO, GATE_WORKFLOW)] = installed
-
-        plan = bootstrap_plan(github, REPO)
-
-        self.assertEqual(set(plan["files"]), {GATE_WORKFLOW})
-        self.assertEqual(plan["updates"], [GATE_WORKFLOW])
-        upgraded = plan["files"][GATE_WORKFLOW]
-        self.assertIn("id-token: write", upgraded)  # a permission the repo wrote is not dropped
-        rebuilt = upgraded.replace(CANONICAL_USES, "a" * 40).replace(CANONICAL_REF, "b" * 40)
-        self.assertEqual(rebuilt, installed)  # only the two gate revision pins changed
-        self.assertEqual(set(plan["files"]), {GATE_WORKFLOW})  # the verify config is untouched
-
-    def test_a_caller_that_already_pins_the_current_gate_needs_no_files(self):
-        github = gated(FakeGitHub())
-        github.contents[(REPO, GATE_WORKFLOW)] = CANONICAL_WORKFLOW
-
-        plan = bootstrap_plan(github, REPO)
-
-        self.assertEqual(plan["files"], {})
-        self.assertNotIn("updates", plan)
-
-    def test_a_workflow_without_both_pins_is_not_half_upgraded(self):
-        github = gated(FakeGitHub())
-        github.contents[(REPO, GATE_WORKFLOW)] = stale_workflow().replace("gatekeeper_ref: " + "b" * 40, "")
-
-        self.assertEqual(bootstrap_plan(github, REPO)["files"], {})
-
-
 class RepoCheckTest(unittest.TestCase):
     def test_a_repo_with_the_gate_passes_every_check(self):
         checks = check(gated(FakeGitHub()), REPO)
@@ -186,16 +151,18 @@ class RepoCheckTest(unittest.TestCase):
                 self.assertIn("factory_bootstrap_repo", failed[0]["fix"])
                 bootstrap_plan(github, REPO, "make test")  # the advertised fix does not refuse
 
-    def test_a_stale_gate_caller_fails_its_check_and_names_the_update_fix(self):
-        github = gated(FakeGitHub())
-        github.contents[(REPO, GATE_WORKFLOW)] = stale_workflow()
-
-        failed = [c for c in check(github, REPO) if not c["ok"]]
-
-        self.assertEqual([c["id"] for c in failed], ["gate_workflow"])
-        self.assertIn("older gate revision", failed[0]["detail"])
-        self.assertIn("factory_bootstrap_repo", failed[0]["fix"])
-        bootstrap_plan(github, REPO, "make test")  # the advertised fix does not refuse
+    def test_a_caller_is_current_whatever_it_names_and_nothing_is_rewritten(self):
+        """The gate revision is the release channel's now (ADR-0134), so a caller that names the
+        channel, one that froze a sha, and one whose marker lines are malformed are all installed and
+        all left alone: nothing compares a pin, and nothing raises on a caller it cannot parse."""
+        for name, caller in (("channel", CANONICAL_WORKFLOW), ("frozen", CHANNEL_CALLER),
+                             ("malformed", "on: pull_request")):
+            with self.subTest(caller=name):
+                github = gated(FakeGitHub())
+                github.contents[(REPO, GATE_WORKFLOW)] = caller
+                self.assertEqual([c["id"] for c in check(github, REPO) if not c["ok"]], [])
+                self.assertEqual(github.contents[(REPO, GATE_WORKFLOW)], caller)  # never rewritten
+                self.assertEqual(bootstrap_plan(github, REPO)["files"], {})
 
     def test_an_agents_md_the_bootstrap_refuses_gets_a_by_hand_fix(self):
         for text, refusal in (("<!-- factory-standard:begin -->\n", "malformed"),
@@ -223,12 +190,13 @@ class RepoCheckTest(unittest.TestCase):
                             for c in check(github, REPO) if not c["ok"]))
 
     def test_the_tool_says_whether_the_repo_is_ready_and_enabled(self):
-        foreman = Foreman(Store(":memory:"), gated(FakeGitHub()), Config(mcp_token="t", repos=frozenset({REPO})),
-                          FakeRelay())
+        github = gated(FakeGitHub())
+        github.contents[(RELEASE_REPO, GATE_RELEASE)] = json.dumps({"gate_revision": "c" * 40})
+        foreman = Foreman(Store(":memory:"), github, Config(mcp_token="t", repos=frozenset({REPO})), FakeRelay())
         found = tools.build(foreman.store, foreman)
         self.assertEqual({key: value for key, value in found["factory_repo_check"].fn({"repo": REPO}).items()
                           if key != "checks"}, {"repo": REPO, "enabled": True, "ready": True,
-                                                 "setupMergeAuthorized": False})
+                                                 "gateRevision": "c" * 40, "setupMergeAuthorized": False})
         other = found["factory_repo_check"].fn({"repo": "o/other"})
         self.assertEqual((other["enabled"], other["ready"]), (False, False))
         for name in ("o/r/../x", "o/..", "../r", "o/."):  # a checkout path must stay under its root

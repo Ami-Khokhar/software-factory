@@ -36,6 +36,7 @@ class FakeGitHub:
         self.posted = []  # (repo, number, body) of every comment the Foreman wrote
         self.compares = []  # (repo, base, head) of every commit comparison the Foreman read
         self.branches, self.files = {}, {}  # (repo, branch) -> sha; (repo, sha) -> changed files
+        self.tags = {}  # (repo, tag) -> sha, which only `ref_revision` resolves
         self.repos = {}  # repo -> fields that differ from a pushable repo; None: GitHub has no such repo
         self.contents = {}  # (repo, path) -> file text on the default branch
         self.labels = {}  # repo -> names of the labels the Foreman created
@@ -155,6 +156,12 @@ class FakeGitHub:
 
     def branch_head(self, repo, branch):
         return self.branches.get((repo, branch), "base0" if branch == "main" else None)
+
+    def ref_revision(self, repo, ref):
+        """A tag resolves only through here; `branch_head` answers None for one, as GitHub does."""
+        if (repo, ref) in self.branches:
+            return self.branches[(repo, ref)]
+        return self.tags.get((repo, ref), "base0" if ref == "main" else None)
 
     def has_refs(self, repo):
         return any(self.branch_head(r, b) for r, b in {*self.branches, (repo, "main")} if r == repo)
