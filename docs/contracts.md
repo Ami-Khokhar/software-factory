@@ -155,7 +155,7 @@ and direct the caller to the approved template. Credential mounts over container
   The name lands in the audit's `dispatch` row and in `WorkItem.worker`, not in the WorkOrder document,
   which carries no worker key.
 - **A dispatch reads the tree the pass starts from, and says when a fence glob matches nothing in it
-  (ADR-0138).** The finding is in `findingsToAddress` with fingerprint `the paths fence names paths
+  (ADR-0139).** The finding is in `findingsToAddress` with fingerprint `the paths fence names paths
   absent at the base`, and the audit row is `fence_missing` with the commit and the globs. Nothing is
   refused: a fence may name a file the pass creates. One tree read per repo and commit per process.
 - **`WorkItem.queue` is the orchestrator's queue entry (ADR-0135).** Set while the state is

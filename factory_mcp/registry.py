@@ -13,6 +13,11 @@ provider (`opencode/mimo-v2.6-flash-free`) or omit it, but it must land under th
 provider — a change of provider is a different approval (ADR-0076). It never touches
 FACTORY_WORKERS. A registered worker needs successful health and explicit activation
 through factory_set_worker_enabled by Day Desk or the owner (ADR-0127) before receiving a WorkOrder.
+
+The runner-path question these jobs all ask lives here, at two strictnesses: `runs_the_runner`
+answers a write and a status label (any deployment's `worker/runner.py`), `runs_this_runner`
+answers an activation (only this checkout's). One place answers, so the three can never disagree
+(ADR-0138).
 """
 import json
 import os
@@ -51,6 +56,23 @@ def _provider(pin):
     return None
 
 
+def runs_the_runner(args):
+    """Whether `args` run a factory worker runner: `args[0]` is an absolute `worker/runner.py`
+    path with no `..` in it. Any deployment's checkout may name that path — a template is copied,
+    not executed here, and a status only labels what the registry holds — so this is the lenient
+    answer, and it never raises. An activation asks `runs_this_runner` instead."""
+    return (isinstance(args, list) and bool(args) and isinstance(args[0], str)
+            and ".." not in args[0] and RUNNER.match(args[0]) is not None)
+
+
+def runs_this_runner(args, runner_path):
+    """Whether `args` run exactly this deployment's runner: the activation gate answers from this
+    checkout alone, so an agent that names another deployment's worker/runner.py never enables
+    here. The strictness is the caller's — sharing the question must not loosen this gate."""
+    return (isinstance(args, list) and bool(args) and isinstance(args[0], str)
+            and args[0] == str(runner_path))
+
+
 def build_agent(template, worker_id, model):
     """The new agent: `template` with its id, name, description and model args set for this worker.
     The harness, credential mount, env, cwd, allowedRoots, image and timeout are the template's. The
@@ -70,8 +92,7 @@ def build_agent(template, worker_id, model):
                          "worker/runner.py in the factory-worker container, so it is not a "
                          "sandboxed template to copy")
     args = list(template.get("args") or [])
-    if (not args or not isinstance(args[0], str) or ".." in args[0]
-            or not RUNNER.match(args[0])):
+    if not runs_the_runner(args):
         raise ValueError(f"the template {template_id!r} does not run worker/runner.py, so no "
                          "worker can be registered from it")
     harness_at = _value(args, "--")
