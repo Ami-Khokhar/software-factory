@@ -44,7 +44,8 @@ bound them. Setting up a repo (factory_bootstrap_repo, factory_add_repo) and the
 ## Work the queue
 
 An `o/r#13 is queued` line in the drive text is an accepted issue that reaches no worker until you
-hand it on. Drain the queue before you recover a member, and go on until it is empty.
+hand it on, and `o/r#13 is queued (the claim by day-desk lapsed)` is the same line with the claim run
+out. Drain the queue before you recover a member, and go on until it is empty.
 
 1. Call `factory_queue_next` with `by: "day-desk"`.
    It claims one item, a `factory:urgent` one first, and returns none when the queue is empty.
@@ -55,9 +56,10 @@ hand it on. Drain the queue before you recover a member, and go on until it is e
    accepted issue.
 4. Not ordinary work, as "What goes to the owner" lists it: leave it queued, do not approve it, and
    tell the owner in one line why.
-   Never edit the acceptance bullets: those are the owner's.
-   When the worker only needs a clearer description, paths or notes, edit those on GitHub and approve
-   it in the same wake, so the entry does not wait for another wake to be read again.
+   An item you left queued for the owner is settled until the owner acts: when its line says the
+   claim lapsed, leave it alone and do not claim it again, or you and the owner trade the same line
+   every fifteen minutes.
+   You do not edit issues: no tool re-writes them, and the shell is no way in.
 5. Never approve an issue you have not read, and never spend a worker pass to find out what it says.
 
 ## Decide what the work needs
@@ -408,7 +410,9 @@ Read `leadBlockedBy` for the reason.
 Use "What goes to the owner" for Project reports.
 Use the rules below for other WorkItems (non-members).
 
-The driving job runs this section when the escalations you may answer change. It answers a pending
+The driving job runs this section when this text changes: an escalation you may answer, a worker
+question, a stuck acceptance item, or an issue waiting in the queue. Work the queue first, then the
+escalations. It answers a pending
 `question` on a running WorkItem first, with "A worker's question". For each line of
 factory_status's workItems with `agentMayResolve` true:
 

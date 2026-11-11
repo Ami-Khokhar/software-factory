@@ -909,10 +909,10 @@ class Foreman:
         same entry, so it moves on rather than double-booking, and a claim past `QUEUE_LEASE` is
         free again so a crashed agent cannot strand an entry."""
         def order(wi):
-            entry = wi.get("queue") or {}
+            entry = wi.get("queue") if isinstance(wi.get("queue"), dict) else {}
             return (0 if entry.get("urgent") else 1, entry.get("at") or wi["updatedAt"])
         for wi in sorted((wi for wi in self.store.all() if wi["state"] == "queued"), key=order):
-            entry = wi.get("queue") or {}
+            entry = wi.get("queue") if isinstance(wi.get("queue"), dict) else {}
             if entry.get("claimedBy") and not self._claim_expired(entry.get("claimedAt")):
                 continue
             if not self.store.acquire(wi["id"], self.holder):

@@ -127,8 +127,8 @@ class ProfileTest(unittest.TestCase):
         for phrase in ("Drain the queue before you recover a member", "`factory_queue_next`",
                        '`by: "day-desk"`', "`factory:urgent` one first", "returns none when the queue is empty",
                        "`factory_status` and its id before you decide", "`factory_queue_approve`",
-                       "leave it queued, do not approve it", "Never edit the acceptance bullets",
-                       "approve\n   it in the same wake", "Never approve an issue you have not read"):
+                       "leave it queued, do not approve it", "do not claim it again",
+                       "You do not edit issues", "Never approve an issue you have not read"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, queue)
         self.assertLess(queue.index("`factory_queue_next`"), queue.index("`factory_queue_approve`"))
