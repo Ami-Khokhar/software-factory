@@ -1152,7 +1152,17 @@ class Foreman:
                 raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
             if wi["state"] != "queued":
                 raise ToolError(f"{workitem_id} is {wi['state']}; only a queued WorkItem is approved")
-            missing = (wi.get("queue") or {}).get("acceptanceMissing")
+            entry = wi.get("queue") if isinstance(wi.get("queue"), dict) \
+                else workitem.queue_entry(False, wi["updatedAt"])
+            # The issue is the authority on its own gap: the owner may have completed a check or
+            # reworded a claim on GitHub since intake, and a stored list nobody re-derives would then
+            # name a claim no bullet carries and refuse this approval for ever (ADR-0142).
+            body = self._issue(wi["repo"], wi["issueNumber"]).get("body") or ""
+            missing = [workitem.claim_of(bullet) for bullet in workitem.parse_acceptance(body)[1]]
+            if missing != (entry.get("acceptanceMissing") or []):
+                entry = dict(entry, acceptanceMissing=missing or None)
+                wi = self._write(wi, dict(wi, queue=entry), "queue_gap_refreshed",
+                                 acceptanceMissing=missing or None)
             if missing:  # the issue's own bullets must each name how a check proves them (ADR-0142)
                 raise ToolError(f"{workitem_id} still has acceptance bullets without a check: "
                                 + "; ".join(missing) + ". factory_complete_acceptance completes "
@@ -1178,6 +1188,8 @@ class Foreman:
         if not isinstance(claim, str) or not isinstance(check, str) \
                 or not claim.strip() or not check.strip():
             raise ToolError("completing a check needs the claim in its own words and the check to write")
+        if any(ord(char) < 32 or ord(char) == 127 for char in check):  # one line, so it stays a check
+            raise ToolError("a check is one line: a command, a test id or a file assertion")
         if not self.store.acquire(workitem_id, self.holder):
             raise ToolError(f"{workitem_id} is being ticked; try again")
         try:
@@ -1199,10 +1211,15 @@ class Foreman:
             if not workitem.runnable_check(check):
                 raise ToolError("a check names something the factory can run: " + workitem.RUNNABLE_FORMS)
             new_body = workitem.with_check(body, claim, check)
+            if new_body is None:  # no bullet took the check, so nothing is written or stored
+                raise ToolError(f"no bullet of {workitem_id}'s Acceptance carries the claim {claim!r} "
+                                "to write a check onto; the body is unchanged")
             self.github.edit_issue(wi["repo"], wi["issueNumber"], new_body)
-            left = [c for c in (wi["queue"].get("acceptanceMissing") or []) if c != claim]
+            entry = wi.get("queue") if isinstance(wi.get("queue"), dict) \
+                else workitem.queue_entry(False, wi["updatedAt"])
+            left = [c for c in (entry.get("acceptanceMissing") or []) if c != claim]
             new = dict(wi, acceptance=list(wi["acceptance"]) + [{"claim": claim, "doneWhen": check}],
-                       queue=dict(wi["queue"], acceptanceMissing=left or None))
+                       queue=dict(entry, acceptanceMissing=left or None))
             stored = self._write(wi, new, "acceptance_completed", by=by, claim=claim, check=check,
                                  why=why, before=body, after=new_body)
             try:

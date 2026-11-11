@@ -197,9 +197,12 @@ and direct the caller to the approved template. Credential mounts over container
   claim, the check and why, so the owner can veto by editing the bullet back. The audit row is
   `acceptance_completed` and carries the body before and after (a failed comment is logged as
   `acceptance_comment_failed` and the completion stands). Refused: a claim that matches no bullet
-  lacking a check, an unrunnable check, a WorkItem with a WorkOrder (after a pass has started
-  nothing completes a check), or one that is not queued. `factory_queue_approve` refuses while
-  `acceptanceMissing` still names a claim. Intake outside the queue, and plans and proposals, keep
+  lacking a check, a check that is not one line, an unrunnable check, a WorkItem with a WorkOrder
+  (after a pass has started nothing completes a check), or one that is not queued.
+  `factory_queue_approve` refuses while the issue still names a claim without a check: it reads the
+  body and re-derives the gap rather than trusting the stored list, writing the refreshed claims back
+  onto the entry (audit `queue_gap_refreshed`), so an owner who completes a check on the issue itself
+  is approved rather than stranded. Intake outside the queue, and plans and proposals, keep
   demanding full checks.
 - **`WorkItem.pendingRetry` is one durable Day Desk retry intent (ADR-0095).** Null or
   absent means none. `factory_queue_retry` writes it with its request-journal row in one

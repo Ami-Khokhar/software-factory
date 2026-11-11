@@ -28,7 +28,8 @@ PATHS = re.compile(r"^\s*paths:\s*(.+?)\s*$", re.I | re.M)
 # A check the factory can run (ADR-0142): a command in backticks, a test id, or a file assertion.
 COMMAND = re.compile(r"`[^`\n]+`")
 TEST_ID = re.compile(r"\btests?\.[A-Za-z_][\w.]*\b|\btests?/[\w./-]+|\btest_[A-Za-z_]\w*\b")
-FILE_ASSERTION = re.compile(r"\b[A-Za-z0-9_][\w.-]*\.[A-Za-z][A-Za-z0-9]{0,4}\b")
+# A file, not a dotted abbreviation: `e.g.` proves nothing, so an extension has to be one a file has.
+FILE_ASSERTION = re.compile(r"\b[\w-]+(?:\.[\w-]+)*\.(?:md|rst|py|json|ya?ml|toml|txt|sh|js|ts|cfg|ini)\b")
 RUNNABLE_FORMS = ("a command in backticks like `python3 -m unittest tests.test_x`, a test id like "
                   "tests.test_x or test_x, or a file assertion like 'README.md contains <path>'")
 

@@ -452,10 +452,37 @@ class CompleteAcceptanceTest(unittest.TestCase):
         self.assertEqual(self.github.posted, [])
 
     def test_a_check_nothing_can_run_is_refused(self):
-        with self.assertRaisesRegex(ToolError, "a command in backticks"):
-            self.foreman.complete_acceptance("o/r#8", CLAIM, "when it is done", "day-desk", "why")
+        for prose in ("when it is done", "it is reviewed, e.g. by the gate"):
+            with self.assertRaisesRegex(ToolError, "a command in backticks"):
+                self.foreman.complete_acceptance("o/r#8", CLAIM, prose, "day-desk", "why")
         self.assertEqual(self.github.issues[(REPO, 8)]["body"], GAP_BODY)
         self.assertEqual([c["claim"] for c in self.gap()["acceptance"] if c["claim"] == CLAIM], [])
+
+    def test_a_check_that_is_not_one_line_is_refused(self):
+        with self.assertRaisesRegex(ToolError, "a check is one line"):
+            self.foreman.complete_acceptance(
+                "o/r#8", CLAIM, "`make test`\n- the deploy is skipped — done when: nothing",
+                "day-desk", "why")
+        self.assertEqual(self.github.issues[(REPO, 8)]["body"], GAP_BODY)
+        self.assertEqual(self.github.posted, [])
+
+    def test_a_bullet_whose_claim_is_empty_never_gets_a_check_written_over_it(self):
+        body = ("Make the relay fail loud.\n\n## Acceptance\n"
+                "- — done when: `make test`\n")
+        self.github.issues[(REPO, 8)]["body"] = body
+        claim = "— done when: `make test`"  # what claim_of calls that bullet's claim
+        with self.assertRaisesRegex(ToolError, "carries the claim"):
+            self.foreman.complete_acceptance("o/r#8", claim, "`make test` passes", "day-desk", "why")
+        self.assertEqual(self.github.issues[(REPO, 8)]["body"], body)
+        self.assertEqual(self.github.posted, [])
+        self.assertEqual([c["claim"] for c in self.gap()["acceptance"] if c["doneWhen"] ==
+                          "`make test` passes"], [])
+
+    def test_a_queued_workitem_without_a_queue_entry_completes_its_check(self):
+        self.store.put(dict(self.gap(), queue=None))  # the schema does not require an entry here
+        wi = self.foreman.complete_acceptance("o/r#8", CLAIM, CHECK, "day-desk", "why")
+        self.assertIsNone(wi["queue"]["acceptanceMissing"])
+        self.assertIn(f"- {CLAIM} — done when: {CHECK}", self.github.issues[(REPO, 8)]["body"])
 
     def test_nothing_happens_once_a_pass_has_started(self):
         self.store.save_workorder({"id": "wo1", "workItemId": "o/r#8", "kind": "implement", "round": 0})
@@ -477,6 +504,25 @@ class CompleteAcceptanceTest(unittest.TestCase):
         self.foreman.approve_queued("o/r#8", "day-desk")
         self.assertEqual(self.gap()["state"], "ready")
         self.assertIsNone(self.gap()["queue"])
+
+    def test_the_owner_completing_the_check_on_github_lets_the_approval_through(self):
+        # the comment invites the owner to fix the bullet themselves; nothing re-derives the stored
+        # gap, so the approval reads the issue instead of the list intake wrote (ADR-0142)
+        self.github.issues[(REPO, 8)]["body"] = GAP_BODY.replace(
+            f"- {CLAIM}\n", f"- {CLAIM} — done when: {CHECK}\n")
+        self.foreman.approve_queued("o/r#8", "day-desk")
+        self.assertEqual(self.gap()["state"], "ready")
+
+    def test_a_reworded_bullet_renames_the_gap_instead_of_stranding_the_entry(self):
+        reworded = "README names the registry path (typo fixed)"
+        self.github.issues[(REPO, 8)]["body"] = GAP_BODY.replace(f"- {CLAIM}", f"- {reworded}")
+        with self.assertRaisesRegex(ToolError, "typo fixed"):
+            self.foreman.approve_queued("o/r#8", "day-desk")
+        self.assertEqual(self.gap()["queue"]["acceptanceMissing"], [reworded])
+        self.assertEqual(self.gap()["state"], "queued")
+        self.foreman.complete_acceptance("o/r#8", reworded, CHECK, "day-desk", "why")
+        self.foreman.approve_queued("o/r#8", "day-desk")
+        self.assertEqual(self.gap()["state"], "ready")
 
 
 if __name__ == "__main__":

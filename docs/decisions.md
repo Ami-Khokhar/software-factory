@@ -3460,10 +3460,14 @@ one on the queue entry as `acceptanceMissing`. The decision packet carries it, s
 the gap in the claim it already makes. `factory_complete_acceptance` writes `— done when: <check>`
 onto the issue's own bullet: the claim must be given in its own words and is never rewritten, the
 check must name something the factory can run — a command in backticks, a test id, or a file
-assertion — and one comment on the issue quotes the claim, the check and why, so the owner can veto
+assertion — and it is one line, so a check can never add a bullet of its own, and one comment on the
+issue quotes the claim, the check and why, so the owner can veto
 by editing the bullet back; the audit keeps the body before and after. The approval of the entry
 refuses while any check is missing, and the tool refuses once the WorkItem has a WorkOrder: after a
-pass has started, nothing completes a check. The tool ships in the owner's set (ADR-0041), the
+pass has started, nothing completes a check. The approval reads the issue rather than the list
+intake wrote: the claims it enforces are the ones the body carries now, refreshed onto the entry
+(audit `queue_gap_refreshed`), so an owner who adds the check on GitHub — or rewords a claim — is
+not refused for ever. The tool ships in the owner's set (ADR-0041), the
 agent set once it has proven itself. Intake outside the queue still refuses, because there is no
 manager there to complete the checks; plans and proposals still demand full checks, because their
 author writes them in the same turn.
