@@ -3340,3 +3340,25 @@ and a re-leave re-stamps the mark, so the wake is bounded by real activity rathe
 dependence on `updated_at`: an owner action that does not touch the issue, such as a chat instruction,
 is not seen. That is accepted, because a chat instruction is a decision the agent records itself.
 
+## ADR-0138 — The runner-path question is asked once, at each job's strictness
+
+**Context.** Three jobs decided whether a relay registry entry is a factory worker, and each had
+its own check: `factory_register_worker` accepted any absolute `worker/runner.py` path (it copies
+a template, it never executes it), `factory_check_worker` and activation accepted only this
+checkout's exact runner path (they decide whether a worker may run here), and
+`factory_runtime_status` labelled anything ending in `worker/runner.py` as sandboxed (it reports
+and never refuses). One question, three answers: the status could label `sandboxed` an entry the
+registry would refuse as a template, and what counts as the factory runner had no single place to
+read or to change.
+
+**Decision.** `factory_mcp/registry.py` answers once. `runs_the_runner(args)` is the lenient
+answer, used by the guarded write and by the status label; `runs_this_runner(args, runner_path)`
+is the strict answer, used only by the activation gate. Each job keeps the rest of its contract:
+the write still checks the command, harness, model pin and credential boundary before it touches
+the registry, the activation gate still requires this deployment's exact path, and the status
+still returns a boolean instead of raising on a malformed entry.
+
+**Consequence.** What counts as a runner path is one function, so the three verdicts move
+together, and an entry the write refuses is never labelled sandboxed. A caller that needs a
+different strictness must name it where it asks, instead of quietly comparing paths itself —
+which is how the three drifted apart.
