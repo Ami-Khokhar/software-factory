@@ -90,7 +90,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 |---|---|
 | `factory_mcp/__init__.py`, `__main__.py` | The package; `python3 -m factory_mcp` starts the server |
 | `factory_mcp/server.py` | Streamable HTTP on loopback: `POST /mcp` with the bearer token, `POST /worker/ask` and `POST /worker/memory` with a pass's own token (ADR-0098, ADR-0117), the background tick loop |
-| `factory_mcp/mcp.py` | The MCP protocol: one JSON-RPC message in, one response out, no I/O |
+| `factory_mcp/mcp.py` | The MCP protocol: one JSON-RPC message in, one response out, no I/O; a `tools/call` is checked against the tool's own schema first, so a missing, unknown or mistyped argument is refused naming it |
 | `factory_mcp/tools.py` | The tools, and whether each one reads or writes |
 | `factory_mcp/foreman.py` | The Foreman: intake, rebuild, the orchestrator queue (claim, approve), tick, dispatch, poll a task, open a PR, and the person's acts (resolve, approve an issue, start a plan, add a repo, bootstrap a repo, approve or retire a lesson) |
 | `factory_mcp/workitem.py` | Intake from an issue, observing GitHub, and `reconcile`: the fact-driven half of the state machine |
@@ -158,10 +158,11 @@ A tick comes from the background loop or from `factory_tick`.
    - `implementing`: read the task. When it is done, check the Result and what GitHub holds, push
      a patch, and open the PR or adopt the one already open on the branch. A push to an open PR
      rewrites its body, because the gate lints the body against the paths the PR now changes.
-    - `pr_open`, `reviewing`, `changes_requested` or `merge_pending` with a PR that GitHub says
-      conflicts with its base: dispatch an implement WorkOrder on the current default branch, with
-      the conflict and any gate findings as data; its push replaces the branch, and the gate runs
-      again (ADR-0032, ADR-0114).
+     - `pr_open`, `reviewing`, `changes_requested` or `merge_pending` with a PR that GitHub says
+       conflicts with its base: dispatch an implement WorkOrder on the current base (the repo's
+       `prBase` when it has one, else the default branch), with
+       the conflict and any gate findings as data; its push replaces the branch, and the gate runs
+       again (ADR-0032, ADR-0114).
    - `pr_open` or `reviewing` with no verdict for `FACTORY_GATE_WAIT_SECONDS`: `human_waiting`.
    - `merged`: close the issue, because GitHub skips `Closes #n` when the gate's workflow token
      merges. Then `closed`.
@@ -239,7 +240,8 @@ for a decision `factory_resolve_human` makes, Day Desk's once per incident or th
   harness's share of the pass (ADR-0036).
 - `worker/runner.py` fetches in the checkout, makes a fresh copy with no remote, and puts it on
   `factory/<issue>` at the commit to build on: the default branch for an implement WorkOrder, the
-  reviewed head for a fix.
+  reviewed head for a fix. A repo with a `prBase` (ADR-0141) starts from and targets that branch
+  instead of the default branch; the WorkOrder names it in `baseBranch`.
 - The harness runs in the `factory-worker` container with that copy and a copy of its model key,
   and no GitHub credential. It commits locally. Host git never runs in a tree the harness wrote,
   so a planted hook or filter cannot run on the host.
@@ -255,8 +257,9 @@ for a decision `factory_resolve_human` makes, Day Desk's once per incident or th
   `factory-ask` answers `-h` and `--help`
   itself with its usage, without contacting the channel (ADR-0111).
 - The runner turns the commits into a unified patch, measures the whole pull request — the branch's
-  diff against its merge base with the default branch, so a fix is counted with the implementation it
-  follows — and checks an oversized one before the gate's `verify` command from the base commit runs
+  diff against its merge base with the default branch (the repo's `prBase` when it has one, so a
+  fix is counted with the implementation it follows) — and checks an oversized one before the gate's
+  `verify` command from the base commit runs
   in the same sandbox: over the file count it refuses the pass; over the line target it warns
   (advisory, ADR-0070) and continues. It then prints the Result as its last line.
 - The harness's own test runs are its session's business; the runner's `verification` phase is the
@@ -286,7 +289,7 @@ for a decision `factory_resolve_human` makes, Day Desk's once per incident or th
 | A Result meets its contract | `documents.check_result` | `test_schemas`: `test_check_result_accepts_what_the_result_schema_accepts` |
 | Only factory-mcp pushes, and only a patch (ADR-0017) | `Foreman.push_patch`, `patches.apply` | `test_actions`: `test_ready_to_pr_open`; `test_gate_loop`: `test_changes_fix_merge_closed`; `test_workers`: `test_unified_and_mbox_patches_push_the_workers_change` |
 | Changed paths come from GitHub, protected paths refused | `Foreman.check_pushed`, `patches.apply` | `test_actions`: `test_renaming_a_protected_path_fails_the_result`; `test_workers`: `test_a_patch_to_a_protected_path_is_never_pushed` |
-| One PR's size: 700 source lines target, 1000 source ceiling, 20 files binding, tests/docs separate, whole PR measured from the default branch (ADR-0040 with ADR-0079) | `factory_mcp/sizing.py` (the metric), `worker/runner.py` `collect` (whole PR, before the verify — source target warns, source ceiling refuses as size-only), `Foreman.check_pushed` (covers the file count, records `pr_size_advisory` with the totals), `patches.apply` (the push's own check, for a base that advanced), `Foreman._size_recovery` (proposes an acceptance-preserving decomposition) | `test_sizing`: `test_the_accepted_sizes_and_the_recovery_boundary`, `test_it_reports_source_tests_and_docs_separately`; `test_worker_runner`: `test_tests_and_docs_do_not_count_against_the_source_target`, `test_a_source_total_over_the_ceiling_is_a_size_only_recovery`, `test_a_hard_line_bound_still_refuses_when_the_workorder_names_it`; `test_actions`: `test_a_change_must_fit_one_pr`, `test_a_source_ceiling_excess_routes_to_a_decomposition_not_an_attempt`, `test_an_allowance_never_buys_a_planned_decomposition_without_the_owner`; `test_workers`: `test_a_patch_that_takes_the_branch_over_its_limits_is_never_pushed` |
+| One PR's size: 700 source lines target, 1000 source ceiling, 20 files binding, tests/docs separate, whole PR measured from the base branch (the repo's `prBase` when it has one, ADR-0040 with ADR-0079, ADR-0141) | `factory_mcp/sizing.py` (the metric), `worker/runner.py` `collect` (whole PR, before the verify — source target warns, source ceiling refuses as size-only), `Foreman.check_pushed` (covers the file count, records `pr_size_advisory` with the totals), `patches.apply` (the push's own check, for a base that advanced), `Foreman._size_recovery` (proposes an acceptance-preserving decomposition) | `test_sizing`: `test_the_accepted_sizes_and_the_recovery_boundary`, `test_it_reports_source_tests_and_docs_separately`; `test_worker_runner`: `test_tests_and_docs_do_not_count_against_the_source_target`, `test_a_source_total_over_the_ceiling_is_a_size_only_recovery`, `test_a_hard_line_bound_still_refuses_when_the_workorder_names_it`; `test_actions`: `test_a_change_must_fit_one_pr`, `test_a_source_ceiling_excess_routes_to_a_decomposition_not_an_attempt`, `test_an_allowance_never_buys_a_planned_decomposition_without_the_owner`; `test_workers`: `test_a_patch_that_takes_the_branch_over_its_limits_is_never_pushed` |
 | GitHub holds the pushed commit | `Foreman.check_pushed` | `test_actions`: `test_bad_results_fail_attempts_then_block` |
 | One PR per WorkItem | `Foreman.open_pr` | `test_actions`: `test_a_result_for_a_branch_with_an_open_pr_joins_that_pr`, `test_open_pr_adopts_a_pr_opened_after_the_reconcile` |
 | A verdict is selected for the exact live PR head despite later comments for another head, and older rounds remain stale | `workitem.current_verdict`, `Foreman.act` | `test_gate_loop`: `test_a_live_head_changes_verdict_survives_a_later_comment_for_another_head`; `test_actions`: `test_stale_verdict_ignored`; `test_reconcile`: `test_old_round_is_stale` |

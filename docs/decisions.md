@@ -3418,3 +3418,67 @@ stored report's status, so a `provider_auth` failure still names the provider ra
 flattened into `unavailable`. The launch input is a marker `worker/runner.py` answers before it
 looks for a WorkOrder, so a deployment whose runner predates this ADR quarantines itself instead
 of passing.
+
+## ADR-0141 — A repo's factory pull requests target its prBase, when it sets one
+
+**Context.** The Foreman used GitHub's default branch for everything a per-repo decision should
+govern: the head each WorkItem branch starts from, the base the whole pull request's size is
+measured against, and the base the pull request is opened with. Some repos keep an integration
+branch that factory work should land on — amteshwarkhokhar/Digital-Presence keeps `factory-main`
+because its `main` holds different content, and Digital-Presence #103 was blocked because its
+WorkItem started on `main` while the files it changes exist only on another branch.
+
+**Decision.** `FACTORY_PR_BASES` lists `owner/repo=branch` pairs. For a listed repo the Foreman's
+base branch is that `prBase`: dispatch reads its head as the WorkOrder's `baseSha` (so the pass
+builds on it), `WorkOrder.baseBranch` names it so the runner measures the whole pull request
+against that branch and leaves `source/HEAD` pointing at it, `check_pushed` compares changed files
+against it, and `open_pr` opens the pull request with it as base. A repo not listed behaves exactly
+as before. A prBase branch the remote does not hold blocks the WorkItem for a person at dispatch
+with a message naming the branch — the factory never creates it and never falls back to the default
+branch silently. WorkOrders before this field have no `baseBranch`, which reads as the default
+branch, so no store migration is needed.
+
+**Consequence.** The owner sets `FACTORY_PR_BASES=amteshwarkhokhar/Digital-Presence=factory-main`
+and restarts factory-mcp; from then on no factory pull request of that repo can open against
+`main`. A missing prBase stops the line for that WorkItem instead of guessing, so a typo in the
+setting surfaces as an escalation, not a PR against the wrong base. GitHub's own default branch
+stays what bootstrap, the setup PR and the weekly gauges use; this decision changes only where
+factory work starts and lands.
+
+## ADR-0142 — The manager completes a missing check, never the claim
+
+**Context.** Intake refused any `factory:ready` issue whose `## Acceptance` bullets did not each
+say `done when: <check>`, so the tick logged `rebuild_skipped` once and the issue never reached the
+queue — on 11 Nov 2026 that threw away agent-relay#307 and #308, both carrying real claims that
+named no check. The manager holding the queue entry already has the facts to close that gap: the
+owner wrote the claims, and the only missing part is naming the test, command or file that proves
+each one. Refusing the whole issue over a formatting gap is paperwork, but a factory that rewrote
+the owner's claims would be deciding what the work is.
+
+**Decision.** Intake takes a queued issue whose bullets lack checks, and stamps each claim without
+one on the queue entry as `acceptanceMissing`. The decision packet carries it, so the manager sees
+the gap in the claim it already makes. `factory_complete_acceptance` writes `— done when: <check>`
+onto the issue's own bullet: the claim must be given in its own words and is never rewritten, the
+check must name something the factory can run — a command in backticks, a test id, or a file
+assertion — and it is one line, so a check can never add a bullet of its own, and one comment on the
+issue quotes the claim, the check and why, so the owner can veto
+by editing the bullet back; the audit keeps the body before and after. The approval of the entry
+refuses while any check is missing, and the tool refuses once the WorkItem has a WorkOrder: after a
+pass has started, nothing completes a check. The approval reads the issue rather than the lists
+intake wrote: the claims it enforces and the criteria it dispatches are the ones the body carries
+now, refreshed onto the entry and onto `acceptance` together (audit `queue_gap_refreshed`), so an
+owner who adds the check on GitHub — including an issue whose every bullet lacked a check at
+intake, whose stored `acceptance` is empty — or rewords a claim is not refused for ever, and an
+approval can no longer stand on an empty `acceptance`. An issue whose Acceptance section is gone
+altogether is refused, because nothing then proves the work. The tool ships in the owner's set (ADR-0041), the
+agent set once it has proven itself. Intake outside the queue still refuses, because there is no
+manager there to complete the checks; plans and proposals still demand full checks, because their
+author writes them in the same turn.
+
+**Consequence.** An issue that would have been discarded now waits in the queue for one bounded
+edit instead. The line holds: the agent completes a check, a claim rewrite stays a change to
+acceptance, which is the owner's. The WorkItem's `acceptance` is no longer strictly frozen at
+intake — `factory_complete_acceptance` adds a criterion whose claim the issue itself already
+carried — and the schema allows an empty `acceptance` only while a queue entry names a non-empty
+`acceptanceMissing`. The cost is one more write tool on the issue, bounded to bullets that lack a
+check, and one comment per completed check for the owner to read.

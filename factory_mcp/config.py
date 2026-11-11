@@ -41,6 +41,7 @@ class Config:
     workers: tuple = (("codex", "hosted"),)  # (relay agentId, "local"|"hosted"), preferred first
     local_only_repos: frozenset = frozenset()
     remote_verify_repos: frozenset = frozenset()  # repos whose verify runs on a GitHub macOS runner (ADR-0045)
+    pr_bases: dict = field(default_factory=dict)  # repo (lower-case) -> the branch factory PRs target (ADR-0141)
     remote_verify_seconds: int = 1800  # no finished run for this long: the attempt fails
     git_url: str = "https://github.com/{repo}.git"
     owner: str = ""  # the person who owns escalations; default is the repo owner
@@ -78,6 +79,11 @@ class Config:
 
     def remote_verify(self, repo):
         return repo.lower() in {name.lower() for name in self.remote_verify_repos}
+
+    def pr_base(self, repo):
+        """The branch factory pull requests target and factory work starts from in `repo`, or None
+        for GitHub's default branch (ADR-0141). GitHub repo names ignore case."""
+        return self.pr_bases.get(repo.lower())
 
     def checkout(self, repo):
         """The worker checkout for `repo`, sent to the relay as the task cwd, or None."""
@@ -123,6 +129,22 @@ class Config:
         if remote_verify_seconds < 1:
             raise ValueError("FACTORY_REMOTE_VERIFY_SECONDS must be 1 or more")
         rank_lessons = env.get("FACTORY_JEV_LESSON_RANKING", "") in ("1", "true", "yes")
+        pr_bases = {}
+        for entry in env.get("FACTORY_PR_BASES", "").split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            repo, sep, branch = entry.partition("=")
+            repo, branch = repo.strip(), branch.strip()
+            if not sep or not repo or not branch:
+                raise ValueError(f"FACTORY_PR_BASES entries are owner/repo=branch, comma-separated; "
+                                 f"{entry!r} is not one")
+            if not manifest.NAME.match(repo):
+                raise ValueError(f"FACTORY_PR_BASES names {repo!r}, which is not a repo in the form "
+                                 "owner/repo")
+            if repo.lower() in pr_bases:
+                raise ValueError(f"{repo} is set twice in FACTORY_PR_BASES")
+            pr_bases[repo.lower()] = branch
         source_target = int(env.get("FACTORY_SOURCE_CHANGED_LINES") or defaults.source_target)
         if source_target < 1:
             raise ValueError("FACTORY_SOURCE_CHANGED_LINES must be 1 or more")
@@ -161,6 +183,7 @@ class Config:
                                        .split(",") if r.strip()),
             remote_verify_repos=frozenset(r.strip() for r in env.get("FACTORY_REMOTE_VERIFY_REPOS", "")
                                           .split(",") if r.strip()),
+            pr_bases=pr_bases,
             remote_verify_seconds=remote_verify_seconds,
             git_url=env.get("FACTORY_GIT_URL") or defaults.git_url,
             owner=env.get("FACTORY_OWNER", ""),

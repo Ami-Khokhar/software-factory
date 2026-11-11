@@ -878,6 +878,25 @@ class RunnerTest(unittest.TestCase):
         result, _ = self.run_order("sizecheck")
         self.assertEqual(result["status"], "completed", result.get("error"))
 
+    def test_a_pr_base_repo_measures_the_whole_pr_against_its_base_branch(self):
+        """A repo whose factory pull requests target a prBase branch (ADR-0141) is measured against
+        that branch, which the WorkOrder names in baseBranch, not GitHub's default branch."""
+        seed = Path(self.tmp.name) / "pb"
+        sh(self.tmp.name, "clone", "-q", str(self.origin), str(seed))
+        sh(seed, "checkout", "-q", "-b", "factory-main")
+        (seed / "integration.txt").write_text("integration\n")
+        sh(seed, "add", "-A")
+        sh(seed, "-c", "user.name=s", "-c", "user.email=s@s", "commit", "-qm", "integration")
+        sh(seed, "push", "-q", str(self.origin), "factory-main")
+        pr_base = sh(seed, "rev-parse", "HEAD")
+        work = Path(self.tmp.name) / "work"
+        order = {"kind": "implement", "workItemId": "o/r#7", "baseSha": pr_base,
+                 "baseBranch": "factory-main"}
+        base, default = runner.prepare(str(self.checkout), order, "factory/7", str(work))
+        self.assertEqual((base, default), (pr_base, pr_base))
+        self.assertEqual(sh(work, "symbolic-ref", "refs/remotes/source/HEAD"),
+                         "refs/remotes/source/factory-main")
+
     def test_a_failed_harness_fails_the_pass_before_collecting(self):
         result, _ = self.run_order("fail")
         self.assertEqual((result["status"], result["error"]),
