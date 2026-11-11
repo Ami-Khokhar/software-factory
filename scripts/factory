@@ -71,6 +71,10 @@ def read_env(path):
 SETTINGS = read_env(CONFIG / "env")
 PORT = int(SETTINGS.get("FACTORY_PORT") or 43125)
 RELAY = (SETTINGS.get("FACTORY_RELAY_URL") or "http://127.0.0.1:43124").rstrip("/")
+# The heartbeat `drive-queue` writes each time Day Desk's scheduler fires it, in the state dir the
+# store's database lives in by default, which factory_status reads (ADR-0143).
+HEARTBEAT = STATE / "drive-heartbeat.json"
+DRIVE_EVERY_MINUTES = 5  # the factory-drive interval the RUNBOOK creates
 
 
 def run(*cmd, check=False):
@@ -130,7 +134,18 @@ def cmd_watch(_):
     else:  # the previous file held only the waiting fingerprints
         seen_waiting, seen_progress = (seen if isinstance(seen, dict) else {}), {}
     driving = bool(read_env(CONFIG / "secrets").get("FACTORY_AGENT_TOKEN"))
-    workitems = call("factory_status")["workItems"]
+    status = call("factory_status")
+    workitems = status["workItems"]
+    # A lost scheduler is an event, not a silence (ADR-0143): when the driving job has not fired for
+    # two of its intervals (one interval is a due tick, the second is a missed one), say it once, and
+    # re-arm when the job fires again. With no heartbeat at all the job may simply not be set up.
+    job = status.get("drivingJob") or {}
+    every, overdue = job.get("everyMinutes") or DRIVE_EVERY_MINUTES, job.get("overdueMinutes")
+    scheduler_gone = isinstance(overdue, int) and overdue >= every
+    scheduler_seen = seen.get("schedulerOverdue") if isinstance(seen, dict) else False
+    if scheduler_gone and not scheduler_seen:
+        print(clip(f"factory-drive has not fired for {overdue + every}m (every {every}m): "
+                   "the Day Desk scheduler may be stopped."))
     projects = call("factory_project_status").get("projects", [])
     active_projects = {p["id"] for p in projects if p["state"] == "active"}
     lead_waiting = {wi["id"] for wi in workitems
@@ -192,6 +207,7 @@ def cmd_watch(_):
                        f"To continue: factory extend {project_id} <passes>"))
     STATE.mkdir(parents=True, exist_ok=True)
     seen_file.write_text(json.dumps({"version": 2, "waiting": waiting, "progress": progress,
+                                    "schedulerOverdue": scheduler_gone,
                                     "projects": {p["id"]: p["state"] for p in projects},
                                     "projectPausedReasons": {p["id"]: p.get("pausedReason")
                                                              for p in projects if p["state"] == "paused"}}))
@@ -208,7 +224,16 @@ def wait_bucket(minutes):
 def cmd_drive_queue(_):
     """For the monitor_script of Day Desk's driving job (ADR-0030): the escalations Day Desk may
     still answer and the issues waiting in the queue, one per line. Hermes runs the agent only when
-    this output changes, so a queued line wakes it, and goes when the queue is drained (ADR-0135)."""
+    this output changes, so a queued line wakes it, and goes when the queue is drained (ADR-0135).
+    Each fire first writes its heartbeat (ADR-0143), so factory_status can say when the scheduler
+    last fired even when the rest of this job dies."""
+    try:
+        HEARTBEAT.parent.mkdir(parents=True, exist_ok=True)
+        HEARTBEAT.write_text(json.dumps({"lastFire": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                         "everyMinutes": DRIVE_EVERY_MINUTES}))
+    except OSError as exc:
+        die(f"could not write the drive heartbeat {HEARTBEAT}: {exc}; "
+            "factory_status would then say the scheduler stopped when it did not")
     workitems = call("factory_status")["workItems"]
     now = datetime.now(timezone.utc)
     for wi in workitems:
@@ -487,6 +512,13 @@ def cmd_status(args):
         print("no WorkItems yet: label an issue factory:ready, or run: factory new")
     a = d["autonomy"]
     print(f"autonomy: {a['autonomous']} of {a['ended']} finished WorkItems needed no person")
+    job = d.get("drivingJob") or {}
+    if job.get("lastFire") is None:
+        print("driving job: no fire recorded yet (is the factory-drive cron created? RUNBOOK)")
+    else:
+        print(f"driving job: every {job['everyMinutes']}m, last fired {job['lastFire']}, "
+              + ("alive" if job["alive"] else f"OVERDUE {job['overdueMinutes']}m "
+                                              "(is the scheduler running?)"))
     if d.get("lessonsError"):
         print(f"lessons: {d['lessonsError']}")
     for effect in (d.get("lessonEffect") or {}).values():

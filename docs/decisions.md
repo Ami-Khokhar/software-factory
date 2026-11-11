@@ -3482,3 +3482,33 @@ intake — `factory_complete_acceptance` adds a criterion whose claim the issue 
 carried — and the schema allows an empty `acceptance` only while a queue entry names a non-empty
 `acceptanceMissing`. The cost is one more write tool on the issue, bounded to bullets that lack a
 check, and one comment per completed check for the owner to read.
+
+## ADR-0143 — A lost driving scheduler is an event the factory itself reports
+
+**Context.** Day Desk's cron scheduler stopped firing `factory-drive` without anything in the
+factory saying so: the only sign was an `Overdue` line in `hermes cron list` that a person had to
+run and read, and the only repair that worked was a gateway restart that left the gateway as a
+plain background process that survives no reboot (`launchctl` exit 5 on this macOS). A factory
+whose only autonomous wake path can die silently is not the architecture (ADR-0130, ADR-0135):
+the drive job's fires are machine-local facts both the server and the watch job can read.
+
+**Decision.** Every `factory drive-queue` fire writes a heartbeat (`lastFire`, `everyMinutes`)
+into the factory state dir, beside the store's database, before it does anything else — so the
+fire is recorded even when the rest of the job dies, and a heartbeat that cannot be written fails
+the fire loudly. `factory_status`'s no-id summary reads it and reports `drivingJob`: the last
+fire, the interval, how long the job is overdue and whether the scheduler is alive (`alive` False
+once the job has not fired when it was due; `null` fields when no heartbeat is readable, because
+the job may not be set up at all). `factory watch` turns that into an event: once the job has not
+fired for two of its intervals — one due, one missed — it sends one message, stays silent while
+the scheduler stays lost, and re-arms when the job fires again, so a second loss is reported
+again. It says nothing when no heartbeat exists, for the same reason `factory_status` claims
+nothing: it cannot tell an unset job from a dead one.
+
+**Consequence.** A dead scheduler is now visible in the read paths the factory already has, and
+the watch reports it once per loss without a person polling `hermes cron list`. The heartbeat is
+a convention between `scripts/factory` and factory-mcp: both sides must keep naming the same
+state dir (the CLI's `~/.local/state/factory-mcp`, the server's `db_path` parent, the same
+directory by default), and the interval lives in the heartbeat the job writes, not in config. A
+stale heartbeat and a dead `factory-mcp` are different failures and stay distinguishable: the
+heartbeat is written before the job's first tool call. The two-interval threshold trades one
+missed tick of silence for not crying wolf over a slow tick.

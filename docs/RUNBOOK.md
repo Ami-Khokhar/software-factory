@@ -909,7 +909,7 @@ printf 'FACTORY_AGENT_TOKEN=%s\n' "$(python3 -c 'import secrets; print(secrets.t
 docker build -t day-desk-sandbox:1 ~/.local/share/software-factory/tenant/hermes/sandbox
 hermes -p day-desk model             # choose your ChatGPT or Codex subscription
 hermes -p day-desk gateway setup     # Telegram
-hermes -p day-desk gateway install   # start it at login
+hermes -p day-desk gateway install   # start the gateway at login (see the failure it hits today, below)
 mkdir -p ~/.hermes/profiles/day-desk/scripts
 printf '#!/usr/bin/env bash\nexport PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"\nexec "$HOME/.local/bin/factory" watch\n' \
   > ~/.hermes/profiles/day-desk/scripts/factory-watch.sh
@@ -930,6 +930,14 @@ hermes -p day-desk cron create "every 10m" --no-agent --script factory-update.sh
   --name factory-update
 ```
 
+`gateway install` is the step that starts the gateway at login, and it is the one to run to make
+Day Desk survive a reboot. On this macOS (11 Nov 2026) it fails with `launchctl` exit 5 — the
+gateway answers `launchd cannot manage the gateway on this macOS version` — and the gateway then
+starts as a plain background process instead, which does not auto-start at login and does not
+restart on a crash. After a reboot, run `hermes -p day-desk gateway install` again, then check
+`hermes -p day-desk cron list` for an `Overdue` line on `factory-drive`; `factory status` shows the
+driving job's last fire and whether the scheduler is alive the same way (ADR-0143).
+
 `factory drive-queue` lists each escalation Day Desk may answer as
 `o/r#13 is blocked (waiting 30m): verify exited 1`, and each issue waiting in the queue as
 `o/r#13 is queued`, which wakes Day Desk to claim it and hand it to a worker (ADR-0135). The wait rounds down to 30-minute
@@ -943,6 +951,12 @@ item remains stuck, and once for each worker question.
 what it chose for each: through the plan allowance when one covers the WorkItem, reading the
 queued `pendingRetry` request back before it answers, else through its own factory_resolve_human answer. `factory-watch` tells you of an escalation Day Desk may not answer, or one
 it left for 30 minutes, and of an exhausted WorkItem either way, for non-members.
+
+Every `factory-drive` fire first records its last fire in
+`~/.local/state/factory-mcp/drive-heartbeat.json` (ADR-0143). `factory_status` reports that
+heartbeat as `drivingJob` — the last fire, the interval it is due every, how long it is overdue and
+whether the scheduler is alive — and `factory status` prints the same line, so a job that has not
+fired when it is due is visible where the factory is read, not only in `hermes cron list`.
 While Day Desk drives, it suppresses waiting notices for members of an active Project only when
 `leadBlockedBy` is empty. A member the Lead cannot answer still notifies the owner, including
 a safety stop, environment fault or member pass cap. These notices name the item and its blocker,
@@ -971,9 +985,15 @@ Project notices use a silent first-run baseline, including when upgrading an exi
   once on entering `paused` or when its reason changes.
 - An active member's safety stop or environment fault as the item notice above. Other member
   waiting notices stay with Day Desk.
+- A lost scheduler (ADR-0143): when `factory-drive` has not fired for two of its intervals — one
+  due, one missed — one line, `factory-drive has not fired for 29m (every 5m): the Day Desk
+  scheduler may be stopped.`, said once while it stays lost and again only after the job fires and
+  then stops again. With no heartbeat recorded the watch says nothing: the job may simply not be
+  set up.
 
 Every watcher line is clipped to 110 characters. The version 2 `watch.json` keeps its `waiting`
-and `progress` fingerprints, and adds `projects` (id to state) and `projectPausedReasons`.
+and `progress` fingerprints, and adds `projects` (id to state), `projectPausedReasons` and
+`schedulerOverdue` (the lost-scheduler alert is out, until the job fires again).
 
 `factory-watch` sends one message for each new owner blocker and each material progress transition,
 and an error message when factory-mcp does not answer. `factory-report` sends the week in one message every Monday at

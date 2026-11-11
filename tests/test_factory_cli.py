@@ -1,6 +1,6 @@
 """scripts/factory: `update` deploys a branch only when its tests pass, and follows it to main once
 merged; `add-repo` asks factory-mcp, as Day Desk does; `watch` reports each new owner blocker and
-material progress step once;
+material progress step once, and a driving job that has not fired for two of its intervals once;
 `report` fits the week in one message; `stop` sends the relay its token; `bench` files the
 benchmark's tasks and grades the merged code with their hidden tests."""
 import contextlib
@@ -735,12 +735,18 @@ class WatchTest(unittest.TestCase):
         patcher = mock.patch.object(cli, "STATE", Path(tmp.name))
         patcher.start()
         self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(cli, "HEARTBEAT", Path(tmp.name) / "drive-heartbeat.json")
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
-    def watch(self, *workitems, driving=False, command=None):
+    def watch(self, *workitems, driving=False, command=None, job=None):
         """What one cron run prints, given the WorkItems factory_status returns. Each is (id, state,
-        blockedOn) or a full row. `driving`: the secrets hold FACTORY_AGENT_TOKEN."""
+        blockedOn) or a full row. `driving`: the secrets hold FACTORY_AGENT_TOKEN. `job`: the
+        summary's drivingJob readback, when the store has a heartbeat for it."""
         status = {"workItems": [w if isinstance(w, dict) else {"id": w[0], "state": w[1], "blockedOn": w[2]}
                                 for w in workitems]}
+        if job is not None:
+            status["drivingJob"] = job
         secrets = {"FACTORY_AGENT_TOKEN": "a"} if driving else {}
         printed = io.StringIO()
         with mock.patch.object(cli, "call", lambda tool, arguments=None: status), \
@@ -848,6 +854,54 @@ class WatchTest(unittest.TestCase):
                     self.assertEqual(self.project_run([self.project(state=project_state)],
                                      {"id": "o/r#7", "state": state}, command=cli.cmd_drive_queue), expected)
         self.assertEqual(self.project_run([self.project(acceptanceItem=None)], command=cli.cmd_drive_queue), [])
+
+    def test_drive_queue_records_its_fire_for_factory_status(self):
+        """ADR-0143: factory_status can only say when the scheduler last fired if every fire leaves a
+        heartbeat first, even when the rest of the job dies after it."""
+        from datetime import datetime, timezone
+        self.project_run([], {"id": "o/r#7", "state": "queued"}, command=cli.cmd_drive_queue)
+        beat = json.loads((cli.STATE / "drive-heartbeat.json").read_text())
+        age = (datetime.now(timezone.utc)
+               - datetime.strptime(beat["lastFire"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc))
+        self.assertEqual(beat["everyMinutes"], cli.DRIVE_EVERY_MINUTES)
+        self.assertLess(abs(age.total_seconds()), 30)
+
+    def test_drive_queue_dies_loudly_when_the_heartbeat_cannot_be_written(self):
+        """A fire that cannot be recorded would leave factory_status reporting a stopped scheduler
+        that is running: fail the fire loudly instead of quietly unrecording it."""
+        blocker = cli.STATE / "not-a-dir"
+        blocker.write_text("x")
+        with mock.patch.object(cli, "HEARTBEAT", blocker / "hb.json"), \
+                mock.patch.object(cli, "call", side_effect=AssertionError("the job ran on")) as call, \
+                self.assertRaises(SystemExit) as stopped:
+            cli.cmd_drive_queue([])
+        self.assertIn("could not write the drive heartbeat", str(stopped.exception))
+        self.assertEqual(call.call_args_list, [])
+
+    def test_watch_reports_a_scheduler_overdue_for_two_intervals_once(self):
+        """ADR-0143: losing the scheduler is an event, not a silence. The watch says it once while
+        the drive job has not fired for two of its intervals, stays silent while it stays lost, and
+        re-arms once the job fires again, so a second loss is a new event."""
+        lost = {"lastFire": "2026-11-11T19:20:56Z", "everyMinutes": 5, "overdueMinutes": 24,
+                "alive": False}
+        line = "factory-drive has not fired for 29m (every 5m): the Day Desk scheduler may be stopped."
+        self.assertEqual(self.watch(job=lost), f"{line}\n")
+        self.assertEqual(self.watch(job=lost), "")
+        self.assertTrue(json.loads((cli.STATE / "watch.json").read_text())["schedulerOverdue"])
+        live = dict(lost, lastFire="2026-11-11T19:45:00Z", overdueMinutes=0, alive=True)
+        self.assertEqual(self.watch(job=live), "")
+        self.assertFalse(json.loads((cli.STATE / "watch.json").read_text())["schedulerOverdue"])
+        self.assertEqual(self.watch(job=lost), f"{line}\n")
+
+    def test_watch_alerts_at_two_missed_intervals_not_one(self):
+        """One interval past due may still be a slow tick; a scheduler two intervals behind is lost."""
+        for overdue in (3, 4):
+            with self.subTest(overdue=overdue):
+                self.assertEqual(self.watch(job={"lastFire": "2026-11-11T19:20:56Z", "everyMinutes": 5,
+                                                 "overdueMinutes": overdue, "alive": False}), "")
+        line = "factory-drive has not fired for 10m (every 5m): the Day Desk scheduler may be stopped."
+        self.assertEqual(self.watch(job={"lastFire": "2026-11-11T19:20:56Z", "everyMinutes": 5,
+                                         "overdueMinutes": 5, "alive": False}), f"{line}\n")
 
     def test_watch_is_silent_about_a_member_the_lead_may_answer(self):
         row = {"id": "o/r#7", "state": "implementing", "projectId": "demo"}
@@ -1252,6 +1306,20 @@ class StatusTest(unittest.TestCase):
     def test_a_lessons_file_the_factory_cannot_read_is_named(self):
         lines = self.status(lessonsError="lessons.json is not JSON: Expecting value")
         self.assertEqual(lines[-1], "lessons: lessons.json is not JSON: Expecting value")
+
+    def test_the_driving_job_names_its_last_fire_and_whether_the_scheduler_is_alive(self):
+        """ADR-0143: the scheduler is the factory's only autonomous wake path, so a job that has not
+        fired when it is due is visible where the factory is read, and a live one reads as alive."""
+        lines = self.status(drivingJob={"lastFire": "2026-11-11T19:20:56Z", "everyMinutes": 5,
+                                        "overdueMinutes": 24, "alive": False})
+        self.assertIn("driving job: every 5m, last fired 2026-11-11T19:20:56Z, "
+                      "OVERDUE 24m (is the scheduler running?)", lines)
+        lines = self.status(drivingJob={"lastFire": "2026-11-11T19:45:00Z", "everyMinutes": 5,
+                                        "overdueMinutes": 0, "alive": True})
+        self.assertIn("driving job: every 5m, last fired 2026-11-11T19:45:00Z, alive", lines)
+        lines = self.status()
+        self.assertIn("driving job: no fire recorded yet (is the factory-drive cron created? RUNBOOK)",
+                      lines)
 
     def one(self, escalation):
         """The lines `factory status <id>` prints, given what factory_status returns for one."""
