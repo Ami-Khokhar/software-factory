@@ -3464,10 +3464,13 @@ assertion — and it is one line, so a check can never add a bullet of its own, 
 issue quotes the claim, the check and why, so the owner can veto
 by editing the bullet back; the audit keeps the body before and after. The approval of the entry
 refuses while any check is missing, and the tool refuses once the WorkItem has a WorkOrder: after a
-pass has started, nothing completes a check. The approval reads the issue rather than the list
-intake wrote: the claims it enforces are the ones the body carries now, refreshed onto the entry
-(audit `queue_gap_refreshed`), so an owner who adds the check on GitHub — or rewords a claim — is
-not refused for ever. The tool ships in the owner's set (ADR-0041), the
+pass has started, nothing completes a check. The approval reads the issue rather than the lists
+intake wrote: the claims it enforces and the criteria it dispatches are the ones the body carries
+now, refreshed onto the entry and onto `acceptance` together (audit `queue_gap_refreshed`), so an
+owner who adds the check on GitHub — including an issue whose every bullet lacked a check at
+intake, whose stored `acceptance` is empty — or rewords a claim is not refused for ever, and an
+approval can no longer stand on an empty `acceptance`. An issue whose Acceptance section is gone
+altogether is refused, because nothing then proves the work. The tool ships in the owner's set (ADR-0041), the
 agent set once it has proven itself. Intake outside the queue still refuses, because there is no
 manager there to complete the checks; plans and proposals still demand full checks, because their
 author writes them in the same turn.

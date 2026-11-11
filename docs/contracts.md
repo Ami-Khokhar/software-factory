@@ -200,9 +200,11 @@ and direct the caller to the approved template. Credential mounts over container
   lacking a check, a check that is not one line, an unrunnable check, a WorkItem with a WorkOrder
   (after a pass has started nothing completes a check), or one that is not queued.
   `factory_queue_approve` refuses while the issue still names a claim without a check: it reads the
-  body and re-derives the gap rather than trusting the stored list, writing the refreshed claims back
-  onto the entry (audit `queue_gap_refreshed`), so an owner who completes a check on the issue itself
-  is approved rather than stranded. Intake outside the queue, and plans and proposals, keep
+  body and re-derives the gap and the criteria rather than trusting the stored lists, writing the
+  refreshed claims back onto the entry and the refreshed criteria onto `acceptance` (audit
+  `queue_gap_refreshed`), so an owner who completes a check on the issue itself — including one whose
+  every bullet lacked a check at intake — is approved rather than stranded or approved empty. It
+  refuses an issue whose Acceptance section is gone altogether. Intake outside the queue, and plans and proposals, keep
   demanding full checks.
 - **`WorkItem.pendingRetry` is one durable Day Desk retry intent (ADR-0095).** Null or
   absent means none. `factory_queue_retry` writes it with its request-journal row in one

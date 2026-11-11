@@ -513,6 +513,38 @@ class CompleteAcceptanceTest(unittest.TestCase):
         self.foreman.approve_queued("o/r#8", "day-desk")
         self.assertEqual(self.gap()["state"], "ready")
 
+    def test_an_issue_whose_every_bullet_lacked_a_check_is_approved_with_its_criteria(self):
+        """The refreshed gap re-derives the acceptance too (ADR-0142): intake stored none when no
+        bullet carried a check, so an owner completing every check on GitHub must approve to a
+        WorkItem whose criteria are the issue's own, valid against both contracts."""
+        import json
+        from jsonschema import Draft202012Validator
+        from pathlib import Path
+        from factory_mcp import documents
+        body = "Make it.\n\n## Acceptance\n- C has no check\n"
+        self.github.add_issue(REPO, 10, labels=("factory:ready",), body=body)
+        self.foreman.intake(REPO, 10)
+        self.assertEqual(self.store.get("o/r#10")["acceptance"], [])
+        self.github.issues[(REPO, 10)]["body"] = (
+            "Make it.\n\n## Acceptance\n- C has no check — done when: `make test` passes\n")
+        self.foreman.approve_queued("o/r#10", "day-desk")
+        wi = self.store.get("o/r#10")
+        self.assertEqual(wi["state"], "ready")
+        self.assertIsNone(wi["queue"])
+        self.assertEqual(wi["acceptance"],
+                         [{"claim": "C has no check", "doneWhen": "`make test` passes"}])
+        schemas = Path(__file__).resolve().parent.parent / "schemas"
+        workitem_schema = json.loads((schemas / "workitem.schema.json").read_text())
+        self.assertEqual(list(Draft202012Validator(workitem_schema).iter_errors(wi)), [])
+        order = documents.workorder(wi, "implement", 0, self.config)
+        order_schema = json.loads((schemas / "workorder.schema.json").read_text())
+        self.assertEqual(list(Draft202012Validator(order_schema).iter_errors(order)), [])
+
+    def test_an_issue_whose_acceptance_section_is_gone_is_not_approved(self):
+        self.github.issues[(REPO, 8)]["body"] = GAP_BODY.split("## Acceptance")[0]
+        with self.assertRaisesRegex(ToolError, "no acceptance bullets"):
+            self.foreman.approve_queued("o/r#8", "day-desk")
+
     def test_a_reworded_bullet_renames_the_gap_instead_of_stranding_the_entry(self):
         reworded = "README names the registry path (typo fixed)"
         self.github.issues[(REPO, 8)]["body"] = GAP_BODY.replace(f"- {CLAIM}", f"- {reworded}")

@@ -1158,11 +1158,18 @@ class Foreman:
             # reworded a claim on GitHub since intake, and a stored list nobody re-derives would then
             # name a claim no bullet carries and refuse this approval for ever (ADR-0142).
             body = self._issue(wi["repo"], wi["issueNumber"]).get("body") or ""
-            missing = [workitem.claim_of(bullet) for bullet in workitem.parse_acceptance(body)[1]]
-            if missing != (entry.get("acceptanceMissing") or []):
+            criteria, missing = workitem.parse_acceptance(body)
+            missing = [workitem.claim_of(bullet) for bullet in missing]
+            if not criteria and not missing:
+                raise ToolError(f"the issue behind {workitem_id} carries no acceptance bullets, so "
+                                "nothing proves the work; its Acceptance section is restored first")
+            # The criteria are refreshed with the gap: intake stores `acceptance: []` when no bullet
+            # carried a check, so an owner who completes every check on GitHub would otherwise be
+            # approved to a WorkItem with no criterion to dispatch or review against (ADR-0142).
+            if criteria != wi["acceptance"] or missing != (entry.get("acceptanceMissing") or []):
                 entry = dict(entry, acceptanceMissing=missing or None)
-                wi = self._write(wi, dict(wi, queue=entry), "queue_gap_refreshed",
-                                 acceptanceMissing=missing or None)
+                wi = self._write(wi, dict(wi, acceptance=criteria or wi["acceptance"], queue=entry),
+                                 "queue_gap_refreshed", acceptanceMissing=missing or None)
             if missing:  # the issue's own bullets must each name how a check proves them (ADR-0142)
                 raise ToolError(f"{workitem_id} still has acceptance bullets without a check: "
                                 + "; ".join(missing) + ". factory_complete_acceptance completes "
