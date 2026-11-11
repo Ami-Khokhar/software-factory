@@ -320,7 +320,7 @@ class QueueTest(unittest.TestCase):
         self.foreman.tick(ID)
         order = self.store.workorders(ID)[0]
         problems = [f["problem"] for f in order.get("findingsToAddress") or []]
-        self.assertTrue(any("src/absent.py" in p and "do not exist" in p for p in problems),
+        self.assertTrue(any("src/absent.py" in p and "not in the tree" in p for p in problems),
                         problems)
         self.assertIn("fence_missing", {row["action"] for row in self.store.history(ID)})
 
@@ -331,6 +331,16 @@ class QueueTest(unittest.TestCase):
         self.foreman.approve_queued(ID, "day-desk")
         self.foreman.tick(ID)
         self.assertNotIn("fence_missing", {row["action"] for row in self.store.history(ID)})
+
+    def test_the_fence_tree_is_read_once_per_commit(self):
+        """A commit's tree never changes, so the check must not cost a GitHub call on every pass: the
+        cache is the reason a fix pass after an implement pass stays free (#544)."""
+        self.github.contents[(REPO, "src/app.py")] = "x = 1\n"
+        before = len(self.github.tree_reads)
+        self.foreman._fence_missing(self.store.get(ID), ["src/*.py"], "base0")
+        self.foreman._fence_missing(self.store.get(ID), ["src/app.py"], "base0")
+        self.assertEqual(len(self.github.tree_reads) - before, 1)
+        self.assertEqual(self.foreman._fence_missing(self.store.get(ID), ["src/*.py"], "base0"), [])
 
     def test_the_two_queue_tools_are_the_agent_writes(self):
         built = tools.build(self.store, self.foreman, agent=True)

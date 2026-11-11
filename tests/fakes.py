@@ -37,6 +37,7 @@ class FakeGitHub:
         self.compares = []  # (repo, base, head) of every commit comparison the Foreman read
         self.branches, self.files = {}, {}  # (repo, branch) -> sha; (repo, sha) -> changed files
         self.tags = {}  # (repo, tag) -> sha, which only `ref_revision` resolves
+        self.tree_reads = []  # (repo, ref) per tree() call: the fence cache reads this
         self.repos = {}  # repo -> fields that differ from a pushable repo; None: GitHub has no such repo
         self.contents = {}  # (repo, path) -> file text on the default branch
         self.label_names = {}  # repo -> names of the labels the Foreman created
@@ -204,6 +205,7 @@ class FakeGitHub:
 
     def tree(self, repo, ref):
         """Every path the fake has for the repo: the contents keys name one file each."""
+        self.tree_reads.append((repo, ref))
         paths = set()
         for key in self.contents:
             if key[0] != repo:

@@ -3340,3 +3340,27 @@ and a re-leave re-stamps the mark, so the wake is bounded by real activity rathe
 dependence on `updated_at`: an owner action that does not touch the issue, such as a chat instruction,
 is not seen. That is accepted, because a chat instruction is a decision the agent records itself.
 
+## ADR-0138 — A fence that names paths the pass will not see is a hint, not a refusal
+
+**Context.** `agent-relay#287` was dispatched with a `Paths:` fence of four files that do not exist at
+its base commit: the artifact feature they belong to lives only on an unmerged branch. The pass was
+spent and ended in a question to a person. The issue that came out of it asked for a refusal before
+the pass.
+
+A refusal is wrong for the ordinary case. A fence legitimately names a module the pass is meant to
+create, and `workitem.paths_listed` reads `Paths:` lines at intake so that new files appear there.
+Refusing every fence that matches nothing at the start commit would block adding a file.
+
+**Decision.** The dispatch reads the tree of the commit the pass starts from — the continuation of a
+rescue pass, the PR head of a fix pass, else the base — and when a fence glob matches nothing in it,
+the WorkOrder carries a finding that names the missing globs and says the two things that can be true:
+the pass creates them, or the issue is scoped against another branch. A `fence_missing` audit row keeps
+the fact for the person. Nothing is refused, and no pass is blocked. The tree is read once per repo and
+commit per process: a commit's tree never changes, and a fence check must not cost a call per pass.
+
+**Consequence.** A mis-scoped issue now costs a worker a few lines of reading instead of a question, and
+a correct fence costs nothing. The factory still cannot tell "this pass creates the file" from "this
+fence came from another branch", so a person reading the audit is still the check for the second case.
+Reading the default branch instead of the pass's own commit would have reported a file the feature
+created as missing on every later pass, so the commit is the one the worker will actually check out.
+
