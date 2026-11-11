@@ -1283,9 +1283,12 @@ class Foreman:
         # A fence that matches nothing the worker will see is worth saying before the pass, not after: an
         # issue built from another branch sends its worker looking for files that are not there, and the
         # worker answers with a question instead of a change (#544). The tree read is the pass's own start
-        # commit — a rescue pass starts at the continuation, a fix pass at the PR head — because reading
-        # the default branch would call a file this feature created "missing" on every later pass.
-        start = (continuation.get("sha") if continuation else None) or wi.get("headSha") or base
+        # commit — a rescue pass starts at the continuation, a fix pass at the PR head, every other kind
+        # at the base — because reading the default branch would call a file this feature created
+        # "missing" on every later pass, and a conflict redo starts at the current base even though the
+        # WorkItem still carries the abandoned PR's headSha.
+        start = ((continuation.get("sha") if continuation else None)
+                 or (wi.get("headSha") if kind == "fix" else None) or base)
         fence = wi.get("paths") or []  # set at intake from the issue's Paths: lines (ADR-0087)
         missing = self._fence_missing(wi, fence, start) if fence else []
         if missing:

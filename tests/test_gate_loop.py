@@ -359,6 +359,17 @@ class GateLoopTest(unittest.TestCase):
         self.assertEqual(self.git.pushes[-1], {"branch": "factory/7", "base": "m2", "force": True})
         self.assertEqual((self.tick()["state"], len(self.foreman.store.workorders(ID))), ("reviewing", 2))
 
+    def test_a_conflict_redo_checks_the_fence_against_the_current_main(self):
+        """A conflict redo is an implement pass that starts on the current main, so its fence is read
+        there (#544). The WorkItem still carries the old PR's headSha; reading that would call a path
+        main gained missing, and stay silent about one only the abandoned branch added."""
+        self.github.contents[(REPO, "docs/main-only.md", "m2")] = "# now on main\n"
+        self.foreman.store.put(dict(self.foreman.store.get(ID), paths=["docs/main-only.md"]))
+        self.conflict()
+        self.tick()
+        self.assertEqual(self.github.tree_reads, [(REPO, "m2")])
+        self.assertNotIn("fence_missing", {row["action"] for row in self.foreman.store.history(ID)})
+
     def test_a_conflicting_pr_with_gate_findings_is_made_again_with_them(self):
         self.gate("CHANGES", 1, "c1", MISSING_TEST)
         self.conflict()
