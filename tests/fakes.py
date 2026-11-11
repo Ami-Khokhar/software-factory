@@ -39,7 +39,7 @@ class FakeGitHub:
         self.tags = {}  # (repo, tag) -> sha, which only `ref_revision` resolves
         self.repos = {}  # repo -> fields that differ from a pushable repo; None: GitHub has no such repo
         self.contents = {}  # (repo, path) -> file text on the default branch
-        self.labels = {}  # repo -> names of the labels the Foreman created
+        self.label_names = {}  # repo -> names of the labels the Foreman created
         self.labelled = []  # (repo, number, labels) of every label the Foreman added to an issue
         self.logs, self.deleted = {}, []  # run id -> failed job log; (repo, branch) of each branch deleted
         self.commits = {}  # (repo, sha) -> GitHub's commit; any other commit is a person's push
@@ -202,8 +202,13 @@ class FakeGitHub:
         self.issues[(repo, number)]["body"] = body
         return self.issues[(repo, number)]
 
+    def labels(self, repo):
+        return set(self.label_names.get(repo, ()))
+
     def create_label(self, repo, name, color, description):
-        self.labels.setdefault(repo, set()).add(name)
+        if self.repos.get(repo, {}) is None:  # a label write to a repo GitHub does not have
+            raise GitHubError(404, f"Not Found: {repo}")
+        self.label_names.setdefault(repo, set()).add(name)
 
     def add_labels(self, repo, number, labels):
         self.labelled.append((repo, number, list(labels)))

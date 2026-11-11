@@ -265,13 +265,24 @@ class Foreman:
 
     def add_repo(self, repo, by):
         """Enable a repo that passes the checks: its worker checkout, the factory labels, and an
-        entry in repos.json (ADR-0014). A failing check refuses it, changing nothing. Idempotent."""
+        entry in repos.json (ADR-0014). A failing check refuses it, after healing its missing labels.
+        Idempotent."""
         if not repos.NAME.match(repo):
             raise ToolError(f"{repo!r} is not a repo name in the form owner/repo")
         if not self.config.repos_file:
             raise ToolError("FACTORY_REPOS_FILE is not set, so there is no repos.json to add the repo to")
         if not self.config.checkout_root:
             raise ToolError("FACTORY_CHECKOUT_ROOT is not set, so there is no place for the worker checkout")
+        # Before the check, so re-adding an enabled repo heals its labels. Only a repo the token can
+        # write to is healed: a missing, archived or read-only repo has its own refusal in the check,
+        # and a label write would raise over it.
+        try:
+            writable = bool((self.github.repository(repo).get("permissions") or {}).get("push"))
+        except GitHubError:
+            writable = False  # the check below says GitHub shows no such repo, and what to do
+        if writable:
+            for name, color, text in repos.LABELS:
+                self.github.create_label(repo, name, color, text)
         failed = [c for c in repos.check(self.github, repo) if not c["ok"]]
         if failed:
             raise RepoNotReady(f"{repo} is not ready: " + " ".join(f"{c['detail']}. {c['fix']}" for c in failed))
@@ -284,8 +295,6 @@ class Foreman:
                 patches.clone(self.config.git_url.format(repo=repo), self.config.github_token, checkout)
             except patches.PatchError as exc:
                 raise ToolError(f"the worker checkout for {repo} was not cloned: {exc}") from None
-        for name, color, text in repos.LABELS:
-            self.github.create_label(repo, name, color, text)
         added = not listed and repos.add(self.config.repos_file, repo, by, now())  # who and when
         if not listed:  # works at once, in the spelling repos.json holds (a person may have added it)
             repo = next(e["name"] for e in repos.load(self.config.repos_file) if e["name"].lower() == repo.lower())

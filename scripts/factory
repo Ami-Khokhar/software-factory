@@ -428,7 +428,11 @@ def cmd_add_repo(args):
     for check in checked["checks"]:
         print(f"{'ok  ' if check['ok'] else 'FAIL'} {check['id']}: {check['detail']}"
               + ("" if check["ok"] else f"\n     fix: {check['fix']}"))
-    if not checked["ready"]:
+    # The labels check is the one gap this command fixes, so it is the one gap that does not stop it:
+    # `factory_add_repo` creates the labels and then runs the same checks again. Checking, refusing and
+    # telling the owner to call the tool that heals was a circle (ADR-0136).
+    blocking = [c for c in checked["checks"] if not c["ok"] and c["id"] != "labels"]
+    if blocking:
         die(f"{repo} is not ready; fix the checks above and run this again")
     added = call("factory_add_repo", {"repo": repo, "by": SETTINGS.get("FACTORY_OWNER") or os.environ.get("USER", "")},
                  timeout=960)  # the worker checkout is cloned first

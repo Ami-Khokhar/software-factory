@@ -241,6 +241,10 @@ class GitHub:
         """Replace an issue's body."""
         return self._request("PATCH", f"{self.api}/repos/{repo}/issues/{number}", {"body": body})[0]
 
+    def labels(self, repo):
+        """The names of the labels on `repo`. A repo with none is an empty set, not an error."""
+        return {label["name"] for label in self._get_all(f"/repos/{repo}/labels")}
+
     def create_label(self, repo, name, color, description):
         """Create a label. One that exists already is left as it is."""
         try:
