@@ -450,6 +450,13 @@ member at the cap may not be retried, closed or regated by Day Desk without the 
 Done Projects use the plain non-member computation.
 Rows for paused, stopped, missing and done Projects omit `leadBlockedBy`.
 
+The no-id summary also carries `drivingJob` (ADR-0143): the driving cron job's `lastFire`, the
+`everyMinutes` interval it is due every, its `overdueMinutes` past that interval, and `alive`,
+False once the job has not fired when it was due. The heartbeat `factory drive-queue` writes each
+fire is the source, in the factory state dir beside the store's database; with no readable
+heartbeat `lastFire` and `alive` are null and nothing is claimed, because the job may not be set
+up at all.
+
 ## Runtime status and tool discovery
 
 `factory_runtime_status` is a read-only MCP operation, not a fifth worker

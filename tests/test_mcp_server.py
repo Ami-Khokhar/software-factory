@@ -1,8 +1,10 @@
 """Speak Streamable HTTP to a real factory-mcp server on an ephemeral port."""
 import json
+import tempfile
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 import unittest
 import urllib.error
 import urllib.request
@@ -289,6 +291,36 @@ class McpServerTest(unittest.TestCase):
         self.assertEqual(self.store.history("o/r#1")[0]["action"], "tool:factory_status")
         missing = self.rpc("tools/call", {"name": "factory_status", "arguments": {"id": "o/r#9"}})["result"]
         self.assertTrue(missing["isError"])
+
+    def test_a_summary_reports_the_driving_job_stale_and_live(self):
+        """ADR-0143: the scheduler is the factory's only autonomous wake path, so factory_status
+        says when its job last fired and whether it is alive: a live one within its interval, a
+        stale one overdue, and with no heartbeat recorded nothing is claimed."""
+        def beat(seconds_ago):
+            stamp = (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ")
+            (Path(tmp.name) / "drive-heartbeat.json").write_text(
+                json.dumps({"lastFire": stamp, "everyMinutes": 5}))
+            return stamp
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.server.foreman.config = replace(self.server.foreman.config,
+                                             db_path=str(Path(tmp.name) / "factory.sqlite3"))
+        def summary():
+            result = self.rpc("tools/call", {"name": "factory_status", "arguments": {}})["result"]
+            self.assertFalse(result["isError"])
+            return json.loads(result["content"][0]["text"])["drivingJob"]
+        self.assertEqual(summary(), {"lastFire": None, "everyMinutes": 5,
+                                     "overdueMinutes": None, "alive": None})
+        stamp = beat(60)
+        job = summary()
+        self.assertEqual(job["lastFire"], stamp)
+        self.assertTrue(job["alive"])
+        self.assertEqual((job["everyMinutes"], job["overdueMinutes"]), (5, 0))
+        beat(29 * 60)
+        job = summary()
+        self.assertFalse(job["alive"])
+        self.assertEqual(job["overdueMinutes"], 24)
 
     def test_a_summary_names_why_an_exhausted_workitem_stopped(self):
         self.store.put(dict(workitem(), state="exhausted", terminalReason="4 worker passes used"))

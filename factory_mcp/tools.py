@@ -1,5 +1,7 @@
 """The factory tools that Day Desk (Hermes) and the factory CLI call. Each one declares its effect."""
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 from . import docker, improvements, knowledge, lessons, memory, metrics, outcomes, projects, repos, runtime, worker_ops
 from .store import now
@@ -23,6 +25,26 @@ AGENT_TOOLS = frozenset({"factory_runtime_status", "factory_status", "factory_re
                          "factory_set_worker", "factory_register_worker", "factory_set_timeout",
                          "factory_project_status"})
 WAITING = ("human_waiting", "blocked")
+
+
+DRIVE_HEARTBEAT = "drive-heartbeat.json"  # in the state dir, beside the store's database (ADR-0143)
+
+
+def driving_job(config):
+    """The driving cron job's last fire, from the heartbeat `factory drive-queue` writes each time
+    its scheduler fires it (ADR-0143). The scheduler and factory-mcp share this machine, so a stale
+    heartbeat names a dead scheduler, not a slow network. `alive` is False once the job is overdue:
+    it has not fired when it was due. With no readable heartbeat nothing is known — the job may not
+    be set up at all — so the fields say so rather than guess, and the watch stays silent on them."""
+    try:
+        beat = json.loads((Path(config.db_path).parent / DRIVE_HEARTBEAT).read_text())
+        every = max(1, int(beat["everyMinutes"]))
+        fired = datetime.strptime(beat["lastFire"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except (OSError, ValueError, KeyError, TypeError):  # absent, hand-edited or unreadable: not known
+        return {"lastFire": None, "everyMinutes": 5, "overdueMinutes": None, "alive": None}
+    elapsed = int((datetime.now(timezone.utc) - fired).total_seconds())
+    return {"lastFire": beat["lastFire"], "everyMinutes": every,
+            "overdueMinutes": max(0, elapsed // 60 - every), "alive": elapsed < every * 60}
 
 
 def last_allowance_use(history):
@@ -119,7 +141,8 @@ def build(store, foreman, agent=False):
             summary = {"workItems": [summary_of(wi) for wi in workitems],
                        "autonomy": metrics.autonomy(workitems, store.history),
                        "repos": sorted(foreman.config.repos),
-                       "planAllowances": store.allowances()  # identity, scope and remaining, no secrets
+                       "planAllowances": store.allowances(),  # identity, scope and remaining, no secrets
+                       "drivingJob": driving_job(foreman.config)
                        }
             if foreman.config.lessons_file:
                 try:
@@ -227,7 +250,8 @@ def build(store, foreman, agent=False):
                   foreman, runtime_schemas, args.get("id"))),
         Tool("factory_status",
              "Show one WorkItem with its history, or, when no id is given, a summary of all "
-             "WorkItems, their current PR/head/gate round/worker, and the repos the factory works on.",
+             "WorkItems, their current PR/head/gate round/worker, the repos the factory works on, "
+             "and the driving job's last fire with whether its scheduler is alive.",
              {"type": "object", "properties": {"id": {"type": "string", "description": "owner/repo#issue"}},
               "additionalProperties": False},
              "read", status),

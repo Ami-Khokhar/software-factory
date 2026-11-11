@@ -262,6 +262,16 @@ class ProfileTest(unittest.TestCase):
                        "A green scheduler is not success", "blocker"):
             self.assertIn(phrase, runbook)
 
+    def test_the_runbook_names_the_login_start_step_and_its_failure_today(self):
+        """ADR-0143: `gateway install` is the step that starts the gateway at login, and on this
+        macOS it fails with launchctl exit 5, leaving a background process that survives no reboot
+        — so the runbook documents the step with the exit code it fails with and the reboot repair."""
+        runbook = (PROFILE.parent.parent / "docs" / "RUNBOOK.md").read_text()
+        for phrase in ("hermes -p day-desk gateway install", "launchctl", "exit 5",
+                       "auto-start at login", "restart on a crash", "After a reboot"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, runbook)
+
 
 if __name__ == "__main__":
     unittest.main()
