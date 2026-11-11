@@ -310,11 +310,14 @@ class McpServerTest(unittest.TestCase):
                             queue={"at": stamp(3600), "claimedBy": "day-desk",
                                    "claimedAt": stamp(3600)}))
         self.store.put(dict(workitem(id="o/r#3"), state="queued"))
+        self.store.put(dict(workitem(id="o/r#4"), state="queued",
+                            queue={"at": stamp(10), "claimedBy": "day-desk"}))  # no stamp: never strands it
         result = self.rpc("tools/call", {"name": "factory_status", "arguments": {}})["result"]
         rows = {row["id"]: row for row in json.loads(result["content"][0]["text"])["workItems"]}
         self.assertEqual(rows["o/r#1"]["queue"], {"by": "day-desk", "expired": False})
         self.assertEqual(rows["o/r#2"]["queue"], {"by": "day-desk", "expired": True})
         self.assertIsNone(rows["o/r#3"]["queue"])
+        self.assertEqual(rows["o/r#4"]["queue"], {"by": "day-desk", "expired": True})
 
     def test_protocol_errors(self):
         self.assertEqual(self.rpc("nope")["error"]["code"], -32601)

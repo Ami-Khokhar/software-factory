@@ -322,8 +322,10 @@ def build(store, foreman, agent=False):
         Tool("factory_queue_approve",
              "Approve a claimed queue entry so the factory works on it: it leaves the queue for ready, "
              "and the next tick dispatches it through every existing guard. Refused for any WorkItem "
-             "that is not queued. Use it when the issue is worth a worker pass as it stands; to change "
-             "the issue first, edit it on GitHub and leave the entry queued.",
+             "that is not queued. Approve it when the issue is worth a worker pass as it stands, or "
+             "after you edit the description, paths or notes the worker needs: never the acceptance "
+             "bullets, which are the owner's. Leave the entry queued only when the case stays with the "
+             "owner.",
              {"type": "object", "required": ["id", "by"], "additionalProperties": False,
               "properties": {"id": {"type": "string"},
                              "by": {"type": "string", "minLength": 1},

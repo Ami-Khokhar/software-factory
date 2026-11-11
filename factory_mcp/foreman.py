@@ -969,8 +969,8 @@ class Foreman:
         """The claim on a queued entry as a reader sees it: who holds it, and whether that claim has
         lapsed. The drive text changes exactly when a claim lapses, so an agent that claimed and died
         is woken again to reclaim it (ADR-0135)."""
-        claim = wi.get("queue") or {}
-        if not claim.get("claimedBy"):
+        claim = wi.get("queue")
+        if not isinstance(claim, dict) or not claim.get("claimedBy"):
             return None
         return {"by": claim["claimedBy"], "expired": self._claim_expired(claim.get("claimedAt"))}
 
