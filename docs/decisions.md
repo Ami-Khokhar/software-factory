@@ -3418,3 +3418,29 @@ stored report's status, so a `provider_auth` failure still names the provider ra
 flattened into `unavailable`. The launch input is a marker `worker/runner.py` answers before it
 looks for a WorkOrder, so a deployment whose runner predates this ADR quarantines itself instead
 of passing.
+
+## ADR-0141 — A repo's factory pull requests target its prBase, when it sets one
+
+**Context.** The Foreman used GitHub's default branch for everything a per-repo decision should
+govern: the head each WorkItem branch starts from, the base the whole pull request's size is
+measured against, and the base the pull request is opened with. Some repos keep an integration
+branch that factory work should land on — amteshwarkhokhar/Digital-Presence keeps `factory-main`
+because its `main` holds different content, and Digital-Presence #103 was blocked because its
+WorkItem started on `main` while the files it changes exist only on another branch.
+
+**Decision.** `FACTORY_PR_BASES` lists `owner/repo=branch` pairs. For a listed repo the Foreman's
+base branch is that `prBase`: dispatch reads its head as the WorkOrder's `baseSha` (so the pass
+builds on it), `WorkOrder.baseBranch` names it so the runner measures the whole pull request
+against that branch and leaves `source/HEAD` pointing at it, `check_pushed` compares changed files
+against it, and `open_pr` opens the pull request with it as base. A repo not listed behaves exactly
+as before. A prBase branch the remote does not hold blocks the WorkItem for a person at dispatch
+with a message naming the branch — the factory never creates it and never falls back to the default
+branch silently. WorkOrders before this field have no `baseBranch`, which reads as the default
+branch, so no store migration is needed.
+
+**Consequence.** The owner sets `FACTORY_PR_BASES=amteshwarkhokhar/Digital-Presence=factory-main`
+and restarts factory-mcp; from then on no factory pull request of that repo can open against
+`main`. A missing prBase stops the line for that WorkItem instead of guessing, so a typo in the
+setting surfaces as an escalation, not a PR against the wrong base. GitHub's own default branch
+stays what bootstrap, the setup PR and the weekly gauges use; this decision changes only where
+factory work starts and lands.

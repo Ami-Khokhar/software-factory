@@ -300,8 +300,10 @@ def prepare(cwd, order, branch, work):
     if not base:
         raise WorkerError("the WorkOrder names no commit to build on")
     git(cwd, "cat-file", "-e", f"{base}^{{commit}}")
-    # The default branch's head, where the whole pull request's size is read from (ADR-0040).
-    default = git(cwd, "rev-parse", "origin/HEAD")
+    # The default branch's head, where the whole pull request's size is read from (ADR-0040). A repo
+    # with a prBase targets another branch (ADR-0141), so the WorkOrder names it in baseBranch.
+    default = git(cwd, "rev-parse", f"refs/remotes/origin/{order['baseBranch']}"
+                  if order.get("baseBranch") else "origin/HEAD")
     git(cwd, "cat-file", "-e", f"{default}^{{commit}}")
     if order.get("continuationSha"):
         checkpoint = order["workItemId"].rsplit("#", 1)[-1]
@@ -323,6 +325,8 @@ def prepare(cwd, order, branch, work):
     git(os.path.dirname(work), "clone", "-q", "--no-hardlinks", "--no-checkout", cwd, work)
     git(work, "fetch", "-q", cwd, "+refs/remotes/origin/*:refs/remotes/source/*")
     git(work, "remote", "remove", "origin")
+    if order.get("baseBranch"):  # the worker's own size rule reads source/HEAD; it is the prBase (ADR-0141)
+        git(work, "symbolic-ref", "refs/remotes/source/HEAD", f"refs/remotes/source/{order['baseBranch']}")
     git(work, "checkout", "-q", "-f", "-B", branch, base)
     return base, default
 

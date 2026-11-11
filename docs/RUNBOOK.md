@@ -608,6 +608,22 @@ To take a repo away from the factory, remove it from `FACTORY_REPOS` or delete i
 WorkItems stay as they are: no worker starts and no PR opens for them, and they carry on if the
 repo comes back. A worker already running finishes; its Result is read when the repo comes back.
 
+### Per-repo PR base: prBase (ADR-0141)
+
+By default a repo's factory pull requests target its GitHub default branch, and each WorkItem
+starts from that branch's head. A repo can instead name a `prBase` branch — an integration branch
+the factory lands on, never the real `main`:
+
+1. Make sure the branch exists on the remote. The factory never creates it and never falls back to
+   another branch: a WorkItem of a repo whose prBase branch is missing waits for a person with a
+   message naming the branch.
+2. Add the repo to `FACTORY_PR_BASES` as `owner/repo=branch` pairs, comma-separated, in factory-mcp's
+   environment, then restart factory-mcp. For Digital-Presence:
+   `FACTORY_PR_BASES=amteshwarkhokhar/Digital-Presence=factory-main`.
+3. Check: a dispatched WorkOrder of that repo carries `baseBranch`, its PR opens against the branch,
+   and the whole pull request's size is measured against it. A repo not in the list keeps the
+   default branch, unchanged.
+
 ### Remote verify: a repo whose verify needs macOS
 
 The worker runs in a Linux container, so a verify such as ideadump's

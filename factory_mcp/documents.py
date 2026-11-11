@@ -24,11 +24,12 @@ ASK_CHANNEL = "\nASK-CHANNEL (the runner reads this block and does not pass it t
 
 
 def workorder(wi, kind, attempt, config, base_sha=None, findings=(), lessons=(), continuation_sha=None,
-              *, project=None):
+              *, project=None, base_branch=None):
     key = f"{wi['id']}:r{wi.get('gateRound', 0)}:{kind}:a{attempt}"
     remote = {"remoteVerify": True} if config.remote_verify(wi["repo"]) else {}  # ADR-0045
     order = {**remote, "schemaVersion": "factory.workorder/v1", "id": key, "workItemId": wi["id"],
             "round": wi.get("gateRound", 0), "kind": kind, "repo": wi["repo"], "baseSha": base_sha,
+            **({"baseBranch": base_branch} if base_branch else {}),  # the repo's prBase (ADR-0141)
             "headSha": wi.get("headSha") if kind == "fix" else None,
             "continuationSha": continuation_sha, "goal": wi["goal"],
             "description": wi.get("description") or "", "acceptance": wi["acceptance"],
@@ -84,6 +85,10 @@ def worker_input(order, branch):
         "already on the branch. Your copy has no origin remote; the default branch is "
         "source/HEAD, which the runner leaves there, so check the size before you finish with: "
         "git diff --shortstat $(git merge-base source/HEAD HEAD) HEAD",
+        *(["- This repo's factory pull requests target the "
+           f"{order['baseBranch']} branch (its prBase setting), not GitHub's default branch; "
+           "source/HEAD is that branch, so the size command above measures against it."]
+          if order.get("baseBranch") else []),
         "- Follow the factory-standard block in the repository's AGENTS.md, within these rules: it says "
         "how to build, test and document a change there.",
         *(["- This issue is one part of the Project in WorkOrder.project. project.blueprint is the Lead's design for the whole Project.",

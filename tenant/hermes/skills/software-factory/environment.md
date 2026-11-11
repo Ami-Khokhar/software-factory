@@ -73,6 +73,15 @@ on the owner's Mac. You can tell by `remoteVerify` on the WorkItem while it wait
   factory-mcp. You cannot do any of these. At enable time, a verify that names xcodebuild, a
   simulator or another macOS tool is fine only if the repo is in that list; otherwise warn as below.
 
+## Per-repo PR base: prBase (ADR-0141)
+
+A repo can set a `prBase` branch in factory-mcp's `FACTORY_PR_BASES`: its factory pull requests
+target that branch, and each WorkItem starts from its head — for example
+`FACTORY_PR_BASES=amteshwarkhokhar/Digital-Presence=factory-main`. Repos without the setting use
+the default branch, unchanged. A WorkItem in `human_waiting` whose reason says the repo has no
+such branch is a setup gap, not a code fault: tell the owner to create the branch on the remote or
+fix the setting (docs/RUNBOOK.md), then retry. No pass was used.
+
 ## Day Desk's own sandbox
 
 - The `terminal` tool runs in a Docker container from `tenant/hermes/sandbox/Dockerfile`:
