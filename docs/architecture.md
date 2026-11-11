@@ -90,7 +90,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 |---|---|
 | `factory_mcp/__init__.py`, `__main__.py` | The package; `python3 -m factory_mcp` starts the server |
 | `factory_mcp/server.py` | Streamable HTTP on loopback: `POST /mcp` with the bearer token, `POST /worker/ask` and `POST /worker/memory` with a pass's own token (ADR-0098, ADR-0117), the background tick loop |
-| `factory_mcp/mcp.py` | The MCP protocol: one JSON-RPC message in, one response out, no I/O |
+| `factory_mcp/mcp.py` | The MCP protocol: one JSON-RPC message in, one response out, no I/O; a `tools/call` is checked against the tool's own schema first, so a missing, unknown or mistyped argument is refused naming it |
 | `factory_mcp/tools.py` | The tools, and whether each one reads or writes |
 | `factory_mcp/foreman.py` | The Foreman: intake, rebuild, the orchestrator queue (claim, approve), tick, dispatch, poll a task, open a PR, and the person's acts (resolve, approve an issue, start a plan, add a repo, bootstrap a repo, approve or retire a lesson) |
 | `factory_mcp/workitem.py` | Intake from an issue, observing GitHub, and `reconcile`: the fact-driven half of the state machine |

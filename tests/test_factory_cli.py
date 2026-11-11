@@ -22,6 +22,9 @@ from pathlib import Path
 from unittest import mock
 
 import factory_mcp.tools  # the factory tools, to compare what the deployed script ships with
+from factory_mcp.config import Config
+from factory_mcp.server import make_server
+from factory_mcp.store import Store
 
 LOADER = importlib.machinery.SourceFileLoader(
     "factory_cli", str(Path(__file__).resolve().parent.parent / "scripts" / "factory"))
@@ -1457,6 +1460,44 @@ class BenchTest(unittest.TestCase):
             self.bench("o/r")
         self.assertIn("a run named r0101120000 exists", str(stopped.exception))
         self.assertEqual(self.created, [])
+
+
+class CallTest(unittest.TestCase):
+    """`factory call` shows a refused argument as the message, with a nonzero exit and no
+    traceback: the server names the tool and the argument, and the CLI only renders it."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        (Path(tmp.name) / "secrets").write_text("FACTORY_MCP_TOKEN=test-token\n")
+        self.store = Store(":memory:")
+        config = Config(mcp_token="test-token", repos=frozenset({"o/r"}), port=0)
+        self.server = make_server(config, self.store)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.shutdown)
+        self.addCleanup(self.server.server_close)
+        for name, value in (("CONFIG", Path(tmp.name)), ("PORT", self.server.server_port)):
+            patcher = mock.patch.object(cli, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def refused(self, arguments):
+        """SystemExit.code is the message the process would print to stderr with status 1."""
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            with self.assertRaises(SystemExit) as exit:
+                cli.main(["call", "factory_answer_question", json.dumps(arguments)])
+        return exit.exception.code, printed.getvalue()
+
+    def test_a_bad_argument_prints_the_message_and_exits_nonzero_without_a_traceback(self):
+        code, printed = self.refused({"id": "o/r#1", "question": "what?",
+                                      "answer": "do this", "by": "day-desk"})
+        self.assertEqual(printed, "")
+        self.assertIsInstance(code, str)
+        self.assertIn("questionId", code)
+        self.assertIn("factory_answer_question", code)
+        self.assertNotIn("KeyError", code)
+        self.assertNotIn("Traceback", code)
 
 
 if __name__ == "__main__":

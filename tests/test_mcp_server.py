@@ -333,6 +333,24 @@ class McpServerTest(unittest.TestCase):
         self.assertEqual(self.rpc("nope")["error"]["code"], -32601)
         self.assertEqual(self.rpc("tools/call", {"name": "factory_merge"})["error"]["code"], -32602)
 
+    def test_a_call_the_schema_refuses_names_the_tool_and_the_argument(self):
+        """A missing, unknown or mistyped argument comes back as the tool's refusal with the
+        argument's name and its declared shape, never a bare KeyError."""
+        result = self.rpc("tools/call", {"name": "factory_answer_question", "arguments": {
+            "id": "o/r#1", "question": "what?", "answer": "do this", "by": "day-desk"}})["result"]
+        self.assertTrue(result["isError"])
+        missing = json.loads(result["content"][0]["text"])["error"]
+        self.assertIn("factory_answer_question", missing)
+        self.assertIn("questionId", missing)
+        unknown = json.loads(self.rpc("tools/call", {"name": "factory_check_worker", "arguments": {
+            "worker": "codex", "by": "amteshwar", "woker": "codex"}})["result"]["content"][0]["text"])["error"]
+        self.assertIn("woker", unknown)
+        self.assertIn("factory_check_worker", unknown)
+        wrong_type = json.loads(self.rpc("tools/call", {"name": "factory_queue_next", "arguments": {
+            "by": "day-desk", "waitSeconds": "5"}})["result"]["content"][0]["text"])["error"]
+        self.assertIn("waitSeconds", wrong_type)
+        self.assertIn("integer", wrong_type)
+
     def test_http_guards(self):
         body = {"jsonrpc": "2.0", "id": 1, "method": "ping"}
         self.assertEqual(self.post(body, {"Authorization": "Bearer wrong"})[0], 401)
