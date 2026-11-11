@@ -49,6 +49,7 @@ out. Drain the queue before you recover a member, and go on until it is empty.
 
 1. Call `factory_queue_next` with `by: "day-desk"`.
    It claims one item, a `factory:urgent` one first, and returns none when the queue is empty.
+   Stop when the only line left is one you left for the owner: the drain ends there.
 2. Read that one item with `factory_status` and its id before you decide.
 3. Ordinary work: approve it with `factory_queue_approve`, with the `id` the claim returned and
    `by: "day-desk"`.
@@ -56,9 +57,10 @@ out. Drain the queue before you recover a member, and go on until it is empty.
    accepted issue.
 4. Not ordinary work, as "What goes to the owner" lists it: leave it queued, do not approve it, and
    tell the owner in one line why.
-   An item you left queued for the owner is settled until the owner acts: when its line says the
-   claim lapsed, leave it alone and do not claim it again, or you and the owner trade the same line
-   every fifteen minutes.
+   An item you left queued for the owner is settled until the owner acts, and you have already told
+   the owner why: do not report it again either.
+   When its line says the claim lapsed, leave it alone and do not claim it again, or you and the
+   owner trade the same line every fifteen minutes.
    You do not edit issues: no tool re-writes them, and the shell is no way in.
 5. Never approve an issue you have not read, and never spend a worker pass to find out what it says.
 
