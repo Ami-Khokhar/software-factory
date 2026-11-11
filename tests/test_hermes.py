@@ -142,10 +142,11 @@ class ProfileTest(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, recovery)
         # the drive rules the deleted table test guarded, which still live in the drive section
+        drive = self.drive_section()
         for phrase in ("answer again even when the escalation is unchanged", "(non-members)",
                        "safety stop, an environment fault"):
             with self.subTest(phrase=phrase):
-                self.assertIn(phrase, text)
+                self.assertIn(phrase, drive)
 
     def test_the_blueprint_template_names_the_design_and_runtime_checks(self):
         text = (PROFILE / "skills" / "software-factory" / "blueprint-template.md").read_text()

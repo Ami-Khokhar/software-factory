@@ -57,7 +57,9 @@ What a state means:
 - `exhausted`: the passes are spent. A split, or the owner's budget, is the only way on.
 - `pr_open`, `merge_pending`: the work is done and the gate decides the merge.
 
-What deciding costs: a retry is one of `attempts.left`, and so is each replacement you approve.
+What deciding costs: a retry is one of `attempts.left`, and so is each replacement you approve. A
+Project member spends the Project's budget as well, so `attempts.projectState` and `projectLeft` decide
+whether there is any work to give it: a paused Project dispatches nothing, and that is a hold.
 
 A gate that asked for changes with no finding a worker can fix, or that went silent, is retried once
 with `factory_resolve_human`; the second silence goes to the owner. The packet carries the gate's round

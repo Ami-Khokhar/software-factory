@@ -200,6 +200,18 @@ class QueueTest(unittest.TestCase):
         self.assertIn("issueError", view)
         self.assertEqual((view["acceptance"], view["paths"]), ([], []))
 
+    def test_a_member_claim_carries_the_project_budget_it_also_spends(self):
+        """A member's pass spends the Project's budget, and a paused Project dispatches nothing. Without
+        those facts the manager approves work the next tick silently refuses (ADR-0136)."""
+        self.store.create_project({"id": "demo", "repo": REPO, "title": "Demo", "state": "paused",
+                                   "members": [ID], "budget": {"passes": 10, "deadline": None},
+                                   "passesUsed": 7})
+        self.store.put(dict(self.store.get(ID), projectId="demo"))
+        view = self.claim()
+        self.assertTrue(view["attempts"]["member"])
+        self.assertEqual((view["attempts"]["projectState"], view["attempts"]["projectLeft"]),
+                         ("paused", 3))
+
     def test_the_two_queue_tools_are_the_agent_writes(self):
         built = tools.build(self.store, self.foreman, agent=True)
         self.assertEqual(built["factory_queue_next"].fn({"by": "day-desk"})["next"]["workItem"]["id"], ID)

@@ -985,8 +985,9 @@ class Foreman:
         failures = [{"worker": h["detail"].get("worker"), "cause": h["detail"].get("cause"),
                      "reason": h["detail"].get("reason")}
                     for h in history if h["action"] == "attempt_failed"]
+        orders = self.store.workorders(wi["id"])  # read once: the budget and the pass count share it
         ran = {}
-        for order in self.store.workorders(wi["id"]):  # every pass that started, by whom, how often
+        for order in orders:  # every pass that started, by whom, how often
             ran[order.get("worker")] = ran.get(order.get("worker"), 0) + 1
         # The workers a dispatch could actually take, not merely those enabled: a repo's locality and
         # the gate reviewer's family (ADR-0085) exclude some, and naming one would strand the item.
@@ -995,16 +996,26 @@ class Foreman:
                    if (place == "local" or not local_only) and routing.family(agent) not in excluded]
         verdict = next((outcome for outcome, state in workitem.OUTCOME_STATE.items()
                         if state == wi["state"]), None)
+        spent = self.budget(wi, orders)
+        if spent["member"]:
+            # A member's pass also spends the Project's budget, and a paused Project dispatches nothing:
+            # without this the manager approves work the next tick silently refuses (ADR-0136).
+            project = self.store.project(wi["projectId"])
+            spent.update(projectId=wi["projectId"], projectState=(project or {}).get("state"),
+                         projectLeft=max(0, ((project or {}).get("budget") or {}).get("passes", 0)
+                                         - ((project or {}).get("passesUsed") or 0)))
         return {"workItem": wi, "dependsOn": deps,
                 "queued": sum(1 for other in self.store.all() if other["state"] == "queued"),
                 **({"issueError": unreadable} if unreadable else {}),
                 "acceptance": criteria,
                 "paths": workitem.paths_listed(body),
-                "attempts": {**self.budget(wi), "failures": failures},
+                "attempts": {**spent, "failures": failures},
                 "workers": {"ran": [{"worker": agent, "passes": count} for agent, count in ran.items()],
                             "failed": sorted({f["worker"] for f in failures if f["worker"]},
                                              key=str),
                             "allowed": allowed},
+                # A claim is normally in no gate round: regate goes to `reviewing`, a retry to `ready`.
+                # A re-queued item that had one still reports it, so the key is never a guess.
                 "gate": ({"round": wi["gateRound"], "verdict": verdict} if wi.get("gateRound")
                          else None)}
 
