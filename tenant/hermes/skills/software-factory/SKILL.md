@@ -41,6 +41,22 @@ bound them. Setting up a repo (factory_bootstrap_repo, factory_add_repo) and the
 6. **Report the start** in one line with the Project id, the number of issues, the budget and the expected finish in IST.
    After that, say nothing until the Project is done or paused, unless the owner asks.
 
+## Work the queue
+
+An `o/r#13 is queued` line in the drive text is an accepted issue that reaches no worker until you
+hand it on. Drain the queue before you recover a member, and go on until it is empty.
+
+1. Call `factory_queue_next` with `by: "day-desk"`.
+   It claims one item, a `factory:urgent` one first, and returns none when the queue is empty.
+2. Read that one item with `factory_status` and its id before you decide.
+3. Ordinary work: approve it with `factory_queue_approve`.
+   It leaves the queue for `ready`, and the next tick dispatches it through every guard, as for any
+   accepted issue.
+4. Not ordinary work, as "What goes to the owner" lists it: leave it queued, do not approve it, and
+   tell the owner in one line why.
+   Edit the issue on GitHub when that is what it needs.
+5. Never approve an issue you have not read, and never spend a worker pass to find out what it says.
+
 ## Decide what the work needs
 
 The claim hands you the facts: `acceptance`, `paths`, `attempts` (used, left, and every failure with

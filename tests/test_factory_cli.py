@@ -789,6 +789,14 @@ class WatchTest(unittest.TestCase):
         answered = dict(row, question=dict(pending, answer="postgres"))
         self.assertEqual(self.project_run([], answered, command=cli.cmd_drive_queue), [])
 
+    def test_drive_queue_names_a_queued_issue_until_the_queue_is_drained(self):
+        """A queued issue reaches no worker until Day Desk approves it (ADR-0135), so the drive text
+        has to name it: the new line wakes the agent, and it goes once the queue is drained."""
+        queued = {"id": "o/r#12", "state": "queued"}
+        self.assertEqual(self.project_run([], queued, command=cli.cmd_drive_queue), ["o/r#12 is queued"])
+        self.assertEqual(self.project_run([], dict(queued, state="ready"), command=cli.cmd_drive_queue), [])
+        self.assertEqual(self.project_run([], dict(queued, state="dispatching"), command=cli.cmd_drive_queue), [])
+
     def test_drive_queue_lists_a_stuck_acceptance_item(self):
         for state in ("blocked", "human_waiting", "changes_requested", "implementing", "closed"):
             for project_state in ("active", "paused", "done", "stopped"):
