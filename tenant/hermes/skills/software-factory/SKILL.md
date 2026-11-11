@@ -59,6 +59,10 @@ What a state means:
 
 What deciding costs: a retry is one of `attempts.left`, and so is each replacement you approve.
 
+A gate that asked for changes with no finding a worker can fix, or that went silent, is retried once
+with `factory_resolve_human`; the second silence goes to the owner. The packet carries the gate's round
+and verdict but not `agentMayResolve`: on a waiting item, `factory_status` says whether you may answer.
+
 What you can decide, and how it reaches the factory:
 - Retry it: `factory_resolve_human` with a note naming the evidence that failed.
 - Give it another model: `factory_set_worker` to one in `workers.allowed` that has not failed here,

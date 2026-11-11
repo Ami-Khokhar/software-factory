@@ -128,16 +128,24 @@ class ProfileTest(unittest.TestCase):
 
     def test_the_skill_decides_members_from_the_packet_and_the_owner(self):
         """Replaces the test of the deleted decision table: a Project member is decided the same way as
-        any other WorkItem, from the facts the claim carries, and a safety stop or an environment fault
-        still goes to the owner with no action from the agent (ADR-0136)."""
+        any other WorkItem, from the facts the claim carries, and every rule the table guaranteed that
+        still holds is here — the safety stop and the environment fault, the gate's one silent retry,
+        and the drive section's own rules, which the old test also guarded (ADR-0136)."""
         text = (PROFILE / "skills" / "software-factory" / "SKILL.md").read_text()
         recovery = text[text.index("## Decide what the work needs"):text.index("## What goes to the owner")]
         for phrase in ("`leadBlockedBy` names a safety stop or an environment fault",
                        "Retry the same failure with the same note twice",
                        "Spend a pass only to find out what the issue says",
-                       "Ask the owner about ordinary work"):
+                       "Ask the owner about ordinary work",
+                       "retried once", "the second silence goes to the owner",
+                       "`factory_status` says whether you may answer"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, recovery)
+        # the drive rules the deleted table test guarded, which still live in the drive section
+        for phrase in ("answer again even when the escalation is unchanged", "(non-members)",
+                       "safety stop, an environment fault"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
 
     def test_the_blueprint_template_names_the_design_and_runtime_checks(self):
         text = (PROFILE / "skills" / "software-factory" / "blueprint-template.md").read_text()

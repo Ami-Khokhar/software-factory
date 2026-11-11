@@ -154,8 +154,9 @@ class QueueTest(unittest.TestCase):
                          ["default_config_path() raises when the user registry is missing",
                           "README names the registry path"])
         self.assertEqual(view["paths"], [])
-        self.assertEqual(view["attempts"]["used"], 0)
-        self.assertEqual(view["attempts"]["left"], 4)  # Config's default max_passes
+        self.assertEqual((view["attempts"]["used"], view["attempts"]["left"]), (0, 4))  # Config's default
+        self.assertFalse(view["attempts"]["member"])
+        self.assertTrue(view["attempts"]["gateFixFirst"])
         self.assertEqual(view["attempts"]["failures"], [])
         self.assertEqual(view["workers"]["ran"], [])
         self.assertEqual(view["workers"]["failed"], [])
@@ -178,6 +179,26 @@ class QueueTest(unittest.TestCase):
         self.assertEqual(view["workers"]["ran"], [{"worker": "pi-deepseek-factory", "passes": 1},
                                                   {"worker": "pi-codex-factory", "passes": 1}])
         self.assertEqual(view["workers"]["failed"], ["pi-codex-factory"])
+
+    def test_a_person_retry_buys_a_fresh_budget_in_the_packet_as_it_does_in_the_dispatch(self):
+        """One definition of the budget, read by the packet and spent by the dispatch (ADR-0112,
+        ADR-0136). A retry a person granted writes off the passes before it, and the packet has to say
+        so: an agent told `left: 0` would hold work the dispatch would happily run."""
+        for number in range(4):
+            self.store.save_workorder({"id": f"wo{number}", "workItemId": ID, "worker": "codex"})
+        self.assertEqual(self.claim()["attempts"]["left"], 0)
+        wi = self.store.get(ID)
+        self.store.put(dict(wi, passesBefore=4,  # a person's retry
+                            queue=dict(wi["queue"], claimedAt="2026-01-01T00:00:00Z")))
+        self.assertEqual(self.claim()["attempts"]["left"], 4)
+
+    def test_the_packet_says_when_the_issue_could_not_be_read(self):
+        """Empty acceptance and empty paths are a fact, and so is a failed read: a manager told "no
+        bullets" from a 502 would approve work it cannot see (ADR-0136)."""
+        self.github.issues.pop((REPO, 7))
+        view = self.claim()
+        self.assertIn("issueError", view)
+        self.assertEqual((view["acceptance"], view["paths"]), ([], []))
 
     def test_the_two_queue_tools_are_the_agent_writes(self):
         built = tools.build(self.store, self.foreman, agent=True)
