@@ -197,6 +197,7 @@ The states are the enum in `schemas/workitem.schema.json`.
 | `issued`, `planned` | the issue gains `factory:ready` or `factory:urgent` | `queued` |
 | `queued` | no orchestrator has claimed it | `queued`, and no tick dispatches it: the queue is the orchestrator's, not the clock's |
 | `queued` | an orchestrator claims it and approves it, `factory_queue_approve` | `ready`, then `dispatching` on the next tick |
+| `queued` | an orchestrator leaves it to the owner, `factory_queue_leave` | `queued` with `queue.leftForOwner`, unclaimable until the issue's `updatedAt` moves (ADR-0137) |
 | `ready` | the tick dispatches an implement WorkOrder, once each `Depends on #n` issue is closed with a merged PR on `factory/<n>` | `dispatching`, then `implementing` once the relay accepts |
 | `ready` | a `Depends on #n` issue is open | `ready` with `waitingOn: n`; nothing is dispatched |
 | `ready`, `changes_requested` | a `Worker:` line names an agent that is not in `FACTORY_WORKERS` | the name is dropped and routing picks among the named allowed workers, else all allowed ones, with an `unknown_worker_rerouted` audit row (ADR-0110); `human_waiting` only when none is eligible |
