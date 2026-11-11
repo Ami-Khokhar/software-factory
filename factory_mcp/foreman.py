@@ -78,6 +78,7 @@ WIP_MOVES_MAX = 2  # how far a salvage wip may move forward before timeouts stop
 PARTIAL_WORK = ("A worker ran out of time. Its unfinished work is the commit you start from. "
                 "Check each acceptance bullet against the code, not against any report. "
                 "Keep what is right, fix or remove the rest, and finish.")
+FENCE_MISSING = "the paths fence names paths the pass starts without"  # a hint, never a refusal (#544)
 # Reason text is incident identity (ADR-0081), and a commit sha or the attempt count a reason
 # narrates is not material: both read the same every time they are said again.
 SHA40 = re.compile(r"\b[0-9a-f]{40}\b")
@@ -134,6 +135,7 @@ class Foreman:
         self.relay = relay
         self.runtime_lock = threading.RLock()
         self.holder = uuid.uuid4().hex
+        self._trees = {}  # (repo, sha) -> the paths at that commit, for the fence hint (#544)
         self._skipped = set()  # rebuild refusals already logged by this process
 
     def intake(self, repo, number, issue=None, proof=None):
@@ -956,6 +958,22 @@ class Foreman:
             return True
         return time.time() - at > QUEUE_LEASE
 
+    def _fence_missing(self, wi, fence, sha):
+        """The fence globs that match no path in the tree at `sha`, logged and read by the worker. One
+        tree read per repo and commit per process: a commit's tree never changes, and a fence check must
+        not cost a GitHub call on every pass."""
+        try:
+            key = (wi["repo"], sha)
+            if key not in self._trees:
+                self._trees[key] = self.github.tree(wi["repo"], sha)
+            paths = self._trees[key]
+        except GitHubError:
+            return []  # an unreadable tree is not a reason to say anything about the fence
+        missing = [glob for glob in fence if not any(fnmatch.fnmatchcase(path, glob) for path in paths)]
+        if missing:
+            self.store.log("fence_missing", {"sha": sha, "paths": missing}, wi["id"])
+        return missing
+
     def budget(self, wi, orders=None):
         """What a pass costs this WorkItem, as the dispatch decision computes it: the member cap for a
         Project member, else the pass ceiling minus what a person's retry wrote off — and the gate's
@@ -1262,6 +1280,23 @@ class Foreman:
         if continuation:  # the rescue pass builds on the kept partial (ADR-0086)
             findings = [dict(fingerprint=fingerprint(None, PARTIAL_WORK), path=None, line=None,
                              problem=PARTIAL_WORK, fix=None, test=None)] + list(findings)
+        # A fence that matches nothing the worker will see is worth saying before the pass, not after: an
+        # issue built from another branch sends its worker looking for files that are not there, and the
+        # worker answers with a question instead of a change (#544). The tree read is the pass's own start
+        # commit — a rescue pass starts at the continuation, a fix pass at the PR head, every other kind
+        # at the base — because reading the default branch would call a file this feature created
+        # "missing" on every later pass, and a conflict redo starts at the current base even though the
+        # WorkItem still carries the abandoned PR's headSha.
+        start = ((continuation.get("sha") if continuation else None)
+                 or (wi.get("headSha") if kind == "fix" else None) or base)
+        fence = wi.get("paths") or []  # set at intake from the issue's Paths: lines (ADR-0087)
+        missing = self._fence_missing(wi, fence, start) if fence else []
+        if missing:
+            findings = [dict(fingerprint=FENCE_MISSING, path=None, line=None, test=None, fix=None,
+                             problem=("this WorkItem's paths fence names paths that are not in the tree "
+                                      "this pass starts from (" + ", ".join(missing)
+                                      + "). If this pass creates them, ignore this. If not, the issue is"
+                                      " scoped against another branch and the change belongs there."))] + list(findings)
         order = documents.workorder(wi, kind, attempt, self.config, base, findings,
                                     self._lessons(wi, findings),
                                     continuation.get("sha") if continuation else None,
