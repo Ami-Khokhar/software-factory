@@ -121,6 +121,16 @@ class GitHub:
         with its base, None while GitHub computes it."""
         return self._request("GET", f"{self.api}/repos/{repo}/pulls/{number}")[0]
 
+    def ref_revision(self, repo, ref):
+        """The commit a ref names, a tag, a branch or a sha, or None if the repo has no such ref. A
+        release channel is a tag (`refs/tags/v1`), so the branches endpoint cannot resolve it."""
+        try:
+            return self._request("GET", f"{self.api}/repos/{repo}/commits/{urllib.parse.quote(ref)}")[0]["sha"]
+        except GitHubError as err:
+            if err.status in (404, 422):  # no such ref, or a ref GitHub cannot parse
+                return None
+            raise
+
     def commit(self, repo, sha):
         """One commit with its parents, its GitHub author and committer, and its signature check."""
         return self._request("GET", f"{self.api}/repos/{repo}/commits/{sha}")[0]

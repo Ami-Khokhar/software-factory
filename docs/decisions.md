@@ -3191,7 +3191,9 @@ to that commit. A caller on the channel binds it to the commit `v1` names at the
 approval, because a pull request head writes its own `uses:` line and GitHub faithfully records
 whatever it wrote: the head chooses the commit in the record, so the tag has to choose the
 commit that may approve. A tag that cannot be read refuses rather than trusts, which keeps the
-guarantee the deleted pin gave this approval (ADR-0042).
+guarantee the deleted pin gave this approval (ADR-0042). `v1` is a tag (`refs/tags/v1`), not a
+branch, and GitHub's branches endpoint answers 404 for one, so the factory resolves a ref
+(`GitHub.ref_revision`) rather than a branch head here.
 
 **Consequence.** Updating the gate is one file in one repo, with no caller change and no factory
 involvement, and nothing in the factory can refuse or rewrite a caller's workflow. A repo that

@@ -86,7 +86,7 @@ def channel_wrapper(github):
     approval may trust: a pull request head can write its own `uses:` line and GitHub records whatever
     it wrote, but a head cannot move the tag (#422, ADR-0134)."""
     try:
-        return github.branch_head(GATE_WRAPPER, GATE_CHANNEL)
+        return github.ref_revision(GATE_WRAPPER, GATE_CHANNEL)
     except GitHubError:
         return None
 

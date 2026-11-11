@@ -55,6 +55,10 @@ class Api(BaseHTTPRequestHandler):
                                                               {"name": "ci", "id": 1}]}, ""
         elif self.path.startswith("/repos/o/r/pulls?"):
             body, link = [{"number": 3}], ""
+        elif self.path.startswith("/repos/o/r/commits/v1"):
+            body, link = {"sha": "t" * 40}, ""
+        elif self.path.startswith("/repos/o/r/commits/gone"):
+            body, link, status = {"message": "No commit found for the ref gone"}, "", 422
         elif self.path in ("/repos/o/r/issues/404", "/repos/o/r/contents/.github/missing.json"):
             body, link, status = {"message": "Not Found"}, "", 404
         elif self.path == "/repos/o/r/pulls/3":
@@ -143,6 +147,12 @@ class GitHubClientTest(unittest.TestCase):
         self.assertEqual([(i["repo"], i["number"]) for i in found], [("o/r1", 1), ("o/r2", 2)])
         self.assertEqual(Api.seen[0][0], "/search/issues?q=is%3Aissue+is%3Aopen+label%3A%22factory%3Aready%22"
                                          "+author%3Aamteshwar&per_page=100")
+
+    def test_a_ref_resolves_whether_it_is_a_tag_a_branch_or_a_sha(self):
+        """The release channel is a tag (`refs/tags/v1`), and the branches endpoint answers 404 for one,
+        so a tag that resolves here is the only proof the approval can read the channel at all."""
+        self.assertEqual(self.github.ref_revision("o/r", "v1"), "t" * 40)
+        self.assertIsNone(self.github.ref_revision("o/r", "gone"))
 
     def test_a_file_is_its_decoded_text_or_none(self):
         self.assertEqual(self.github.file("o/r", ".github/pr-gatekeeper.json"), '{"verify": "make test"}')
