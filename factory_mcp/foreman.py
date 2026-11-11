@@ -25,6 +25,7 @@ from .verdict import blocking, fingerprint
 ATTENTION = ("human_waiting", "blocked", "exhausted")
 WORKING = ("dispatching", "implementing")
 QUEUE_POLL = 2.0  # seconds between store reads inside a waiting claim (ADR-0135)
+QUEUE_URGENT_POLL = 10.0  # seconds between GitHub reads inside a waiting claim: search allows 30 a minute
 QUEUE_WAIT_MAX = 300  # the longest a claim blocks, so a stuck caller cannot hold a thread
 QUEUE_LEASE = 900  # a claim older than this goes back to the queue
 # A node holds its `Paths:` files while it is one of these (ADR-0088); waiting for a person
@@ -423,7 +424,9 @@ class Foreman:
         self._discover()
         found = []
         for repo in sorted(self.config.repos):
-            for issue in self.github.labelled_issues(repo, workitem.READY):
+            issues = {i["number"]: i for label in (workitem.READY, workitem.URGENT)
+                      for i in self.github.labelled_issues(repo, label)}
+            for issue in issues.values():
                 if self.store.get(workitem.workitem_id(repo, issue["number"])) is None:
                     try:
                         found.append(self.intake(repo, issue["number"])["id"])
@@ -884,16 +887,16 @@ class Foreman:
             raise ToolError("a claim needs the name of the agent that took it")
         wait = max(0, min(int(wait_seconds or 0), QUEUE_WAIT_MAX))
         deadline = time.time() + wait
-        looked = False
+        looked = 0.0  # when GitHub was last asked for urgent work: one search per QUEUE_URGENT_POLL
         while True:
             found = self._claim_next(by)
             if found is not None:
                 return found
             if time.time() >= deadline:
                 return None
-            if not looked:  # one GitHub read for urgent work, then the store only
-                looked = True
-                self._intake_urgent()
+            if time.time() - looked >= QUEUE_URGENT_POLL:
+                looked = time.time()
+                self._intake_urgent()  # a label added while this claim waits is seen within one poll
                 found = self._claim_next(by)
                 if found is not None:
                     return found
@@ -2308,9 +2311,10 @@ class Foreman:
             wi = self.store.get(workitem_id)
             if wi is None:
                 raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
-            if wi["state"] not in ("issued", "planned", "ready", "human_waiting"):
+            if wi["state"] not in ("issued", "planned", "queued", "ready", "human_waiting"):
                 raise ToolError(f"{workitem_id} is {wi['state']}; dependencies change only on an issued, planned, "
-                                "ready or human_waiting WorkItem. Answer it with factory_resolve_human instead")
+                                "queued, ready or human_waiting WorkItem. Answer it with "
+                                "factory_resolve_human instead")
             if self.store.workorders(workitem_id):
                 raise ToolError(f"{workitem_id} already had a worker pass, so its dependencies stay. Close it and "
                                 "open a new issue to run it in another order")

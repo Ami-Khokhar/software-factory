@@ -313,6 +313,11 @@ def reconcile(wi, facts, queue=True):
             wi["state"] = entry_state(set(issue["labels"]), queue)
             if wi["state"] == "queued" and not wi.get("queue"):
                 wi.update(queue=queue_entry(URGENT in set(issue["labels"]), wi.get("updatedAt")))
+        elif wi["state"] == "queued":  # the label changed while it waited: re-order it, keep its claim
+            urgent = URGENT in set(issue["labels"])
+            entry = wi.get("queue") if isinstance(wi.get("queue"), dict) else queue_entry(urgent, wi["updatedAt"])
+            if bool(entry.get("urgent")) != urgent:
+                wi["queue"] = dict(entry, urgent=urgent)
         return wi
     if wi["state"] in BUSY:
         return wi
@@ -340,8 +345,12 @@ def reconcile(wi, facts, queue=True):
                 "fix; read its latest comment, then retry with a note, regate or close"))
     elif wi["state"] == "changes_requested" and pr["headSha"] != wi.get("reviewedSha"):
         wi["state"] = "reviewing"  # someone pushed after the verdict; the gate re-runs on it
-    elif wi["state"] in ("issued", "planned", "ready"):
-        wi["state"] = "pr_open"  # rebuilt from GitHub: the PR exists already
+    elif wi["state"] in ("issued", "planned", "ready", "queued"):
+        # Rebuilt from GitHub: the PR exists already, so a queue entry waiting for a decision is stale.
+        # A verdict on that head has already put it in its own state above, and the entry goes with it.
+        wi["state"] = "pr_open"
+    if wi["state"] != "queued":
+        wi["queue"] = None  # only a queued WorkItem carries an entry (ADR-0135)
     if wi["state"] == "pr_open" and facts["gate"]:
         wi["state"] = "reviewing"
     # a run that started before the last regate is the one the regate asked to repeat, not its answer;

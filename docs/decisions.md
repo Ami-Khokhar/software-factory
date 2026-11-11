@@ -3238,7 +3238,8 @@ Production turns it on with the same deployment that gives Day Desk its token.
 **Consequence.** The label no longer starts work by itself: between the label and a worker there is
 one orchestrator decision and one tick, and an issue nobody claims waits indefinitely in `queued`
 with the queue length visible in `factory_status`. An agent that is already waiting on a claim sees
-urgent work within about two seconds; an agent that is asleep sees it on its next call. The factory
+urgent work within one poll of its wait, ten seconds, and a store rebuilt from scratch takes in
+urgent issues as well as ready ones; an agent that is asleep sees it on its next call. The factory
 cannot wake an agent it has no way to call, so a push channel — Telegram from the factory to Day
 Desk — is a separate decision and is not assumed here. The queue is not ADR-0095's: it is the
 WorkItem's own state, drained by the tools added in the same change, and `test_queue` fails if a
