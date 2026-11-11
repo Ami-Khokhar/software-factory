@@ -1,6 +1,7 @@
 """The orchestrator queue (ADR-0135): a labelled issue waits for a claim instead of reaching a
 worker, an urgent entry is returned first and is found without waiting for a tick, a claim is
 exclusive and expires, and an approval hands the work back to the ordinary dispatch path."""
+import dataclasses
 import unittest
 from unittest import mock
 
@@ -27,6 +28,12 @@ class QueueTest(unittest.TestCase):
 
     def claim(self, seconds=0):
         return self.foreman.next_queued("day-desk", seconds)
+
+    def _dispatched_to(self):
+        """The worker the dispatch audit names. A WorkOrder document carries no worker key, so this is
+        where the choice is written down."""
+        return [r["detail"]["worker"] for r in self.store.history(ID)
+                if r["action"] == "dispatch"][-1]
 
     def test_a_ready_issue_enters_the_queue_and_reaches_no_worker(self):
         self.assertEqual(self.store.get(ID)["state"], "queued")
@@ -166,8 +173,11 @@ class QueueTest(unittest.TestCase):
     def test_a_claim_reports_the_passes_that_ran_and_the_ones_that_failed(self):
         """A manager that cannot see who ran and why they failed decides blind: the packet carries both
         from the store, which already holds every pass and every failure."""
-        self.store.save_workorder({"id": "wo1", "workItemId": ID, "worker": "pi-deepseek-factory"})
-        self.store.save_workorder({"id": "wo2", "workItemId": ID, "worker": "pi-codex-factory"})
+        for number, worker in ((1, "pi-deepseek-factory"), (2, "pi-codex-factory")):
+            # the WorkOrder shape production writes: the document names no worker, the dispatch row does
+            self.store.save_workorder({"id": f"wo{number}", "workItemId": ID, "kind": "implement",
+                                       "round": 0})
+            self.store.log("dispatch", {"workOrder": f"wo{number}", "worker": worker}, ID)
         self.store.log("attempt_failed", {"worker": "pi-codex-factory", "cause": "timeout",
                                           "reason": "the pass ran out of its 180 seconds"}, ID)
         view = self.claim()
@@ -211,6 +221,29 @@ class QueueTest(unittest.TestCase):
         self.assertTrue(view["attempts"]["member"])
         self.assertEqual((view["attempts"]["projectState"], view["attempts"]["projectLeft"]),
                          ("paused", 3))
+
+    def test_an_approval_names_the_worker_and_the_dispatch_takes_it(self):
+        """The manager's choice is the point of the packet: a worker routing would not have picked, taken
+        because the facts called for it, and the WorkOrder carries its name (ADR-0136)."""
+        foreman = Foreman(self.store, self.github, dataclasses.replace(
+            self.config, workers=(("codex", "hosted"), ("mimo", "hosted"))), self.relay)
+        foreman.approve_queued(ID, "day-desk", "", "mimo")
+        self.assertEqual(self.store.get(ID)["chosenWorker"], "mimo")
+        foreman.tick(ID)
+        self.assertEqual(self._dispatched_to(), "mimo")
+
+    def test_an_approval_refuses_a_worker_a_dispatch_could_not_take(self):
+        """A choice accepted and then silently replaced is worse than a refusal: the refusal names the
+        workers a dispatch could actually take."""
+        with self.assertRaisesRegex(ToolError, r"nobody cannot run o/r#7: a dispatch may take codex"):
+            self.foreman.approve_queued(ID, "day-desk", "", "nobody")
+        self.assertEqual(self.store.get(ID)["state"], "queued")  # nothing changed
+
+    def test_an_approval_with_no_worker_dispatches_as_before(self):
+        self.foreman.approve_queued(ID, "day-desk")
+        self.assertNotIn("chosenWorker", self.store.get(ID))
+        self.foreman.tick(ID)
+        self.assertEqual(self._dispatched_to(), "codex")  # the routing policy
 
     def test_the_two_queue_tools_are_the_agent_writes(self):
         built = tools.build(self.store, self.foreman, agent=True)

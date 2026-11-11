@@ -325,9 +325,13 @@ def build(store, foreman, agent=False):
              {"type": "object", "required": ["id", "by"], "additionalProperties": False,
               "properties": {"id": {"type": "string"},
                              "by": {"type": "string", "minLength": 1},
-                             "note": {"type": "string", "description": "why it is approved"}}},
+                             "note": {"type": "string", "description": "why it is approved"},
+                             "worker": {"type": "string",
+                                        "description": "the agent that should run it, when the facts "
+                                                       "say another model fits; refused if a dispatch "
+                                                       "could not take it, naming the ones it could"}}},
              "write", lambda args: {"workItem": foreman.approve_queued(
-                 args["id"], args["by"], args.get("note", ""))}),
+                 args["id"], args["by"], args.get("note", ""), args.get("worker"))}),
         Tool("factory_intake",
              "Create a WorkItem from an open GitHub issue in an allowlisted repo. The issue needs an "
              "'## Acceptance' list of '- <claim> — done when: <check>' bullets. Idempotent.",

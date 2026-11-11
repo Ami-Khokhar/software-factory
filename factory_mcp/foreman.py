@@ -986,9 +986,10 @@ class Foreman:
                      "reason": h["detail"].get("reason")}
                     for h in history if h["action"] == "attempt_failed"]
         orders = self.store.workorders(wi["id"])  # read once: the budget and the pass count share it
-        ran = {}
-        for order in orders:  # every pass that started, by whom, how often
-            ran[order.get("worker")] = ran.get(order.get("worker"), 0) + 1
+        ran = {}  # a WorkOrder document names no worker: the dispatch audit row is where it is written
+        for row in history:
+            if row["action"] == "dispatch" and row["detail"].get("worker"):
+                ran[row["detail"]["worker"]] = ran.get(row["detail"]["worker"], 0) + 1
         # The workers a dispatch could actually take, not merely those enabled: a repo's locality and
         # the gate reviewer's family (ADR-0085) exclude some, and naming one would strand the item.
         local_only, excluded = self.config.local_only(wi["repo"]), self._reviewer_families(wi["repo"])
@@ -1037,9 +1038,25 @@ class Foreman:
                 except (ToolError, ValueError):
                     continue
 
-    def approve_queued(self, workitem_id, by, note=""):
+    def _choosable(self, wi, worker):
+        """The named worker if a dispatch of this WorkItem could take it, else a refusal that names the
+        ones it could take. One check, used by the approval and by the dispatch, so a choice cannot be
+        accepted and then silently replaced."""
+        local_only, excluded = self.config.local_only(wi["repo"]), self._reviewer_families(wi["repo"])
+        allowed = [agent for agent, place in worker_ops.effective_workers(self.store, self.config)
+                   if (place == "local" or not local_only) and routing.family(agent) not in excluded]
+        if worker not in allowed:
+            raise ToolError(f"{worker} cannot run {wi['id']}: a dispatch may take "
+                            f"{', '.join(allowed) or 'no worker'}"
+                            + (" (this repo is local-only)" if local_only else "")
+                            + ("; the gate reviewer's family is excluded" if excluded else ""))
+        return {"worker": worker}
+
+    def approve_queued(self, workitem_id, by, note="", worker=None):
         """The orchestrator's yes: the entry leaves the queue for `ready`, and the next tick dispatches
-        it through every existing guard, so one action per tick still holds (ADR-0135)."""
+        it through every existing guard, so one action per tick still holds (ADR-0135). `worker` is the
+        manager's own choice, refused here if no dispatch could take it, rather than stranded at
+        dispatch (ADR-0136)."""
         if not isinstance(by, str) or not by.strip():
             raise ToolError("an approval needs the name of the agent that gave it")
         if not self.store.acquire(workitem_id, self.holder):
@@ -1050,8 +1067,11 @@ class Foreman:
                 raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
             if wi["state"] != "queued":
                 raise ToolError(f"{workitem_id} is {wi['state']}; only a queued WorkItem is approved")
-            return self._write(wi, dict(wi, state="ready", queue=None), "queue_approved", by=by,
-                               **({"note": note} if note else {}))
+            chosen = self._choosable(wi, worker) if worker is not None else None
+            return self._write(wi, dict(wi, state="ready", queue=None,
+                                        **({"chosenWorker": chosen["worker"]} if chosen else {})),
+                               "queue_approved", by=by, **({"note": note} if note else {}),
+                               **({"worker": chosen["worker"]} if chosen else {}))
         finally:
             self.store.release(workitem_id, self.holder)
 
@@ -1119,8 +1139,21 @@ class Foreman:
         # two-strike block ever sees the case. The gate reviewer's family is excluded outright (ADR-0085).
         avoid, from_worker, category = self._timeout_causes(wi)
         excluded = self._reviewer_families(wi["repo"])
-        worker = routing.route(workers, self.config.local_only(wi["repo"]), failed, named,
-                               avoid_families=avoid, exclude_families=excluded)
+        chosen = wi.get("chosenWorker")
+        if chosen:  # the manager's own choice, re-checked here in case it was disabled since (ADR-0136)
+            try:
+                worker = self._choosable(wi, chosen)["worker"]
+                if worker in failed and not named:  # it failed here before: the policy's block stands
+                    self.store.log("chosen_worker_blocked", {"worker": worker}, wi["id"])
+                    worker = None
+            except ToolError as exc:
+                self.store.log("chosen_worker_refused", {"worker": chosen, "reason": str(exc)}, wi["id"])
+                worker = None
+        else:
+            worker = None
+        if worker is None:
+            worker = routing.route(workers, self.config.local_only(wi["repo"]), failed, named,
+                                   avoid_families=avoid, exclude_families=excluded)
         if worker is None:
             self._finish_recovery(wi, False)  # no attempt will run, so the open recovery finds no outcome
             local_only = self.config.local_only(wi["repo"])

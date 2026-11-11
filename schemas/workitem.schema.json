@@ -188,6 +188,10 @@
     "activeWorkOrderId": { "type": ["string", "null"] },
     "providerTaskId": { "type": ["string", "null"], "description": "agent-relay's id for the active task." },
     "worker": { "type": ["string", "null"], "description": "agent-relay agentId used." },
+    "chosenWorker": {
+      "type": ["string", "null"],
+      "description": "The worker the orchestrator chose when it approved the queue entry (ADR-0136): the dispatch takes it when it can still run, else the routing policy does."
+    },
     "remoteVerify": {
       "type": ["object", "null"],
       "additionalProperties": false,

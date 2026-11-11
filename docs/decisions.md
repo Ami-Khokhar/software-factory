@@ -3297,7 +3297,10 @@ a second call for the rest of the facts. And `tenant/hermes/skills/software-fact
 13-row "what the attempts show → what to do" table: the decision tree had moved out of Python into
 Markdown, which is the same tree with a worse type system.
 
-**Decision.** A claim returns the facts a manager decides on: the acceptance bullets, the paths fence,
+**Decision.** The claim's worker history comes from the audit, not from a WorkOrder document: a
+WorkOrder carries no worker key, and the first version of this packet read one and reported null for
+every pass. The approval takes an optional `worker`, refused unless a dispatch could take it, stored as
+`chosenWorker` and honoured by the dispatch before the routing policy. A claim returns the facts a manager decides on: the acceptance bullets, the paths fence,
 the passes used and left, every failure with its cause, who ran and who may run, the gate round, and
 the dependencies. Facts only: which of them matters is the agent's call. The skill says what each state
 means, what a decision costs, what may be decided and what is forbidden, and it says that a case it

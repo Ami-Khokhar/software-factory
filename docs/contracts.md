@@ -147,9 +147,13 @@ and direct the caller to the approved template. Credential mounts over container
   (`ran` with a pass count each, `failed`, `allowed`), `gate` (the round, or null) and `dependsOn`.
   Facts only, and read once: an agent deciding retry, split, hold or another worker needs no second
   call to make the decision it was handed.
-- **Choosing the worker is `factory_set_worker` (ADR-0029), for a queued WorkItem too (ADR-0136).**
-  There is one way to choose: the issue's `Worker:` lines, edited before the pass and read by the
-  tick. A queued WorkItem has had no pass, so the choice is allowed there.
+- **Choosing the worker is `factory_set_worker` (ADR-0029) or the approval's `worker` (ADR-0136).**
+  Both write the same fact: the issue's `Worker:` lines, and `WorkItem.chosenWorker` for the approval,
+  which the dispatch takes when it can still run it and otherwise falls back to the routing policy. A
+  worker no dispatch could take — not enabled, not local for the repo, or in the gate reviewer's family
+  — is refused with the ones it could take named, so a choice is never accepted and silently replaced.
+  The name lands in the audit's `dispatch` row and in `WorkItem.worker`, not in the WorkOrder document,
+  which carries no worker key.
 - **`WorkItem.queue` is the orchestrator's queue entry (ADR-0135).** Set while the state is
   `queued`, and null in every other state. `urgent` comes from `factory:urgent`, `at` is when it
   entered and is its place in the order, and `claimedBy`/`claimedAt` are written by the claim that
