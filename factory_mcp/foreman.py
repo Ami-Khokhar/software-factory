@@ -945,18 +945,80 @@ class Foreman:
             return True
         return time.time() - at > QUEUE_LEASE
 
+    def budget(self, wi, orders=None):
+        """What a pass costs this WorkItem, as the dispatch decision computes it: the member cap for a
+        Project member, else the pass ceiling minus what a person's retry wrote off — and the gate's
+        first fix per round runs past the ceiling (ADR-0112). One definition, so the packet a manager
+        reads and the dispatch that spends it cannot disagree."""
+        orders = self.store.workorders(wi["id"]) if orders is None else orders
+        project_id = wi.get("projectId")
+        project = self.store.project(project_id) if project_id else None
+        member = bool(project and project["state"] != "done")
+        if member:
+            used, passes = len(orders), projects.MAX_MEMBER_PASSES
+        else:
+            used, passes = len(orders) - (wi.get("passesBefore") or 0), self.config.max_passes
+        round_ = wi.get("gateRound", 0)
+        # ADR-0112's extra fix pass belongs to a WorkItem's own budget. A member's cap is the Lead's,
+        # so a member at the cap exhausts even on a fix dispatch (ADR-0047).
+        return {"used": max(0, used), "passes": passes, "left": max(0, passes - used), "member": member,
+                "gateFixFirst": not member and not any(o.get("kind") == "fix" and o.get("round") == round_
+                                                       for o in orders)}
+
     def _queued_view(self, wi):
-        """A claimed entry as its agent needs it: the work, what it waits on and what is behind it.
-        The dependency is read, never acted on: the agent decides."""
+        """A claimed entry as its manager needs it: the work, what it must satisfy, what it may touch,
+        what earlier attempts cost and why they failed, who may run it, and what it waits on. Facts
+        only. Which of them matters, and what to do about it, is the agent's decision (ADR-0136), and
+        the pack is read here so that decision never needs a second read."""
+        unreadable = None
         try:
             body = self._issue(wi["repo"], wi["issueNumber"]).get("body")
-        except (ToolError, GitHubError):
-            body = None
+        except (ToolError, GitHubError) as exc:
+            # Never an empty acceptance: a manager told "no bullets, no paths, no dependencies" would
+            # approve work it cannot see, so the packet says the read failed (ADR-0136).
+            body, unreadable = None, str(exc)
         deps = [{"issue": number, "status": status, "how": how}
                 for number in workitem.depends_on(body)
                 for status, how in [self._dependency(wi["repo"], number)]]
+        criteria, _ = workitem.parse_acceptance(body)
+        history = self.store.history(wi["id"])
+        failures = [{"worker": h["detail"].get("worker"), "cause": h["detail"].get("cause"),
+                     "reason": h["detail"].get("reason")}
+                    for h in history if h["action"] == "attempt_failed"]
+        orders = self.store.workorders(wi["id"])  # read once: the budget and the pass count share it
+        ran = {}  # a WorkOrder document names no worker: the dispatch audit row is where it is written
+        for row in history:
+            if row["action"] == "dispatch" and row["detail"].get("worker"):
+                ran[row["detail"]["worker"]] = ran.get(row["detail"]["worker"], 0) + 1
+        # The workers a dispatch could actually take, not merely those enabled: a repo's locality and
+        # the gate reviewer's family (ADR-0085) exclude some, and naming one would strand the item.
+        local_only, excluded = self.config.local_only(wi["repo"]), self._reviewer_families(wi["repo"])
+        allowed = [agent for agent, place in worker_ops.effective_workers(self.store, self.config)
+                   if (place == "local" or not local_only) and routing.family(agent) not in excluded]
+        verdict = next((outcome for outcome, state in workitem.OUTCOME_STATE.items()
+                        if state == wi["state"]), None)
+        spent = self.budget(wi, orders)
+        if spent["member"]:
+            # A member's pass also spends the Project's budget, and a paused Project dispatches nothing:
+            # without this the manager approves work the next tick silently refuses (ADR-0136).
+            project = self.store.project(wi["projectId"])
+            spent.update(projectId=wi["projectId"], projectState=(project or {}).get("state"),
+                         projectLeft=max(0, ((project or {}).get("budget") or {}).get("passes", 0)
+                                         - ((project or {}).get("passesUsed") or 0)))
         return {"workItem": wi, "dependsOn": deps,
-                "queued": sum(1 for other in self.store.all() if other["state"] == "queued")}
+                "queued": sum(1 for other in self.store.all() if other["state"] == "queued"),
+                **({"issueError": unreadable} if unreadable else {}),
+                "acceptance": criteria,
+                "paths": workitem.paths_listed(body),
+                "attempts": {**spent, "failures": failures},
+                "workers": {"ran": [{"worker": agent, "passes": count} for agent, count in ran.items()],
+                            "failed": sorted({f["worker"] for f in failures if f["worker"]},
+                                             key=str),
+                            "allowed": allowed},
+                # A claim is normally in no gate round: regate goes to `reviewing`, a retry to `ready`.
+                # A re-queued item that had one still reports it, so the key is never a guess.
+                "gate": ({"round": wi["gateRound"], "verdict": verdict} if wi.get("gateRound")
+                         else None)}
 
     def _intake_urgent(self):
         """Take in a `factory:urgent` issue of an enabled repo the store does not know, so a waiting
@@ -976,9 +1038,25 @@ class Foreman:
                 except (ToolError, ValueError):
                     continue
 
-    def approve_queued(self, workitem_id, by, note=""):
+    def _choosable(self, wi, worker):
+        """The named worker if a dispatch of this WorkItem could take it, else a refusal that names the
+        ones it could take. One check, used by the approval and by the dispatch, so a choice cannot be
+        accepted and then silently replaced."""
+        local_only, excluded = self.config.local_only(wi["repo"]), self._reviewer_families(wi["repo"])
+        allowed = [agent for agent, place in worker_ops.effective_workers(self.store, self.config)
+                   if (place == "local" or not local_only) and routing.family(agent) not in excluded]
+        if worker not in allowed:
+            raise ToolError(f"{worker} cannot run {wi['id']}: a dispatch may take "
+                            f"{', '.join(allowed) or 'no worker'}"
+                            + (" (this repo is local-only)" if local_only else "")
+                            + ("; the gate reviewer's family is excluded" if excluded else ""))
+        return {"worker": worker}
+
+    def approve_queued(self, workitem_id, by, note="", worker=None):
         """The orchestrator's yes: the entry leaves the queue for `ready`, and the next tick dispatches
-        it through every existing guard, so one action per tick still holds (ADR-0135)."""
+        it through every existing guard, so one action per tick still holds (ADR-0135). `worker` is the
+        manager's own choice, refused here if no dispatch could take it, rather than stranded at
+        dispatch (ADR-0136)."""
         if not isinstance(by, str) or not by.strip():
             raise ToolError("an approval needs the name of the agent that gave it")
         if not self.store.acquire(workitem_id, self.holder):
@@ -989,8 +1067,11 @@ class Foreman:
                 raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
             if wi["state"] != "queued":
                 raise ToolError(f"{workitem_id} is {wi['state']}; only a queued WorkItem is approved")
-            return self._write(wi, dict(wi, state="ready", queue=None), "queue_approved", by=by,
-                               **({"note": note} if note else {}))
+            chosen = self._choosable(wi, worker) if worker is not None else None
+            return self._write(wi, dict(wi, state="ready", queue=None,
+                                        **({"chosenWorker": chosen["worker"]} if chosen else {})),
+                               "queue_approved", by=by, **({"note": note} if note else {}),
+                               **({"worker": chosen["worker"]} if chosen else {}))
         finally:
             self.store.release(workitem_id, self.holder)
 
@@ -1032,31 +1113,21 @@ class Foreman:
                       for other in self.store.all())
         if running >= self.config.passes_per_repo:
             return wi
-        orders = self.store.workorders(wi["id"])
         project_id = wi.get("projectId")
         project = self.store.project(project_id) if project_id else None
         if project and project["state"] in ("paused", "stopped"):
             return wi
-        member = project and project["state"] != "done"
-        if member:
-            used = len(orders)
-            if used >= projects.MAX_MEMBER_PASSES:
-                self._finish_recovery(wi, False)
-                return self._write(wi, dict(wi, state="exhausted", recovery=None, terminalReason=(
-                    f"the member pass cap is {projects.MAX_MEMBER_PASSES} and {used} passes are on record; "
-                    "the Lead splits it or the owner decides")),
-                    "exhausted", project=project_id)
-        else:
-            used = len(orders) - (wi.get("passesBefore") or 0)  # a person's retry buys a fresh budget
-            # ADR-0112: a PR that reaches the gate keeps one fix pass per round past the budget — the
-            # gate already caps fix rounds itself, so its first CHANGES verdict must not end the item.
-            first_gate_fix = kind == "fix" and not any(
-                o["kind"] == "fix" and o["round"] == wi.get("gateRound", 0) for o in orders)
-            if used >= self.config.max_passes and not first_gate_fix:
-                self._finish_recovery(wi, False)  # the budget stopped the attempt the recovery chose
-                return self._write(wi, dict(wi, state="exhausted", recovery=None, terminalReason=(
-                    f"{used} worker passes used; FACTORY_MAX_PASSES is {self.config.max_passes}")),
-                    "exhausted")
+        orders = self.store.workorders(wi["id"])  # read once: the budget and the attempt counter share it
+        spent = self.budget(wi, orders)
+        # ADR-0112: a PR that reaches the gate keeps one fix pass per round past the budget — the gate
+        # already caps fix rounds itself, so its first CHANGES verdict must not end the item.
+        if spent["used"] >= spent["passes"] and not (kind == "fix" and spent["gateFixFirst"]):
+            self._finish_recovery(wi, False)  # the budget stopped the attempt the recovery chose
+            reason = (f"the member pass cap is {spent['passes']} and {spent['used']} passes are on "
+                      "record; the Lead splits it or the owner decides" if spent["member"] else
+                      f"{spent['used']} worker passes used; FACTORY_MAX_PASSES is {spent['passes']}")
+            return self._write(wi, dict(wi, state="exhausted", recovery=None, terminalReason=reason),
+                               "exhausted", **({"project": project_id} if spent["member"] else {}))
         # One membership walk per dispatch decision (#437): the rows are checked here, and the
         # reason text is already at hand if routing finds no worker, instead of a second walk.
         workers, problems = worker_ops.membership(self.store, self.config)
@@ -1068,8 +1139,21 @@ class Foreman:
         # two-strike block ever sees the case. The gate reviewer's family is excluded outright (ADR-0085).
         avoid, from_worker, category = self._timeout_causes(wi)
         excluded = self._reviewer_families(wi["repo"])
-        worker = routing.route(workers, self.config.local_only(wi["repo"]), failed, named,
-                               avoid_families=avoid, exclude_families=excluded)
+        chosen = wi.get("chosenWorker")
+        if chosen:  # the manager's own choice, re-checked here in case it was disabled since (ADR-0136)
+            try:
+                worker = self._choosable(wi, chosen)["worker"]
+                if worker in failed and not named:  # it failed here before: the policy's block stands
+                    self.store.log("chosen_worker_blocked", {"worker": worker}, wi["id"])
+                    worker = None
+            except ToolError as exc:
+                self.store.log("chosen_worker_refused", {"worker": chosen, "reason": str(exc)}, wi["id"])
+                worker = None
+        else:
+            worker = None
+        if worker is None:
+            worker = routing.route(workers, self.config.local_only(wi["repo"]), failed, named,
+                                   avoid_families=avoid, exclude_families=excluded)
         if worker is None:
             self._finish_recovery(wi, False)  # no attempt will run, so the open recovery finds no outcome
             local_only = self.config.local_only(wi["repo"])
@@ -1132,7 +1216,7 @@ class Foreman:
         packet = self.store.knowledge.packet(self.config, wi)
         if packet:
             order["memory"] = packet
-        if member:
+        if spent["member"]:
             try:
                 self.store.charge_project_pass(project_id)
             except Conflict as exc:

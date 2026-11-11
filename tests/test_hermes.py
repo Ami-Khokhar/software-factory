@@ -73,7 +73,7 @@ class ProfileTest(unittest.TestCase):
 
     def test_the_skill_has_the_lead_sections(self):
         text = (PROFILE / "skills" / "software-factory" / "SKILL.md").read_text()
-        headings = ("## Lead a Project", "## Recover a member", "## What goes to the owner")
+        headings = ("## Lead a Project", "## Decide what the work needs", "## What goes to the owner")
         for heading in headings:
             self.assertIn(heading, text)
         lead = text[text.index(headings[0]):text.index(headings[1])]
@@ -101,6 +101,23 @@ class ProfileTest(unittest.TestCase):
                        "a secret", "protected controls such as `.github/`", "change to acceptance"):
             self.assertIn(phrase, owner)
 
+    def test_the_skill_carries_principles_and_no_decision_table(self):
+        """The factory's operator decides; a table of conditions is a workflow wearing a skill's name.
+        The prompt says what each state means, what a pass costs and what may be decided, and it says
+        the case it does not name is still the agent's (ADR-0136)."""
+        text = (PROFILE / "skills" / "software-factory" / "SKILL.md").read_text()
+        self.assertNotIn("What the attempts and state show", text)
+        decide = text[text.index("## Decide what the work needs"):text.index("## What goes to the owner")]
+        for phrase in ("is still yours", "What a state means", "What deciding costs",
+                       "What you can decide", "`attempts.left`", "Spend a pass only to find out",
+                       "read the WorkItem's `attempts` and the audit",
+                       "reasons that do not fit together"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, decide)
+        for tool in ("factory_resolve_human", "factory_set_worker", "factory_replace_issue",
+                     "factory_approve_issue", "factory_answer_question"):
+            self.assertIn(tool, decide)
+
     def test_the_skill_names_only_project_tools_that_exist(self):
         folder = PROFILE / "skills" / "software-factory"
         real = set(tools.build(None, None))
@@ -109,38 +126,27 @@ class ProfileTest(unittest.TestCase):
                 self.assertLessEqual(set(re.findall(r"\bfactory_[a-zA-Z0-9_]+\b",
                                                     (folder / name).read_text())), real)
 
-    def test_the_skill_recovers_members_without_the_non_member_owner_fallback(self):
+    def test_the_skill_decides_members_from_the_packet_and_the_owner(self):
+        """Replaces the test of the deleted decision table: a Project member is decided the same way as
+        any other WorkItem, from the facts the claim carries, and every rule the table guaranteed that
+        still holds is here — the safety stop and the environment fault, the gate's one silent retry,
+        and the drive section's own rules, which the old test also guarded (ADR-0136)."""
         text = (PROFILE / "skills" / "software-factory" / "SKILL.md").read_text()
-        recovery = text[text.index("## Recover a member"):text.index("## What goes to the owner")]
-        for phrase in ("Read only the one WorkItem the drive queue names", "`factory_status` and its id",
-                       "last 2 `attempts`", "Do not read the full status unless a decision needs another item",
-                       "Use the first row that matches", "Do one action", "Read back the state",
-                       "`leadBlockedBy` is a safety stop or an environment fault",
-                       "Continue from the kept partial work. Finish the remaining acceptance bullets",
-                       "fewer than 2 timeouts", "next worker in `FACTORY_WORKERS` that has not failed here",
-                       "Start by editing <files from the blueprint>. Do not explore other code.",
-                       "2 or more timeouts", "2 or 3 replacements that keep every acceptance bullet",
-                       "files and signatures from the blueprint", "`factory_approve_issue`",
-                       "Make <test id> pass. The failure: <one line>.", "over 1000 source lines",
-                       "blueprint's module lines", "Gate CHANGES with blocking findings",
-                       "factory dispatches the fix pass", "regate, once", "second time, do nothing",
-                       "`factory_answer_question` from the blueprint", '"passes on one member"',
-                       "Retry once with a note that names the evidence. The next time, split.",
-                       "Never ask the owner about a row", "Never retry the same failure with the same note twice",
-                       "Never spend a pass only to diagnose", "read the attempts and the audit"):
+        recovery = text[text.index("## Decide what the work needs"):text.index("## What goes to the owner")]
+        for phrase in ("`leadBlockedBy` names a safety stop or an environment fault",
+                       "Retry the same failure with the same note twice",
+                       "Spend a pass only to find out what the issue says",
+                       "Ask the owner about ordinary work",
+                       "retried once", "the second silence goes to the owner",
+                       "`factory_status` says whether you may answer"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, recovery)
+        # the drive rules the deleted table test guarded, which still live in the drive section
         drive = self.drive_section()
-        for phrase in ("project <id>: acceptance <item> is changes_requested|blocked|human_waiting",
-                       "Read that item with `factory_status` and the item id",
-                       "Act only through the existing tools", 'use "Recover a member"',
-                       "answer again even when the escalation is unchanged",
-                       "safety stop, an environment fault and a member at its 8-pass cap",
-                       "`leadBlockedBy`", "(non-members)"):
-            self.assertIn(phrase, drive)
-        for heading in ("## Plan work", "## Answer an escalation", "## A worker's question"):
-            section = text[text.index(heading):].split("\n## ", 1)[0]
-            self.assertIn("(non-members)", section)
+        for phrase in ("answer again even when the escalation is unchanged", "(non-members)",
+                       "safety stop, an environment fault"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, drive)
 
     def test_the_blueprint_template_names_the_design_and_runtime_checks(self):
         text = (PROFILE / "skills" / "software-factory" / "blueprint-template.md").read_text()

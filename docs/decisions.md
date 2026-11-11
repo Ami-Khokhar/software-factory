@@ -3287,3 +3287,30 @@ cannot wake an agent it has no way to call, so a push channel — Telegram from 
 Desk — is a separate decision and is not assumed here. The queue is not ADR-0095's: it is the
 WorkItem's own state, drained by the tools added in the same change, and `test_queue` fails if a
 tick ever dispatches a queued item again.
+
+## ADR-0136 — The manager gets the facts and the choice, and the skill carries principles, not a table
+
+**Context.** ADR-0135 gave the orchestrator a queue and ADR-0133 gave it a hold, so the agent decides
+the work. Two things still ran around it. A claim returned the WorkItem, its dependencies and the queue
+length, so an agent deciding retry versus split versus hold had to read prose conditions and then make
+a second call for the rest of the facts. And `tenant/hermes/skills/software-factory/SKILL.md` carried a
+13-row "what the attempts show → what to do" table: the decision tree had moved out of Python into
+Markdown, which is the same tree with a worse type system.
+
+**Decision.** The claim's worker history comes from the audit, not from a WorkOrder document: a
+WorkOrder carries no worker key, and the first version of this packet read one and reported null for
+every pass. The approval takes an optional `worker`, refused unless a dispatch could take it, stored as
+`chosenWorker` and honoured by the dispatch before the routing policy. A claim returns the facts a manager decides on: the acceptance bullets, the paths fence,
+the passes used and left, every failure with its cause, who ran and who may run, the gate round, and
+the dependencies. Facts only: which of them matters is the agent's call. The skill says what each state
+means, what a decision costs, what may be decided and what is forbidden, and it says that a case it
+does not name is still the agent's. The table is gone. Choosing the worker reuses `factory_set_worker`,
+which already edits the issue's `Worker:` lines: one way to choose, already tested, rather than a second
+argument that sets the same fact.
+
+**Consequence.** Deleting the skill now removes the decisions, which is what makes the factory agentic
+rather than a workflow with an agent attached to the failures. The cost is variance: two runs of the
+same failure may decide differently, and the only record of why is the audit note the agent writes.
+That is the trade this factory makes, and the limits stay in code: dispatch, the pass budget, the push,
+the pull request and the merge are still the factory's, not the agent's (ADR-0133, ADR-0135).
+

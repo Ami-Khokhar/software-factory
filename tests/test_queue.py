@@ -1,6 +1,7 @@
 """The orchestrator queue (ADR-0135): a labelled issue waits for a claim instead of reaching a
 worker, an urgent entry is returned first and is found without waiting for a tick, a claim is
 exclusive and expires, and an approval hands the work back to the ordinary dispatch path."""
+import dataclasses
 import unittest
 from unittest import mock
 
@@ -27,6 +28,12 @@ class QueueTest(unittest.TestCase):
 
     def claim(self, seconds=0):
         return self.foreman.next_queued("day-desk", seconds)
+
+    def _dispatched_to(self):
+        """The worker the dispatch audit names. A WorkOrder document carries no worker key, so this is
+        where the choice is written down."""
+        return [r["detail"]["worker"] for r in self.store.history(ID)
+                if r["action"] == "dispatch"][-1]
 
     def test_a_ready_issue_enters_the_queue_and_reaches_no_worker(self):
         self.assertEqual(self.store.get(ID)["state"], "queued")
@@ -144,6 +151,99 @@ class QueueTest(unittest.TestCase):
         wi = self.foreman.tick(ID)["workItem"]
         self.assertEqual(wi["state"], "pr_open")
         self.assertIsNone(wi["queue"])
+
+    def test_a_claim_carries_what_a_manager_decides_on(self):
+        """The claim is the one read a manager gets: what the issue must satisfy, what it may touch,
+        what earlier passes cost and why they failed, and who may run it. Facts only, so a decision
+        about this WorkItem never needs a second call (ADR-0136)."""
+        view = self.claim()
+        self.assertEqual([c["claim"] for c in view["acceptance"]],
+                         ["default_config_path() raises when the user registry is missing",
+                          "README names the registry path"])
+        self.assertEqual(view["paths"], [])
+        self.assertEqual((view["attempts"]["used"], view["attempts"]["left"]), (0, 4))  # Config's default
+        self.assertFalse(view["attempts"]["member"])
+        self.assertTrue(view["attempts"]["gateFixFirst"])
+        self.assertEqual(view["attempts"]["failures"], [])
+        self.assertEqual(view["workers"]["ran"], [])
+        self.assertEqual(view["workers"]["failed"], [])
+        self.assertEqual(view["workers"]["allowed"], ["codex"])  # Config's only worker
+        self.assertIsNone(view["gate"])
+
+    def test_a_claim_reports_the_passes_that_ran_and_the_ones_that_failed(self):
+        """A manager that cannot see who ran and why they failed decides blind: the packet carries both
+        from the store, which already holds every pass and every failure."""
+        for number, worker in ((1, "pi-deepseek-factory"), (2, "pi-codex-factory")):
+            # the WorkOrder shape production writes: the document names no worker, the dispatch row does
+            self.store.save_workorder({"id": f"wo{number}", "workItemId": ID, "kind": "implement",
+                                       "round": 0})
+            self.store.log("dispatch", {"workOrder": f"wo{number}", "worker": worker}, ID)
+        self.store.log("attempt_failed", {"worker": "pi-codex-factory", "cause": "timeout",
+                                          "reason": "the pass ran out of its 180 seconds"}, ID)
+        view = self.claim()
+        self.assertEqual(view["attempts"]["used"], 2)
+        self.assertEqual(view["attempts"]["left"], 2)
+        self.assertEqual(view["attempts"]["failures"],
+                         [{"worker": "pi-codex-factory", "cause": "timeout",
+                           "reason": "the pass ran out of its 180 seconds"}])
+        self.assertEqual(view["workers"]["ran"], [{"worker": "pi-deepseek-factory", "passes": 1},
+                                                  {"worker": "pi-codex-factory", "passes": 1}])
+        self.assertEqual(view["workers"]["failed"], ["pi-codex-factory"])
+
+    def test_a_person_retry_buys_a_fresh_budget_in_the_packet_as_it_does_in_the_dispatch(self):
+        """One definition of the budget, read by the packet and spent by the dispatch (ADR-0112,
+        ADR-0136). A retry a person granted writes off the passes before it, and the packet has to say
+        so: an agent told `left: 0` would hold work the dispatch would happily run."""
+        for number in range(4):
+            self.store.save_workorder({"id": f"wo{number}", "workItemId": ID, "worker": "codex"})
+        self.assertEqual(self.claim()["attempts"]["left"], 0)
+        wi = self.store.get(ID)
+        self.store.put(dict(wi, passesBefore=4,  # a person's retry
+                            queue=dict(wi["queue"], claimedAt="2026-01-01T00:00:00Z")))
+        self.assertEqual(self.claim()["attempts"]["left"], 4)
+
+    def test_the_packet_says_when_the_issue_could_not_be_read(self):
+        """Empty acceptance and empty paths are a fact, and so is a failed read: a manager told "no
+        bullets" from a 502 would approve work it cannot see (ADR-0136)."""
+        self.github.issues.pop((REPO, 7))
+        view = self.claim()
+        self.assertIn("issueError", view)
+        self.assertEqual((view["acceptance"], view["paths"]), ([], []))
+
+    def test_a_member_claim_carries_the_project_budget_it_also_spends(self):
+        """A member's pass spends the Project's budget, and a paused Project dispatches nothing. Without
+        those facts the manager approves work the next tick silently refuses (ADR-0136)."""
+        self.store.create_project({"id": "demo", "repo": REPO, "title": "Demo", "state": "paused",
+                                   "members": [ID], "budget": {"passes": 10, "deadline": None},
+                                   "passesUsed": 7})
+        self.store.put(dict(self.store.get(ID), projectId="demo"))
+        view = self.claim()
+        self.assertTrue(view["attempts"]["member"])
+        self.assertEqual((view["attempts"]["projectState"], view["attempts"]["projectLeft"]),
+                         ("paused", 3))
+
+    def test_an_approval_names_the_worker_and_the_dispatch_takes_it(self):
+        """The manager's choice is the point of the packet: a worker routing would not have picked, taken
+        because the facts called for it, and the WorkOrder carries its name (ADR-0136)."""
+        foreman = Foreman(self.store, self.github, dataclasses.replace(
+            self.config, workers=(("codex", "hosted"), ("mimo", "hosted"))), self.relay)
+        foreman.approve_queued(ID, "day-desk", "", "mimo")
+        self.assertEqual(self.store.get(ID)["chosenWorker"], "mimo")
+        foreman.tick(ID)
+        self.assertEqual(self._dispatched_to(), "mimo")
+
+    def test_an_approval_refuses_a_worker_a_dispatch_could_not_take(self):
+        """A choice accepted and then silently replaced is worse than a refusal: the refusal names the
+        workers a dispatch could actually take."""
+        with self.assertRaisesRegex(ToolError, r"nobody cannot run o/r#7: a dispatch may take codex"):
+            self.foreman.approve_queued(ID, "day-desk", "", "nobody")
+        self.assertEqual(self.store.get(ID)["state"], "queued")  # nothing changed
+
+    def test_an_approval_with_no_worker_dispatches_as_before(self):
+        self.foreman.approve_queued(ID, "day-desk")
+        self.assertNotIn("chosenWorker", self.store.get(ID))
+        self.foreman.tick(ID)
+        self.assertEqual(self._dispatched_to(), "codex")  # the routing policy
 
     def test_the_two_queue_tools_are_the_agent_writes(self):
         built = tools.build(self.store, self.foreman, agent=True)
