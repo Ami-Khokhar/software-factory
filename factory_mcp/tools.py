@@ -349,7 +349,7 @@ def build(store, foreman, agent=False):
              "write", lambda args: {"workItem": foreman.leave_for_owner(
                  args["id"], args["by"], args["why"])}),
         Tool("factory_complete_acceptance",
-             "Complete one missing acceptance check on a queued issue (ADR-0141): writes "
+             "Complete one missing acceptance check on a queued issue (ADR-0142): writes "
              "'— done when: <check>' onto the bullet whose claim is given, in the claim's own words, "
              "and nothing else. The check must name something the factory can run: a command in "
              "backticks, a test id, or a file assertion. One comment on the issue quotes the claim, "

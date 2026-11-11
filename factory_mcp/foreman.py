@@ -1053,7 +1053,7 @@ class Foreman:
                 "queued": sum(1 for other in self.store.all() if other["state"] == "queued"),
                 **({"issueError": unreadable} if unreadable else {}),
                 "acceptance": criteria,
-                # the bullets the issue names without a check (ADR-0141): the manager completes
+                # the bullets the issue names without a check (ADR-0142): the manager completes
                 # each one before the entry is approved
                 "acceptanceMissing": (wi.get("queue") or {}).get("acceptanceMissing") or [],
                 "paths": workitem.paths_listed(body),
@@ -1151,7 +1151,7 @@ class Foreman:
             if wi["state"] != "queued":
                 raise ToolError(f"{workitem_id} is {wi['state']}; only a queued WorkItem is approved")
             missing = (wi.get("queue") or {}).get("acceptanceMissing")
-            if missing:  # the issue's own bullets must each name how a check proves them (ADR-0141)
+            if missing:  # the issue's own bullets must each name how a check proves them (ADR-0142)
                 raise ToolError(f"{workitem_id} still has acceptance bullets without a check: "
                                 + "; ".join(missing) + ". factory_complete_acceptance completes "
                                 "them in the claims' own words, or leave the entry for the owner")
@@ -1164,7 +1164,7 @@ class Foreman:
             self.store.release(workitem_id, self.holder)
 
     def complete_acceptance(self, workitem_id, claim, check, by, why):
-        """The manager completes one missing acceptance check (ADR-0141): the check is written onto
+        """The manager completes one missing acceptance check (ADR-0142): the check is written onto
         the issue's own bullet, the claim's words untouched, and a comment on the issue quotes the
         claim, the check and why, so the owner sees it and can veto by editing the bullet back; the
         audit keeps the body before and after. Refused once a WorkOrder exists: after a pass has

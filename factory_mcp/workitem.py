@@ -25,7 +25,7 @@ WORKER = re.compile(r"^\s*worker:\s*(\S+)\s*$", re.I | re.M)
 PATHS = re.compile(r"^\s*paths:\s*(.+?)\s*$", re.I | re.M)
 
 
-# A check the factory can run (ADR-0141): a command in backticks, a test id, or a file assertion.
+# A check the factory can run (ADR-0142): a command in backticks, a test id, or a file assertion.
 COMMAND = re.compile(r"`[^`\n]+`")
 TEST_ID = re.compile(r"\btests?\.[A-Za-z_][\w.]*\b|\btests?/[\w./-]+|\btest_[A-Za-z_]\w*\b")
 FILE_ASSERTION = re.compile(r"\b[A-Za-z0-9_][\w.-]*\.[A-Za-z][A-Za-z0-9]{0,4}\b")
@@ -70,20 +70,20 @@ def parse_acceptance(body):
 
 def claim_of(bullet):
     """The claim a bullet's text carries, split from a `done when:` it may already name. The words
-    are the bullet's own: completing a check never rewrites them (ADR-0141)."""
+    are the bullet's own: completing a check never rewrites them (ADR-0142)."""
     parts = re.split(r"done when:?", bullet, maxsplit=1, flags=re.I)
     claim = parts[0].strip().rstrip("—–-|;:(").strip()
     return claim or bullet.strip()
 
 
 def runnable_check(check):
-    """Whether a doneWhen names something the factory can run (ADR-0141): a command in backticks, a
+    """Whether a doneWhen names something the factory can run (ADR-0142): a command in backticks, a
     test id, or a file assertion. Prose like 'when it is done' proves nothing a worker can check."""
     return bool(COMMAND.search(check) or TEST_ID.search(check) or FILE_ASSERTION.search(check))
 
 
 def with_check(body, claim, check):
-    """`body` with one Acceptance bullet's check completed (ADR-0141): the bullet whose claim is
+    """`body` with one Acceptance bullet's check completed (ADR-0142): the bullet whose claim is
     `claim`, in the claim's own words, gets 'done when: <check>'; a bullet that already says
     'done when:' with nothing after it takes the check there. Returns the new body, or None when no
     bullet in the Acceptance section matches. Nothing else in the body moves."""
@@ -262,7 +262,7 @@ def owner_acted(entry, issue):
 def intake(repo, issue, queue=True):
     """A new WorkItem (stateVersion 0) for an open issue, or a ValueError saying what is missing.
     A queued issue whose bullets lack checks is taken in with the gap named on its queue entry
-    (ADR-0141), so the manager completes the checks instead of the issue being thrown away."""
+    (ADR-0142), so the manager completes the checks instead of the issue being thrown away."""
     if "pull_request" in issue:
         raise ValueError(f"{repo}#{issue['number']} is a pull request, not an issue")
     if issue["state"] != "open":

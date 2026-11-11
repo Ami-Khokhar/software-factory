@@ -3419,7 +3419,7 @@ flattened into `unavailable`. The launch input is a marker `worker/runner.py` an
 looks for a WorkOrder, so a deployment whose runner predates this ADR quarantines itself instead
 of passing.
 
-## ADR-0141 — The manager completes a missing check, never the claim
+## ADR-0142 — The manager completes a missing check, never the claim
 
 **Context.** Intake refused any `factory:ready` issue whose `## Acceptance` bullets did not each
 say `done when: <check>`, so the tick logged `rebuild_skipped` once and the issue never reached the

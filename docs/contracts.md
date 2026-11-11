@@ -160,7 +160,7 @@ and direct the caller to the approved template. Credential mounts over container
   failure instead leaves the item pending for the next tick. Existing orders and the global default stay fixed.
 - **A claim carries the facts the manager decides on (ADR-0136).** `factory_queue_next` returns, with
   the entry it claimed: `acceptance` (the issue's bullets, parsed), `acceptanceMissing` (the claims
-  the issue names without a check, empty when there are none — ADR-0141), `paths` (its fence), `attempts`
+  the issue names without a check, empty when there are none — ADR-0142), `paths` (its fence), `attempts`
   (`used`, `left`, the pass ceiling, and every failure with its worker, cause and reason), `workers`
   (`ran` with a pass count each, `failed`, `allowed`), `gate` (the round, or null) and `dependsOn`.
   Facts only, and read once: an agent deciding retry, split, hold or another worker needs no second
@@ -186,7 +186,7 @@ and direct the caller to the approved template. Credential mounts over container
   `why` (the one line the owner reads), `at`, and `issueUpdatedAt`, the issue's own stamp when it was
   left. A claim never takes an entry that carries it; the mark clears when the issue's `updatedAt`
   moves past `issueUpdatedAt`, so the wake uses GitHub's clock and not the factory's.
-- **A missing check is completed, never the claim (ADR-0141).** Intake takes a queued issue whose
+- **A missing check is completed, never the claim (ADR-0142).** Intake takes a queued issue whose
   bullets lack checks: each claim without one is stamped on the queue entry as
   `queue.acceptanceMissing` (null or absent when every bullet carries a check, and while it is
   non-empty the WorkItem's `acceptance` may be empty — the schema's `allOf` says so). The manager

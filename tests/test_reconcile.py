@@ -31,7 +31,7 @@ class AcceptanceTest(unittest.TestCase):
         self.assertEqual(wi["description"], "Why and how.\n\nDepends on #2\n## Notes\nMore.")
 
     def test_a_bullet_without_a_check_is_queued_with_the_gap_named(self):
-        """A missing check no longer throws the issue away (ADR-0141): a factory:ready issue whose
+        """A missing check no longer throws the issue away (ADR-0142): a factory:ready issue whose
         bullets lack checks enters the queue, and its entry names each claim that has no check."""
         from jsonschema import Draft202012Validator
         from pathlib import Path
@@ -53,7 +53,7 @@ class AcceptanceTest(unittest.TestCase):
 
     def test_an_uncheckable_issue_outside_the_queue_is_refused(self):
         """Only a queued issue gets the gap completed by a manager: anywhere else the factory would
-        run work whose bullets name no check, so the refusal stands (ADR-0141)."""
+        run work whose bullets name no check, so the refusal stands (ADR-0142)."""
         with self.assertRaisesRegex(ValueError, "C has no check"):
             intake(REPO, {"number": 1, "title": "t", "state": "open", "labels": [],
                           "body": "## Acceptance\n- C has no check"})

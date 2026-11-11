@@ -386,7 +386,7 @@ class QueueTest(unittest.TestCase):
 
 
 class CompleteAcceptanceTest(unittest.TestCase):
-    """The manager completes a missing check, never the claim (ADR-0141): an issue whose bullets
+    """The manager completes a missing check, never the claim (ADR-0142): an issue whose bullets
     lack checks enters the queue with the gap named, the check is written onto the issue's own
     bullet with the owner watching, and nothing happens after a pass has started."""
 
