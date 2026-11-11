@@ -3362,6 +3362,7 @@ still returns a boolean instead of raising on a malformed entry.
 together, and an entry the write refuses is never labelled sandboxed. A caller that needs a
 different strictness must name it where it asks, instead of quietly comparing paths itself —
 which is how the three drifted apart.
+
 ## ADR-0139 — A fence that names paths the pass will not see is a hint, not a refusal
 
 **Context.** `agent-relay#287` was dispatched with a `Paths:` fence of four files that do not exist at
