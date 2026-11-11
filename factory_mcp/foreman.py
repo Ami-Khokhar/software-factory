@@ -880,7 +880,9 @@ class Foreman:
             return []  # a hand-edited or unreadable file must not stop the line; the audit log says why
 
     def _default_branch(self, repo):
-        return self.github.repository(repo)["default_branch"]
+        """The branch factory pull requests target and factory work starts from (ADR-0141): the
+        repo's `prBase` setting when one is set, else GitHub's default branch."""
+        return self.config.pr_base(repo) or self.github.repository(repo)["default_branch"]
 
     def _barrier(self, wi):
         """Active pause barriers holding this WorkItem (roles of the recovery graph), or [] (#233, #234).
@@ -1272,7 +1274,14 @@ class Foreman:
             self.store.log("unknown_worker_rerouted", {"unknown": unknown, "worker": worker}, wi["id"])
         recovery = self._recovery_decision(wi, avoid, from_worker, category, worker)
         attempt = sum(1 for o in orders if o["round"] == wi.get("gateRound", 0) and o["kind"] == kind)
-        base = self.github.branch_head(wi["repo"], self._default_branch(wi["repo"]))
+        base_branch = self._default_branch(wi["repo"])
+        base = self.github.branch_head(wi["repo"], base_branch)
+        if base is None:  # a prBase the remote does not hold: block, never fall back to another branch (ADR-0141)
+            self._finish_recovery(wi, False)
+            setting = " (the repo's prBase setting)" if self.config.pr_base(wi["repo"]) else ""
+            return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=(
+                f"{wi['repo']} has no {base_branch} branch{setting} for this WorkItem to start from; "
+                "create it, then retry this WorkItem")), "base_missing")
         continuation = wi.get("wip")
         if continuation and continuation.get("kind") != kind:
             wi = self._retire_wip(wi)
@@ -1300,7 +1309,8 @@ class Foreman:
         order = documents.workorder(wi, kind, attempt, self.config, base, findings,
                                     self._lessons(wi, findings),
                                     continuation.get("sha") if continuation else None,
-                                    project=self.store.project(wi["projectId"]) if wi.get("projectId") else None)
+                                    project=self.store.project(wi["projectId"]) if wi.get("projectId") else None,
+                                    base_branch=self.config.pr_base(wi["repo"]))
         try:
             order["constraints"]["protectedPaths"] = repos.protected_paths(
                 self.github, wi["repo"], base, self.config.protected_paths)

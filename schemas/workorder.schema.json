@@ -80,6 +80,11 @@
       "description": "True: the worker skips the repo's verify, which its container cannot run, and factory-mcp has a GitHub macOS runner run it on a scratch branch before it pushes the WorkItem's branch (ADR-0045). Absent means false."
     },
     "baseSha": { "type": ["string", "null"] },
+    "baseBranch": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The branch the pull request targets and the work starts from, when the repo sets a prBase (ADR-0141). Absent means GitHub's default branch; the runner measures the whole pull request against it."
+    },
     "headSha": {
       "type": ["string", "null"],
       "description": "The reviewed commit a fix must build on; must be re-checked before the worker starts."
