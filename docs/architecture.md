@@ -142,7 +142,9 @@ A tick comes from the background loop or from `factory_tick`.
    check runs on a private repo, so the gate's workflow run stands in; when the token cannot read
    that either, the verdicts and `FACTORY_GATE_WAIT_SECONDS` still move the WorkItem:
    - `queued`: nothing. The WorkItem waits for an orchestrator's claim and approval, so a tick adds no
-     action, no WorkOrder and no pass; the queue order and the claim are in `Foreman.next_queued`.
+     action, no WorkOrder and no pass; the queue order and the claim are in `Foreman.next_queued`, and
+     the claim returns the decision packet `_queued_view` builds: acceptance, paths, attempts, workers,
+     gate and dependencies (ADR-0136).
    - `ready`: dispatch an implement WorkOrder, unless the issue has a `Depends on #n` line and
      #n has not merged: then it waits, with `waitingOn: n` (ADR-0024). `changes_requested`:
      dispatch a fix WorkOrder that carries the gate's blocking findings as data.

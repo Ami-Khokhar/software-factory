@@ -145,6 +145,40 @@ class QueueTest(unittest.TestCase):
         self.assertEqual(wi["state"], "pr_open")
         self.assertIsNone(wi["queue"])
 
+    def test_a_claim_carries_what_a_manager_decides_on(self):
+        """The claim is the one read a manager gets: what the issue must satisfy, what it may touch,
+        what earlier passes cost and why they failed, and who may run it. Facts only, so a decision
+        about this WorkItem never needs a second call (ADR-0136)."""
+        view = self.claim()
+        self.assertEqual([c["claim"] for c in view["acceptance"]],
+                         ["default_config_path() raises when the user registry is missing",
+                          "README names the registry path"])
+        self.assertEqual(view["paths"], [])
+        self.assertEqual(view["attempts"]["used"], 0)
+        self.assertEqual(view["attempts"]["left"], 4)  # Config's default max_passes
+        self.assertEqual(view["attempts"]["failures"], [])
+        self.assertEqual(view["workers"]["ran"], [])
+        self.assertEqual(view["workers"]["failed"], [])
+        self.assertEqual(view["workers"]["allowed"], ["codex"])  # Config's only worker
+        self.assertIsNone(view["gate"])
+
+    def test_a_claim_reports_the_passes_that_ran_and_the_ones_that_failed(self):
+        """A manager that cannot see who ran and why they failed decides blind: the packet carries both
+        from the store, which already holds every pass and every failure."""
+        self.store.save_workorder({"id": "wo1", "workItemId": ID, "worker": "pi-deepseek-factory"})
+        self.store.save_workorder({"id": "wo2", "workItemId": ID, "worker": "pi-codex-factory"})
+        self.store.log("attempt_failed", {"worker": "pi-codex-factory", "cause": "timeout",
+                                          "reason": "the pass ran out of its 180 seconds"}, ID)
+        view = self.claim()
+        self.assertEqual(view["attempts"]["used"], 2)
+        self.assertEqual(view["attempts"]["left"], 2)
+        self.assertEqual(view["attempts"]["failures"],
+                         [{"worker": "pi-codex-factory", "cause": "timeout",
+                           "reason": "the pass ran out of its 180 seconds"}])
+        self.assertEqual(view["workers"]["ran"], [{"worker": "pi-deepseek-factory", "passes": 1},
+                                                  {"worker": "pi-codex-factory", "passes": 1}])
+        self.assertEqual(view["workers"]["failed"], ["pi-codex-factory"])
+
     def test_the_two_queue_tools_are_the_agent_writes(self):
         built = tools.build(self.store, self.foreman, agent=True)
         self.assertEqual(built["factory_queue_next"].fn({"by": "day-desk"})["next"]["workItem"]["id"], ID)

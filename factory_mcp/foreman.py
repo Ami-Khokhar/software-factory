@@ -946,8 +946,10 @@ class Foreman:
         return time.time() - at > QUEUE_LEASE
 
     def _queued_view(self, wi):
-        """A claimed entry as its agent needs it: the work, what it waits on and what is behind it.
-        The dependency is read, never acted on: the agent decides."""
+        """A claimed entry as its manager needs it: the work, what it must satisfy, what it may touch,
+        what earlier attempts cost and why they failed, who may run it, and what it waits on. Facts
+        only. Which of them matters, and what to do about it, is the agent's decision (ADR-0136), and
+        the pack is read here so that decision never needs a second read."""
         try:
             body = self._issue(wi["repo"], wi["issueNumber"]).get("body")
         except (ToolError, GitHubError):
@@ -955,8 +957,28 @@ class Foreman:
         deps = [{"issue": number, "status": status, "how": how}
                 for number in workitem.depends_on(body)
                 for status, how in [self._dependency(wi["repo"], number)]]
+        criteria, _ = workitem.parse_acceptance(body)
+        history = self.store.history(wi["id"])
+        failures = [{"worker": h["detail"].get("worker"), "cause": h["detail"].get("cause"),
+                     "reason": h["detail"].get("reason")}
+                    for h in history if h["action"] == "attempt_failed"]
+        orders = self.store.workorders(wi["id"])
+        ran = {}
+        for order in orders:  # every pass that started, whoever ran it and how often
+            ran[order.get("worker")] = ran.get(order.get("worker"), 0) + 1
+        used, passes = len(orders), self.config.max_passes
+        allowed = [agent for agent, _ in worker_ops.effective_workers(self.store, self.config)]
         return {"workItem": wi, "dependsOn": deps,
-                "queued": sum(1 for other in self.store.all() if other["state"] == "queued")}
+                "queued": sum(1 for other in self.store.all() if other["state"] == "queued"),
+                "acceptance": criteria,
+                "paths": workitem.paths_listed(body),
+                "attempts": {"used": used, "left": max(0, passes - used), "passes": passes,
+                             "failures": failures},
+                "workers": {"ran": [{"worker": agent, "passes": count} for agent, count in ran.items()],
+                            "failed": sorted({f["worker"] for f in failures if f["worker"]},
+                                             key=str),
+                            "allowed": allowed},
+                "gate": {"round": wi["gateRound"]} if wi.get("gateRound") else None}
 
     def _intake_urgent(self):
         """Take in a `factory:urgent` issue of an enabled repo the store does not know, so a waiting

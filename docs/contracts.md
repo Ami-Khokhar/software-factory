@@ -141,6 +141,15 @@ and direct the caller to the approved template. Credential mounts over container
   already uses that same scalar explicitly. A changed relay cap blocks an overridden dispatch
   before saving a WorkOrder or spending a pass and concludes any open recovery. A transport
   failure instead leaves the item pending for the next tick. Existing orders and the global default stay fixed.
+- **A claim carries the facts the manager decides on (ADR-0136).** `factory_queue_next` returns, with
+  the entry it claimed: `acceptance` (the issue's bullets, parsed), `paths` (its fence), `attempts`
+  (`used`, `left`, the pass ceiling, and every failure with its worker, cause and reason), `workers`
+  (`ran` with a pass count each, `failed`, `allowed`), `gate` (the round, or null) and `dependsOn`.
+  Facts only, and read once: an agent deciding retry, split, hold or another worker needs no second
+  call to make the decision it was handed.
+- **Choosing the worker is `factory_set_worker` (ADR-0029), for a queued WorkItem too (ADR-0136).**
+  There is one way to choose: the issue's `Worker:` lines, edited before the pass and read by the
+  tick. A queued WorkItem has had no pass, so the choice is allowed there.
 - **`WorkItem.queue` is the orchestrator's queue entry (ADR-0135).** Set while the state is
   `queued`, and null in every other state. `urgent` comes from `factory:urgent`, `at` is when it
   entered and is its place in the order, and `claimedBy`/`claimedAt` are written by the claim that
