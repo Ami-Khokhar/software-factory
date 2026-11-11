@@ -909,7 +909,8 @@ hermes -p day-desk cron create "every 10m" --no-agent --script factory-update.sh
 ```
 
 `factory drive-queue` lists each escalation Day Desk may answer as
-`o/r#13 is blocked (waiting 30m): verify exited 1`. The wait rounds down to 30-minute
+`o/r#13 is blocked (waiting 30m): verify exited 1`, and each issue waiting in the queue as
+`o/r#13 is queued`, which wakes Day Desk to claim it and hand it to a worker (ADR-0135). The wait rounds down to 30-minute
 steps for six hours, then rises in 120-minute steps and stops at 2880 minutes (48 hours,
 ADR-0109). It lists `o/r#13 asks question <questionId>` for a worker question nobody has
 answered. It also lists a stuck acceptance item of an active Project as

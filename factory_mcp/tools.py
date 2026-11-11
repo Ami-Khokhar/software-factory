@@ -10,7 +10,7 @@ from .mcp import Tool, ToolError
 # What Day Desk may call when it drives the factory with FACTORY_AGENT_TOKEN (ADR-0030). Setting up
 # a repo, its gate secrets, and the lessons workers read stay with the owner's token.
 AGENT_TOOLS = frozenset({"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons",
-                         "factory_queue_next", "factory_queue_approve",
+                         "factory_queue_next", "factory_queue_approve", "factory_queue_leave",
                          "factory_report", "factory_memory_events", "factory_memory_search", "factory_dream_status",
                          "factory_improvement_status",
                          "factory_check_worker", "factory_reload_workers", "factory_set_worker_enabled",
@@ -104,6 +104,8 @@ def build(store, foreman, agent=False):
                         reason = reason or f"member used {projects.MAX_MEMBER_PASSES} passes"
                 if project["state"] == "active":
                     row["leadBlockedBy"] = reason
+        if wi["state"] == "queued":
+            row["queue"] = foreman.queue_state(wi)
         question = wi.get("question") or {}
         if (wi["state"] in ("dispatching", "implementing") and question.get("text")
                 and not question.get("answer")):
@@ -320,8 +322,9 @@ def build(store, foreman, agent=False):
         Tool("factory_queue_approve",
              "Approve a claimed queue entry so the factory works on it: it leaves the queue for ready, "
              "and the next tick dispatches it through every existing guard. Refused for any WorkItem "
-             "that is not queued. Use it when the issue is worth a worker pass as it stands; to change "
-             "the issue first, edit it on GitHub and leave the entry queued.",
+             "that is not queued. Approve it when the issue is worth a worker pass as it stands. Leave "
+             "it queued for the owner when the case, or a change to its acceptance, goes to the owner, "
+             "and do not claim it again until the owner acts.",
              {"type": "object", "required": ["id", "by"], "additionalProperties": False,
               "properties": {"id": {"type": "string"},
                              "by": {"type": "string", "minLength": 1},
@@ -332,6 +335,19 @@ def build(store, foreman, agent=False):
                                                        "could not take it, naming the ones it could"}}},
              "write", lambda args: {"workItem": foreman.approve_queued(
                  args["id"], args["by"], args.get("note", ""), args.get("worker"))}),
+        Tool("factory_queue_leave",
+             "Record that a queued WorkItem is the owner's, not yours, and why in one line: it stays "
+             "queued, its claim is released, and the drive text says so, so you are not woken to decide "
+             "it again (ADR-0137). Use it for the cases the skill sends to the owner. The owner acting on "
+             "the issue puts the entry back in your hands.",
+             {"type": "object", "required": ["id", "by", "why"], "additionalProperties": False,
+              "properties": {"id": {"type": "string"},
+                             "by": {"type": "string", "minLength": 1,
+                                    "description": "the agent leaving it, like day-desk"},
+                             "why": {"type": "string", "minLength": 1,
+                                     "description": "the one line the owner reads"}}},
+             "write", lambda args: {"workItem": foreman.leave_for_owner(
+                 args["id"], args["by"], args["why"])}),
         Tool("factory_intake",
              "Create a WorkItem from an open GitHub issue in an allowlisted repo. The issue needs an "
              "'## Acceptance' list of '- <claim> — done when: <check>' bullets. Idempotent.",

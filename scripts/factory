@@ -10,7 +10,7 @@
   factory stop-project <id> <note>       hold a Project
   factory status [<owner/repo#n>]
   factory watch                           print each new owner blocker or material progress step (Hermes cron)
-  factory drive-queue                     the escalations Day Desk may still answer (its job's monitor)
+  factory drive-queue                     the escalations and queued issues Day Desk works (its monitor)
   factory report                          the last 7 days in one message: autonomy, escalations, lessons
   factory lessons-path                    the lessons file the service runs with, verified load
   factory retry  <owner/repo#n> <note>    try again; the note goes to the worker as a finding
@@ -207,9 +207,23 @@ def wait_bucket(minutes):
 
 def cmd_drive_queue(_):
     """For the monitor_script of Day Desk's driving job (ADR-0030): the escalations Day Desk may
-    still answer, one per line. Hermes runs the agent only when this output changes."""
+    still answer and the issues waiting in the queue, one per line. Hermes runs the agent only when
+    this output changes, so a queued line wakes it, and goes when the queue is drained (ADR-0135)."""
     workitems = call("factory_status")["workItems"]
     now = datetime.now(timezone.utc)
+    for wi in workitems:
+        if wi["state"] == "queued":
+            claim = wi.get("queue") if isinstance(wi.get("queue"), dict) else {}
+            # Three states, three lines, and the line changes exactly when the state does (ADR-0137):
+            # a live claim prints the plain line it printed before the claim, so a claim the agent just
+            # made wakes nobody; a lapsed claim says so, so an agent that claimed and died is woken to
+            # reclaim it; an entry left for the owner says so, and stays silent until the owner acts.
+            if claim.get("leftForOwner"):
+                print(f"{wi['id']} is queued (left for the owner)")
+            elif claim.get("expired"):
+                print(f"{wi['id']} is queued (the claim by {claim['by']} lapsed)")
+            else:
+                print(f"{wi['id']} is queued")
     for wi in workitems:
         if wi.get("agentMayResolve"):
             waiting = ""

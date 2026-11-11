@@ -3313,4 +3313,30 @@ rather than a workflow with an agent attached to the failures. The cost is varia
 same failure may decide differently, and the only record of why is the audit note the agent writes.
 That is the trade this factory makes, and the limits stay in code: dispatch, the pass budget, the push,
 the pull request and the merge are still the factory's, not the agent's (ADR-0133, ADR-0135).
+## ADR-0137 — A queue entry the owner holds is a record, not a memory
+
+**Context.** ADR-0135 gave the queue a claim, and the driver that wakes Day Desk prints a line per
+queued entry. Reviewing that driver found the hole: a claim that lapsed after a crash and an entry the
+agent decided to leave to the owner produce the same line, so nothing durable says who has it. The
+prompt told the agent to leave an owner's entry alone, which is the opposite of what a lapsed line
+means — reclaim it — and a prompt cannot remember which ids it left across a restart. An ordinary
+entry whose claim lapsed after a crash was therefore stranded for ever, and an entry left for the
+owner flapped: lapse, wake, reclaim, report, every fifteen minutes.
+
+**Decision.** `factory_queue_leave` writes the decision: `queue.leftForOwner` holds who left it, why,
+and when, and the claim is released, so nothing waits on an agent that has finished deciding. The
+drive text tells the three states apart: plain for nobody holds it, `(the claim by X lapsed)` for a
+wake that died and must be reclaimed, `(left for the owner)` for an entry that is the owner's. The
+entry goes back to the agent as a plain line when the owner acts on the issue: GitHub's `updated_at`
+is the only durable signal for that, and `reconcile` clears the mark when it moves.
+
+**Consequence.** The agent has three queue verbs — claim, approve, leave — and the store, not the
+prompt, is what keeps them apart. Two rules make the mark safe. A claim never takes an entry that
+carries it, and a claim is reported before the mark, so a hidden claim can never strand an entry. The
+mark is stamped with the issue's own `updated_at` at the moment it is left and compared stamp to stamp,
+so this machine's clock cannot clear it early or hold it for ever; any issue activity counts as the
+owner moving, not only the owner's own, because the alternative is a timeline read on every reconcile
+and a re-leave re-stamps the mark, so the wake is bounded by real activity rather than by time. The cost is a third write tool and one field on the entry, and the
+dependence on `updated_at`: an owner action that does not touch the issue, such as a chat instruction,
+is not seen. That is accepted, because a chat instruction is a decision the agent records itself.
 

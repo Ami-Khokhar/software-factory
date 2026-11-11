@@ -160,6 +160,10 @@ and direct the caller to the approved template. Credential mounts over container
   took it. A claim older than fifteen minutes is free again, so a crashed agent cannot strand an
   entry, and the store's optimistic version means a second claim loses rather than double-booking.
   An approval clears it and moves the item to `ready`.
+  `leftForOwner` is the orchestrator's record that it sent the entry to the owner (ADR-0137): `by`,
+  `why` (the one line the owner reads), `at`, and `issueUpdatedAt`, the issue's own stamp when it was
+  left. A claim never takes an entry that carries it; the mark clears when the issue's `updatedAt`
+  moves past `issueUpdatedAt`, so the wake uses GitHub's clock and not the factory's.
 - **`WorkItem.pendingRetry` is one durable Day Desk retry intent (ADR-0095).** Null or
   absent means none. `factory_queue_retry` writes it with its request-journal row in one
   transaction, sanitized and bounded, spending nothing and starting nothing: a replay of the

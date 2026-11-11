@@ -918,10 +918,12 @@ class Foreman:
         same entry, so it moves on rather than double-booking, and a claim past `QUEUE_LEASE` is
         free again so a crashed agent cannot strand an entry."""
         def order(wi):
-            entry = wi.get("queue") or {}
+            entry = wi.get("queue") if isinstance(wi.get("queue"), dict) else {}
             return (0 if entry.get("urgent") else 1, entry.get("at") or wi["updatedAt"])
         for wi in sorted((wi for wi in self.store.all() if wi["state"] == "queued"), key=order):
-            entry = wi.get("queue") or {}
+            entry = wi.get("queue") if isinstance(wi.get("queue"), dict) else {}
+            if entry.get("leftForOwner"):
+                continue  # the owner has it: claiming it back would undo the decision (ADR-0137)
             if entry.get("claimedBy") and not self._claim_expired(entry.get("claimedAt")):
                 continue
             if not self.store.acquire(wi["id"], self.holder):
@@ -973,6 +975,21 @@ class Foreman:
         return {"used": max(0, used), "passes": passes, "left": max(0, passes - used), "member": member,
                 "gateFixFirst": not member and not any(o.get("kind") == "fix" and o.get("round") == round_
                                                        for o in orders)}
+
+    def queue_state(self, wi):
+        """The claim on a queued entry as a reader sees it: who holds it, and whether that claim has
+        lapsed. The drive text changes exactly when a claim lapses, so an agent that claimed and died
+        is woken again to reclaim it (ADR-0135)."""
+        claim = wi.get("queue")
+        if not isinstance(claim, dict):
+            return None
+        if claim.get("claimedBy"):  # a claim outranks the mark: a hidden claim is a stranded entry
+            return {"by": claim["claimedBy"], "expired": self._claim_expired(claim.get("claimedAt")),
+                    "leftForOwner": None}
+        left = claim.get("leftForOwner")
+        if left:
+            return {"by": left.get("by"), "expired": False, "leftForOwner": left.get("why")}
+        return None
 
     def _queued_view(self, wi):
         """A claimed entry as its manager needs it: the work, what it must satisfy, what it may touch,
@@ -1060,6 +1077,42 @@ class Foreman:
                             + (" (this repo is local-only)" if local_only else "")
                             + ("; the gate reviewer's family is excluded" if excluded else ""))
         return {"worker": worker}
+
+    def leave_for_owner(self, workitem_id, by, why):
+        """The agent's third verb: this one is the owner's, and it says so in the store (ADR-0137).
+        Without the record, an entry a crashed claim released and one a person holds read the same, so
+        the prompt cannot keep them apart and the agent trades the same line with the owner every
+        fifteen minutes. The claim is released: nothing waits on an agent that has finished deciding."""
+        if not isinstance(by, str) or not by.strip():
+            raise ToolError("leaving a queue entry needs the name of the agent that left it")
+        if not isinstance(why, str) or not why.strip():
+            raise ToolError("leaving a queue entry needs the one line the owner reads")
+        if not self.store.acquire(workitem_id, self.holder):
+            raise ToolError(f"{workitem_id} is being ticked; try again")
+        try:
+            wi = self.store.get(workitem_id)
+            if wi is None:
+                raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
+            if wi["state"] != "queued":
+                raise ToolError(f"{workitem_id} is {wi['state']}; only a queued WorkItem is left to the owner")
+            entry = wi.get("queue") if isinstance(wi.get("queue"), dict) else workitem.queue_entry(
+                False, wi["updatedAt"])
+            holder = entry.get("claimedBy")
+            if holder and holder != by and not self._claim_expired(entry.get("claimedAt")):
+                raise ToolError(f"{workitem_id} is claimed by {holder} until its claim lapses; "
+                                "only the agent that holds it leaves it to the owner")
+            # Stamped with the issue's own clock, not this machine's: `owner_acted` compares two stamps
+            # from the same source, so a skewed local clock cannot clear the mark or strand it (ADR-0137).
+            observed = None
+            try:
+                observed = self._issue(wi["repo"], wi["issueNumber"]).get("updated_at")
+            except (ToolError, GitHubError):
+                observed = None
+            left = dict(entry, claimedBy=None, claimedAt=None,
+                        leftForOwner={"by": by, "why": why, "at": now(), "issueUpdatedAt": observed})
+            return self._write(wi, dict(wi, queue=left), "queue_left_for_owner", by=by, why=why)
+        finally:
+            self.store.release(workitem_id, self.holder)
 
     def approve_queued(self, workitem_id, by, note="", worker=None):
         """The orchestrator's yes: the entry leaves the queue for `ready`, and the next tick dispatches

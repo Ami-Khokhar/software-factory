@@ -177,9 +177,25 @@ def entry_state(names, queue=True):
     return "planned" if PROPOSED in names else "issued"
 
 
-def queue_entry(urgent, at):
-    """One orchestrator queue entry (ADR-0135), stamped with its place in the order."""
-    return {"urgent": bool(urgent), "at": at, "claimedBy": None, "claimedAt": None}
+def queue_entry(urgent, at, left_for_owner=None):
+    """One orchestrator queue entry (ADR-0135), stamped with its place in the order. `leftForOwner` is
+    the agent's own record that it sent this one to the owner: without it, an entry a crash released and
+    one a person holds are the same entry, and a prompt alone cannot tell them apart (ADR-0137)."""
+    return {"urgent": bool(urgent), "at": at, "claimedBy": None, "claimedAt": None,
+            "leftForOwner": left_for_owner}
+
+
+def owner_acted(entry, issue):
+    """Whether the issue has moved since the agent left it there, so the entry goes back to the agent.
+    Both stamps come from GitHub, so a skewed local clock cannot clear the mark or strand it; a mark
+    with no stamp was written by an older build or a truncated store, and is taken as moved rather than
+    left for ever (ADR-0137). Any issue activity counts, not only the owner's own: the alternative is a
+    timeline read on every reconcile, and a re-leave re-stamps the mark, so the wake is bounded."""
+    left = (entry or {}).get("leftForOwner") or {}
+    stamp = left.get("issueUpdatedAt")
+    if not stamp:
+        return True
+    return issue.get("updatedAt") != stamp
 
 
 def intake(repo, issue, queue=True):
@@ -211,7 +227,9 @@ def observe(github, wi):
     """The GitHub facts a WorkItem is reconciled against."""
     issue = github.issue(wi["repo"], wi["issueNumber"])
     facts = {"issue": {"state": issue["state"], "labels": sorted(labels(issue)),
-                       "dependsOn": depends_on(issue.get("body")), "workers": workers_named(issue.get("body"))},
+                       "dependsOn": depends_on(issue.get("body")), "workers": workers_named(issue.get("body")),
+                       # the owner's own action on the issue is the signal that wakes a queued entry
+                       "updatedAt": issue.get("updated_at")},
              "pr": None, "verdicts": [], "gate": None}
     pulls = github.pulls_for_branch(wi["repo"], wi["branch"])
     if pulls:
@@ -316,8 +334,13 @@ def reconcile(wi, facts, queue=True):
         elif wi["state"] == "queued":  # the label changed while it waited: re-order it, keep its claim
             urgent = URGENT in set(issue["labels"])
             entry = wi.get("queue") if isinstance(wi.get("queue"), dict) else queue_entry(urgent, wi["updatedAt"])
+            changed = None
             if bool(entry.get("urgent")) != urgent:
-                wi["queue"] = dict(entry, urgent=urgent)
+                changed = dict(entry, urgent=urgent)
+            if owner_acted(entry, issue):  # the owner acted: the entry is the agent's again
+                changed = dict(changed or entry, leftForOwner=None)
+            if changed is not None:
+                wi["queue"] = changed
         return wi
     if wi["state"] in BUSY:
         return wi

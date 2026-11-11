@@ -41,6 +41,32 @@ bound them. Setting up a repo (factory_bootstrap_repo, factory_add_repo) and the
 6. **Report the start** in one line with the Project id, the number of issues, the budget and the expected finish in IST.
    After that, say nothing until the Project is done or paused, unless the owner asks.
 
+## Work the queue
+
+An `o/r#13 is queued` line in the drive text is an accepted issue that reaches no worker until you
+hand it on. Drain the queue before you recover a member, and go on until the only lines left are the
+ones you left for the owner.
+- `o/r#13 is queued`: nobody holds it. Claim it.
+- `o/r#13 is queued (the claim by day-desk lapsed)`: a claim ran out, which is what a wake that died
+  looks like. Claim it again.
+- `o/r#13 is queued (left for the owner)`: you sent it to the owner. Leave it. It comes back to you
+  as a plain line when the owner acts on the issue.
+
+1. Call `factory_queue_next` with `by: "day-desk"`.
+   It claims one item, a `factory:urgent` one first, and returns none when the queue is empty.
+   Stop when the only line left is one you left for the owner: the drain ends there.
+2. Read that one item with `factory_status` and its id before you decide.
+3. Ordinary work: approve it with `factory_queue_approve`, with the `id` the claim returned and
+   `by: "day-desk"`.
+   It leaves the queue for `ready`, and the next tick dispatches it through every guard, as for any
+   accepted issue.
+4. Not ordinary work, as "What goes to the owner" lists it: leave it with `factory_queue_leave`, with
+   the one line the owner reads as `why`.
+   That is a record in the store, not a note to yourself: it survives a restart, it stops the drive
+   text from waking you again, and the owner acting on the issue takes it back.
+   You do not edit issues: no tool re-writes them, and the shell is no way in.
+5. Never approve an issue you have not read, and never spend a worker pass to find out what it says.
+
 ## Decide what the work needs
 
 The claim hands you the facts: `acceptance`, `paths`, `attempts` (used, left, and every failure with
@@ -389,7 +415,9 @@ Read `leadBlockedBy` for the reason.
 Use "What goes to the owner" for Project reports.
 Use the rules below for other WorkItems (non-members).
 
-The driving job runs this section when the escalations you may answer change. It answers a pending
+The driving job runs this section when this text changes: an escalation you may answer, a worker
+question, a stuck acceptance item, or an issue waiting in the queue. Work the queue first, then the
+escalations. It answers a pending
 `question` on a running WorkItem first, with "A worker's question". For each line of
 factory_status's workItems with `agentMayResolve` true:
 
