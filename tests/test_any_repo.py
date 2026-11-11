@@ -30,6 +30,7 @@ class AnyRepoTest(unittest.TestCase):
         subprocess.run(["git", "init", "-q", "--bare", str(root / "remote.git")], check=True)
         self.manifest = root / "config" / "repos.json"
         self.github = gated(FakeGitHub(), repo=NEW)
+        del self.github.label_names[NEW]  # not enabled yet: enabling it creates the factory labels
         # FakeGitHub opens the factory's own issues as the repo owner, "o", as the token's user would.
         self.foreman = Foreman(Store(":memory:"), self.github, Config(
             mcp_token="t", repos=frozenset(), repos_file=str(self.manifest), trusted_authors=frozenset({OWNER, "o"}),
@@ -49,7 +50,7 @@ class AnyRepoTest(unittest.TestCase):
         self.assertIn(NEW, self.foreman.config.repos)
         self.assertEqual([(e["name"], e["added_by"]) for e in load(str(self.manifest))],
                          [(NEW, f"{OWNER}, who marked {NEW}#3 factory:ready")])
-        self.assertEqual(self.github.labels[NEW], {"factory:ready", "factory:proposed", "factory:urgent"})
+        self.assertEqual(self.github.label_names[NEW], {"factory:ready", "factory:proposed", "factory:urgent"})
 
     def test_a_repo_that_fails_the_check_gets_one_comment_and_no_workitem(self):
         self.github.add_issue(BARE, 3, author=OWNER)
@@ -111,7 +112,7 @@ class AnyRepoTest(unittest.TestCase):
     def test_a_refused_plan_enables_nothing(self):
         with self.assertRaisesRegex(ToolError, "a plan has 1 to 10 issues"):
             self.foreman.start_plan(NEW, [], OWNER)
-        self.assertEqual((self.manifest.exists(), self.github.labels.get(NEW)), (False, None))
+        self.assertEqual((self.manifest.exists(), self.github.label_names.get(NEW)), (False, None))
 
     def test_approving_an_issue_in_an_unlisted_repo_that_passes_the_check_enables_it(self):
         self.github.add_issue(NEW, 4, labels=("factory:proposed",), author=OWNER)

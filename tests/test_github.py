@@ -69,6 +69,10 @@ class Api(BaseHTTPRequestHandler):
             body, link = [{"event": "labeled"},
                           {"event": "cross-referenced", "source": {"issue": {"number": 3, "pull_request": {}}}},
                           {"event": "cross-referenced", "source": {"issue": {"number": 77, "pull_request": {}}}}], ""
+        elif self.path == "/repos/o/r/labels?per_page=100":
+            body, link = [{"name": "factory:ready"}, {"name": "factory:proposed"}], ""
+        elif self.path == "/repos/o/none/labels?per_page=100":
+            body, link = [], ""
         elif self.path == "/repos/o/r/git/matching-refs/":
             body, link = [{"ref": "refs/tags/v1"}], ""
         elif self.path == "/repos/o/empty/git/matching-refs/":
@@ -157,6 +161,11 @@ class GitHubClientTest(unittest.TestCase):
     def test_a_file_is_its_decoded_text_or_none(self):
         self.assertEqual(self.github.file("o/r", ".github/pr-gatekeeper.json"), '{"verify": "make test"}')
         self.assertIsNone(self.github.file("o/r", ".github/missing.json"))
+
+    def test_labels_are_the_names_the_repo_has_and_an_empty_list_is_not_an_error(self):
+        self.assertEqual(self.github.labels("o/r"), {"factory:ready", "factory:proposed"})
+        self.assertEqual(Api.seen[0][0], "/repos/o/r/labels?per_page=100")
+        self.assertEqual(self.github.labels("o/none"), set())
 
     def test_open_pulls_asks_for_the_open_prs_into_a_base(self):
         self.assertEqual(self.github.open_pulls("o/r", "main"), [{"number": 3}])

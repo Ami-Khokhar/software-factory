@@ -244,9 +244,12 @@ def check(github, repo):
     else:
         agents_fix = by_hand or ("Call factory_bootstrap_repo: it opens a setup PR that adds the factory "
                                  "standard to AGENTS.md, for you to review and merge.")
+    missing = [name for name, _, _ in LABELS if name not in github.labels(repo)]
     return [_result("repo", True, f"{repo} exists and the factory's token can push to it", None), gate,
             gate_workflow,
-            _result("agents_md", bool(found) and found == wanted, detail, agents_fix)]
+            _result("agents_md", bool(found) and found == wanted, detail, agents_fix),
+            _result("labels", not missing, "missing " + ", ".join(missing) if missing else "the factory labels exist",
+                    "Call factory_add_repo <repo>: it creates the labels it finds missing.")]
 
 
 def problems(doc):
