@@ -970,9 +970,15 @@ class Foreman:
         lapsed. The drive text changes exactly when a claim lapses, so an agent that claimed and died
         is woken again to reclaim it (ADR-0135)."""
         claim = wi.get("queue")
-        if not isinstance(claim, dict) or not claim.get("claimedBy"):
+        if not isinstance(claim, dict):
             return None
-        return {"by": claim["claimedBy"], "expired": self._claim_expired(claim.get("claimedAt"))}
+        left = claim.get("leftForOwner")
+        if left:
+            return {"by": left.get("by"), "expired": False, "leftForOwner": left.get("why")}
+        if not claim.get("claimedBy"):
+            return None
+        return {"by": claim["claimedBy"], "expired": self._claim_expired(claim.get("claimedAt")),
+                "leftForOwner": None}
 
     def _queued_view(self, wi):
         """A claimed entry as its manager needs it: the work, what it must satisfy, what it may touch,
@@ -1060,6 +1066,31 @@ class Foreman:
                             + (" (this repo is local-only)" if local_only else "")
                             + ("; the gate reviewer's family is excluded" if excluded else ""))
         return {"worker": worker}
+
+    def leave_for_owner(self, workitem_id, by, why):
+        """The agent's third verb: this one is the owner's, and it says so in the store (ADR-0137).
+        Without the record, an entry a crashed claim released and one a person holds read the same, so
+        the prompt cannot keep them apart and the agent trades the same line with the owner every
+        fifteen minutes. The claim is released: nothing waits on an agent that has finished deciding."""
+        if not isinstance(by, str) or not by.strip():
+            raise ToolError("leaving a queue entry needs the name of the agent that left it")
+        if not isinstance(why, str) or not why.strip():
+            raise ToolError("leaving a queue entry needs the one line the owner reads")
+        if not self.store.acquire(workitem_id, self.holder):
+            raise ToolError(f"{workitem_id} is being ticked; try again")
+        try:
+            wi = self.store.get(workitem_id)
+            if wi is None:
+                raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
+            if wi["state"] != "queued":
+                raise ToolError(f"{workitem_id} is {wi['state']}; only a queued WorkItem is left to the owner")
+            entry = wi.get("queue") if isinstance(wi.get("queue"), dict) else workitem.queue_entry(
+                False, wi["updatedAt"])
+            left = dict(entry, claimedBy=None, claimedAt=None,
+                        leftForOwner={"by": by, "why": why, "at": now()})
+            return self._write(wi, dict(wi, queue=left), "queue_left_for_owner", by=by, why=why)
+        finally:
+            self.store.release(workitem_id, self.holder)
 
     def approve_queued(self, workitem_id, by, note="", worker=None):
         """The orchestrator's yes: the entry leaves the queue for `ready`, and the next tick dispatches

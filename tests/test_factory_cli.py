@@ -808,6 +808,14 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(self.project_run([], lapsed, command=cli.cmd_drive_queue),
                          ["o/r#12 is queued (the claim by day-desk lapsed)"])
 
+    def test_drive_queue_says_an_entry_is_the_owners_and_does_not_wake_for_it(self):
+        """A line saying the owner has it must be stable: Hermes wakes on change, so a line that changed
+        every poll would trade the same message with the owner for ever (ADR-0137)."""
+        queued = {"id": "o/r#12", "state": "queued",
+                  "queue": {"by": "day-desk", "expired": False, "leftForOwner": "needs a decision"}}
+        self.assertEqual(self.project_run([], queued, command=cli.cmd_drive_queue),
+                         ["o/r#12 is queued (left for the owner)"])
+
     def test_drive_queue_puts_the_queue_before_the_escalations(self):
         """The skill drains the queue before it recovers a member, so the wake has to show the queue
         first: a reorder that hides it behind an escalation would change what the agent reads first."""

@@ -125,10 +125,9 @@ class ProfileTest(unittest.TestCase):
         queue = text[text.index("## Work the queue"):text.index("## Decide what the work needs")]
         self.assertLess(text.index("## Work the queue"), text.index("## Decide what the work needs"))
         for phrase in ("Drain the queue before you recover a member", "`factory_queue_next`",
-                       '`by: "day-desk"`', "`factory:urgent` one first", "returns none when the queue is empty",
+                       "`factory_queue_leave`", "left for the owner", '`by: "day-desk"`', "`factory:urgent` one first", "returns none when the queue is empty",
                        "`factory_status` and its id before you decide", "`factory_queue_approve`",
-                       "leave it queued, do not approve it", "Stop when the only line left is one you left",
-                       "do not claim it again", "do not report it again",
+                       "Leave it. It comes back to you", "a record in the store, not a note to yourself",
                        "You do not edit issues", "Never approve an issue you have not read"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, queue)

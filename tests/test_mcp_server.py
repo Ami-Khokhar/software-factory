@@ -165,6 +165,7 @@ class McpServerTest(unittest.TestCase):
                                  "factory_report", "factory_memory_events", "factory_memory_search", "factory_dream_status", "factory_improvement_status", "factory_docker_status", "factory_project_status"})
         self.assertEqual(writes, {"factory_improvement_validate", "factory_dream_run", "factory_memory_put", "factory_intake", "factory_tick", "factory_resolve_human",
                                   "factory_queue_next", "factory_queue_approve",
+                                  "factory_queue_leave",
                                   "factory_answer_question",
                                   "factory_propose_issue", "factory_add_repo", "factory_approve_issue",
                                   "factory_bootstrap_repo", "factory_approve_lesson",
@@ -206,7 +207,8 @@ class McpServerTest(unittest.TestCase):
         it may call. A new tool joins AGENT_TOOLS on purpose."""
         listed = {t["name"] for t in self.rpc("tools/list", token=AGENT)["result"]["tools"]}
         self.assertEqual(listed, {"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons",
-                                  "factory_queue_next", "factory_queue_approve", "factory_report", "factory_memory_events", "factory_memory_search", "factory_dream_status", "factory_improvement_status",
+                                  "factory_queue_next", "factory_queue_approve", "factory_queue_leave",
+                                  "factory_report", "factory_memory_events", "factory_memory_search", "factory_dream_status", "factory_improvement_status",
                                   "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
                                   "factory_start_project",
                                   "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
@@ -314,10 +316,13 @@ class McpServerTest(unittest.TestCase):
                             queue={"at": stamp(10), "claimedBy": "day-desk"}))  # no stamp: never strands it
         result = self.rpc("tools/call", {"name": "factory_status", "arguments": {}})["result"]
         rows = {row["id"]: row for row in json.loads(result["content"][0]["text"])["workItems"]}
-        self.assertEqual(rows["o/r#1"]["queue"], {"by": "day-desk", "expired": False})
-        self.assertEqual(rows["o/r#2"]["queue"], {"by": "day-desk", "expired": True})
+        self.assertEqual(rows["o/r#1"]["queue"], {"by": "day-desk", "expired": False,
+                                                 "leftForOwner": None})
+        self.assertEqual(rows["o/r#2"]["queue"], {"by": "day-desk", "expired": True,
+                                                 "leftForOwner": None})
         self.assertIsNone(rows["o/r#3"]["queue"])
-        self.assertEqual(rows["o/r#4"]["queue"], {"by": "day-desk", "expired": True})
+        self.assertEqual(rows["o/r#4"]["queue"], {"by": "day-desk", "expired": True,
+                                                 "leftForOwner": None})
 
     def test_protocol_errors(self):
         self.assertEqual(self.rpc("nope")["error"]["code"], -32601)

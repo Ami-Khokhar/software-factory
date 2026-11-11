@@ -44,8 +44,13 @@ bound them. Setting up a repo (factory_bootstrap_repo, factory_add_repo) and the
 ## Work the queue
 
 An `o/r#13 is queued` line in the drive text is an accepted issue that reaches no worker until you
-hand it on, and `o/r#13 is queued (the claim by day-desk lapsed)` is the same line with the claim run
-out. Drain the queue before you recover a member, and go on until it is empty.
+hand it on. Drain the queue before you recover a member, and go on until the only lines left are the
+ones you left for the owner.
+- `o/r#13 is queued`: nobody holds it. Claim it.
+- `o/r#13 is queued (the claim by day-desk lapsed)`: a claim ran out, which is what a wake that died
+  looks like. Claim it again.
+- `o/r#13 is queued (left for the owner)`: you sent it to the owner. Leave it. It comes back to you
+  as a plain line when the owner acts on the issue.
 
 1. Call `factory_queue_next` with `by: "day-desk"`.
    It claims one item, a `factory:urgent` one first, and returns none when the queue is empty.
@@ -55,12 +60,10 @@ out. Drain the queue before you recover a member, and go on until it is empty.
    `by: "day-desk"`.
    It leaves the queue for `ready`, and the next tick dispatches it through every guard, as for any
    accepted issue.
-4. Not ordinary work, as "What goes to the owner" lists it: leave it queued, do not approve it, and
-   tell the owner in one line why.
-   An item you left queued for the owner is settled until the owner acts, and you have already told
-   the owner why: do not report it again either.
-   When its line says the claim lapsed, leave it alone and do not claim it again, or you and the
-   owner trade the same line every fifteen minutes.
+4. Not ordinary work, as "What goes to the owner" lists it: leave it with `factory_queue_leave`, with
+   the one line the owner reads as `why`.
+   That is a record in the store, not a note to yourself: it survives a restart, it stops the drive
+   text from waking you again, and the owner acting on the issue takes it back.
    You do not edit issues: no tool re-writes them, and the shell is no way in.
 5. Never approve an issue you have not read, and never spend a worker pass to find out what it says.
 

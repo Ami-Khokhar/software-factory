@@ -244,6 +244,36 @@ class QueueTest(unittest.TestCase):
         self.assertNotIn("chosenWorker", self.store.get(ID))
         self.foreman.tick(ID)
         self.assertEqual(self._dispatched_to(), "codex")  # the routing policy
+    def test_leaving_it_for_the_owner_is_a_record_not_a_note_and_it_releases_the_claim(self):
+        """The gate's finding on the driver: a lapsed claim and an entry the owner holds read the same,
+        so a prompt alone cannot keep them apart and the agent trades the line with the owner for ever.
+        The store holds the difference (ADR-0137)."""
+        self.claim()
+        wi = self.foreman.leave_for_owner(ID, "day-desk", "the acceptance needs a person's decision")
+        self.assertEqual(wi["state"], "queued")
+        self.assertIsNone(wi["queue"]["claimedBy"])  # nothing waits on an agent that has decided
+        self.assertEqual(wi["queue"]["leftForOwner"]["why"],
+                         "the acceptance needs a person's decision")
+        self.assertEqual(self.foreman.queue_state(wi),
+                         {"by": "day-desk", "expired": False,
+                          "leftForOwner": "the acceptance needs a person's decision"})
+
+    def test_the_owner_acting_gives_the_entry_back_to_the_agent(self):
+        """An entry the owner holds must come back when the owner moves: the issue's update stamp is the
+        only durable signal, and without it the line never changes again and nobody is woken."""
+        self.claim()
+        self.foreman.leave_for_owner(ID, "day-desk", "needs a decision")
+        self.assertEqual(self.foreman.queue_state(self.store.get(ID))["leftForOwner"], "needs a decision")
+        self.github.issues[(REPO, 7)]["updated_at"] = "2099-01-01T00:00:00Z"  # the owner edits it
+        wi = self.foreman.tick(ID)["workItem"]
+        self.assertIsNone((wi["queue"] or {}).get("leftForOwner"))
+
+    def test_only_a_queued_workitem_is_left_for_the_owner(self):
+        self.foreman.approve_queued(ID, "day-desk")
+        with self.assertRaisesRegex(ToolError, "only a queued"):
+            self.foreman.leave_for_owner(ID, "day-desk", "why")
+        with self.assertRaisesRegex(ToolError, "one line the owner reads"):
+            self.foreman.leave_for_owner(ID, "day-desk", "  ")
 
     def test_the_two_queue_tools_are_the_agent_writes(self):
         built = tools.build(self.store, self.foreman, agent=True)

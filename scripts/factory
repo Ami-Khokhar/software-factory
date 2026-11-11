@@ -214,12 +214,16 @@ def cmd_drive_queue(_):
     for wi in workitems:
         if wi["state"] == "queued":
             claim = wi.get("queue") if isinstance(wi.get("queue"), dict) else {}
-            # A live claim prints the plain line it printed before the claim, so the text does not change
-            # and Hermes does not wake for a claim it just made. A lapsed one says so, which changes the
-            # text exactly when the entry can be claimed again (ADR-0135): an agent that claimed and then
-            # died is woken to reclaim it, instead of waiting for an unrelated line to move.
-            print(f"{wi['id']} is queued" if not claim.get("expired")
-                  else f"{wi['id']} is queued (the claim by {claim['by']} lapsed)")
+            # Three states, three lines, and the line changes exactly when the state does (ADR-0137):
+            # a live claim prints the plain line it printed before the claim, so a claim the agent just
+            # made wakes nobody; a lapsed claim says so, so an agent that claimed and died is woken to
+            # reclaim it; an entry left for the owner says so, and stays silent until the owner acts.
+            if claim.get("leftForOwner"):
+                print(f"{wi['id']} is queued (left for the owner)")
+            elif claim.get("expired"):
+                print(f"{wi['id']} is queued (the claim by {claim['by']} lapsed)")
+            else:
+                print(f"{wi['id']} is queued")
     for wi in workitems:
         if wi.get("agentMayResolve"):
             waiting = ""
