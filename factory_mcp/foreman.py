@@ -78,6 +78,7 @@ WIP_MOVES_MAX = 2  # how far a salvage wip may move forward before timeouts stop
 PARTIAL_WORK = ("A worker ran out of time. Its unfinished work is the commit you start from. "
                 "Check each acceptance bullet against the code, not against any report. "
                 "Keep what is right, fix or remove the rest, and finish.")
+FENCE_MISSING = "the paths fence names paths absent at the base"  # a hint, never a refusal (#544)
 # Reason text is incident identity (ADR-0081), and a commit sha or the attempt count a reason
 # narrates is not material: both read the same every time they are said again.
 SHA40 = re.compile(r"\b[0-9a-f]{40}\b")
@@ -134,6 +135,7 @@ class Foreman:
         self.relay = relay
         self.runtime_lock = threading.RLock()
         self.holder = uuid.uuid4().hex
+        self._trees = {}  # (repo, sha) -> the paths at that commit, for the fence hint (#544)
         self._skipped = set()  # rebuild refusals already logged by this process
 
     def intake(self, repo, number, issue=None, proof=None):
@@ -956,6 +958,22 @@ class Foreman:
             return True
         return time.time() - at > QUEUE_LEASE
 
+    def _fence_missing(self, wi, fence):
+        """The fence globs that match no path at the base commit, logged and read by the worker. One
+        tree read per repo and commit per process: a base tree does not move under a running factory."""
+        try:
+            base = self.github.branch_head(wi["repo"], self._default_branch(wi["repo"]))
+            key = (wi["repo"], base)
+            if key not in self._trees:
+                self._trees[key] = self.github.tree(wi["repo"], base)
+            paths = self._trees[key]
+        except GitHubError:
+            return []  # an unreadable tree is not a reason to say anything about the fence
+        missing = [glob for glob in fence if not any(fnmatch.fnmatchcase(path, glob) for path in paths)]
+        if missing:
+            self.store.log("fence_missing", {"base": base, "paths": missing}, wi["id"])
+        return missing
+
     def budget(self, wi, orders=None):
         """What a pass costs this WorkItem, as the dispatch decision computes it: the member cap for a
         Project member, else the pass ceiling minus what a person's retry wrote off — and the gate's
@@ -1196,6 +1214,18 @@ class Foreman:
         named, unknown = self._allowed_named(named, workers)
         failed = {h["detail"].get("worker") for h in self.store.history(wi["id"])
                   if h["action"] == "attempt_failed"}
+        # A fence that matches nothing at the base is worth saying out loud before the pass, not after:
+        # an issue built from another branch sends its worker looking for files that are not there, and
+        # a worker that cannot find its fence answers with a question instead of a change (#544). It is
+        # a warning and not a refusal: a fence that names a file the pass creates matches nothing too.
+        fence = wi.get("paths") or []  # set at intake from the issue's Paths: lines (ADR-0087)
+        missing = self._fence_missing(wi, fence) if fence else []
+        if missing:  # the worker reads this before it looks for the files
+            findings = [dict(fingerprint=FENCE_MISSING, path=None, line=None, test=None, fix=None,
+                             problem=("this WorkItem's paths fence names paths that do not exist at the "
+                                      "base commit: " + ", ".join(missing)
+                                      + ". If this pass creates them, ignore this. If not, the issue is"
+                                      " scoped against another branch and the change belongs there."))] + list(findings)
         # After a timeout-class failure the next attempt prefers another model family (ADR-0081): the
         # family that just ran out of the clock is the suspect, and this preference runs before the
         # two-strike block ever sees the case. The gate reviewer's family is excluded outright (ADR-0085).

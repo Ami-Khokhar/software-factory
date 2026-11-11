@@ -202,6 +202,20 @@ class FakeGitHub:
         self.issues[(repo, number)]["body"] = body
         return self.issues[(repo, number)]
 
+    def tree(self, repo, ref):
+        """Every path the fake has for the repo: the contents keys name one file each."""
+        paths = set()
+        for key in self.contents:
+            if key[0] != repo:
+                continue
+            path = key[1]
+            if not isinstance(path, str):
+                continue
+            if len(key) == 3 and key[2] not in (None, ref):  # a file only at another ref
+                continue
+            paths.add(path)
+        return paths
+
     def labels(self, repo):
         return set(self.label_names.get(repo, ()))
 

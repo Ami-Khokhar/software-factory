@@ -310,6 +310,28 @@ class QueueTest(unittest.TestCase):
         self.foreman.tick(ID)
         self.assertIsNone((self.store.get(ID)["queue"] or {}).get("leftForOwner"))
 
+    def test_a_fence_that_matches_nothing_at_the_base_reaches_the_worker_before_the_pass(self):
+        """The worker that cannot find its fence answers with a question and the pass is spent (#544).
+        The hint says which paths are missing, and it is a hint: a pass may create them."""
+        self.github.contents[(REPO, "src/app.py")] = "x = 1\n"
+        self.store.put(dict(self.store.get(ID), paths=["src/app.py", "src/absent.py"]))  # as intake set it
+        self.claim()
+        self.foreman.approve_queued(ID, "day-desk")
+        self.foreman.tick(ID)
+        order = self.store.workorders(ID)[0]
+        problems = [f["problem"] for f in order.get("findingsToAddress") or []]
+        self.assertTrue(any("src/absent.py" in p and "do not exist" in p for p in problems),
+                        problems)
+        self.assertIn("fence_missing", {row["action"] for row in self.store.history(ID)})
+
+    def test_a_fence_that_matches_the_base_says_nothing_and_costs_no_tree_read(self):
+        self.github.contents[(REPO, "src/app.py")] = "x = 1\n"
+        self.store.put(dict(self.store.get(ID), paths=["src/*.py"]))  # as intake set it
+        self.claim()
+        self.foreman.approve_queued(ID, "day-desk")
+        self.foreman.tick(ID)
+        self.assertNotIn("fence_missing", {row["action"] for row in self.store.history(ID)})
+
     def test_the_two_queue_tools_are_the_agent_writes(self):
         built = tools.build(self.store, self.foreman, agent=True)
         self.assertEqual(built["factory_queue_next"].fn({"by": "day-desk"})["next"]["workItem"]["id"], ID)

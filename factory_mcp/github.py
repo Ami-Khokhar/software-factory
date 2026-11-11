@@ -241,6 +241,12 @@ class GitHub:
         """Replace an issue's body."""
         return self._request("PATCH", f"{self.api}/repos/{repo}/issues/{number}", {"body": body})[0]
 
+    def tree(self, repo, ref):
+        """Every path in the tree at `ref`, recursively. A page-at-a-time read: GitHub truncates the
+        response past 100k entries, and a truncated list is still a fact about the paths it names."""
+        doc = self._request("GET", f"{self.api}/repos/{repo}/git/trees/{urllib.parse.quote(ref)}?recursive=1")[0]
+        return {entry["path"] for entry in doc.get("tree") or [] if entry.get("type") == "blob"}
+
     def labels(self, repo):
         """The names of the labels on `repo`. A repo with none is an empty set, not an error."""
         return {label["name"] for label in self._get_all(f"/repos/{repo}/labels")}
