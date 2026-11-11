@@ -364,7 +364,14 @@ and direct the caller to the approved template. Credential mounts over container
   entry per phase with how long it took, the exit code where there is one, and a tail of its
   output — and it redacts each tail: copied credentials, configured secret values, environment
   values and the WorkOrder's command payload never reach the relay, and a harness timeout keeps
-  the output it had printed. The exit code rides where the command has one: a failing checkout
+  the output it had printed. After a non-zero harness exit it also reads the pinned harness's own
+  log in the sandbox home — opencode's `log/opencode.log` under its state directory, pi's newest
+  session file under `PI_CODING_AGENT_DIR` — from the credential mount that backs that directory
+  (#560), and appends the log's last error line, redacted like every tail, after the harness
+  execution phase's tail and the Result's `diagnostics.tail`; a tail that takes a note stays
+  within the 4000-character cap, and a missing or unreadable log, or a harness the runner cannot
+  pin (neither opencode nor pi), changes nothing. The exit code rides where the command has one:
+  a failing checkout
   names its git exit, a setup phase its docker exit, and patch collection the sandbox's exit.
   A setup-phase failure of the runner's `preflight` (#193) is also the environment to the pause
   consumer: the worker checks the Docker daemon, the configured worker image, the harness inside
