@@ -527,7 +527,10 @@ class WorkerOpsTest(unittest.TestCase):
         self.assertEqual(len(self.relay.tasks), 1)
         self.assertEqual(self.relay.reloads, 1)
 
-    def test_deactivation_blocks_a_pending_submission_without_buying_another_pass(self):
+    def test_deactivation_holds_a_pending_submission_without_buying_another_pass(self):
+        """The guard stays, the mechanism changes (#522). A worker taken out while its order waits
+        holds the WorkItem with the reason, instead of raising out of the tick, which left the item
+        in `dispatching` for as long as the fault lasted."""
         from dataclasses import replace
         from factory_mcp.foreman import Foreman
         from tests.fakes import FakeGitHub
@@ -545,10 +548,58 @@ class WorkerOpsTest(unittest.TestCase):
         order = self.store.workorders("o/r#7")[0]
         self.relay.down = False
         self.activate(False)
-        with self.assertRaisesRegex(ToolError, "activation changed"):
-            foreman.submit(wi, order)
+        held = foreman.submit(wi, order)
+        self.assertEqual((held["state"], held["activeWorkOrderId"]), ("human_waiting", order["id"]))
+        self.assertRegex(held["blockedOn"], "is disabled")
         self.assertEqual(len(self.store.workorders("o/r#7")), 1)
         self.assertEqual(self.relay.tasks, {})
+
+    def test_a_worker_that_loses_its_image_holds_the_workitem_once_and_resumes_after_a_repair(self):
+        """#522: one unchanged fault is one incident, not one audit row per tick, and the WorkItem
+        leaves `dispatching` so its person can read the reason. The repair is a person's or Day
+        Desk's act (ADR-0094), so the test re-enables and retries as they would."""
+        from dataclasses import replace
+        from factory_mcp.foreman import Foreman
+        from tests.fakes import FakeGitHub
+        self.probe_processes()
+        self.activation_tools()["factory_check_worker"].fn({"worker": self.agent["id"], "by": "owner"})
+        self.activate()
+        github = FakeGitHub()
+        github.add_issue("o/r", 7)
+        foreman = Foreman(self.store, github, replace(self.config, repos=frozenset({"o/r"})), self.relay)
+        foreman.intake("o/r", 7)
+        foreman.set_worker("o/r#7", [self.agent["id"]], "owner")
+        self.relay.down = True  # the intent is written, the relay call is not
+        self.assertEqual(foreman.tick("o/r#7")["workItem"]["state"], "dispatching")
+        order = self.store.workorders("o/r#7")[0]
+        self.relay.down = False
+        with mock.patch.object(worker_ops, "_image_id", return_value=None):  # OrbStack is gone
+            held = foreman.submit(self.store.get("o/r#7"), order)
+            self.assertEqual(held["state"], "human_waiting")
+            self.assertIn("worker image is unavailable", held["blockedOn"])
+            rows = len(self.store.history("o/r#7"))
+            for _ in range(10):  # an unchanged fault never re-arms, so a tick writes nothing
+                self.assertEqual(foreman.tick("o/r#7")["workItem"]["state"], "human_waiting")
+            self.assertEqual(len(self.store.history("o/r#7")), rows)
+            self.relay.down = True  # a relay that cannot answer adds nothing either
+            for _ in range(5):
+                self.assertEqual(foreman.tick("o/r#7")["workItem"]["state"], "human_waiting")
+            self.assertEqual(len(self.store.history("o/r#7")), rows)
+            self.relay.down = False
+            # nothing runs while it waits, so the repairs a person needs are not refused as live work
+            self.assertFalse(foreman._worker_live(held))
+            self.assertEqual(foreman.set_timeout("o/r#7", None, "owner")["id"], "o/r#7")
+        self.assertEqual(len(self.store.workorders("o/r#7")), 1)  # one order, no second task
+        self.assertEqual(self.relay.tasks, {})
+        # the fault clears by itself: the next tick resumes that same order, under its own key
+        resumed = foreman.tick("o/r#7")["workItem"]
+        self.assertEqual(resumed["state"], "implementing")
+        self.assertTrue(foreman._worker_live(resumed))  # a running pass is still live
+        with self.assertRaisesRegex(ToolError, "worker running now"):
+            foreman.set_timeout("o/r#7", None, "owner")
+        self.assertEqual(len(self.store.workorders("o/r#7")), 1)
+        self.assertEqual(self.store.workorders("o/r#7")[0]["idempotencyKey"], order["idempotencyKey"])
+        self.assertEqual(len(self.relay.tasks), 1)
 
 
 if __name__ == "__main__":
