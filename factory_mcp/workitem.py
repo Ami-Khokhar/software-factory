@@ -9,7 +9,7 @@ from .github import GitHubError
 from .store import now
 from .verdict import blockers, verdicts
 
-READY, PROPOSED = "factory:ready", "factory:proposed"
+READY, PROPOSED, URGENT = "factory:ready", "factory:proposed", "factory:urgent"
 TERMINAL = frozenset({"closed", "cancelled", "exhausted"})
 # The Foreman owns these: a worker is running, or a human holds the WorkItem.
 BUSY = frozenset({"dispatching", "implementing", "human_waiting", "blocked"})
@@ -167,7 +167,22 @@ def paths_listed(body):
             for glob in (part.strip() for part in line.split(",")) if glob]
 
 
-def intake(repo, issue):
+def entry_state(names, queue=True):
+    """The state a label set puts an issue in: `factory:urgent` and `factory:ready` queue it for the
+    orchestrator (ADR-0135), `factory:proposed` records it without accepting it, and nothing at all
+    means the factory has taken it and nobody has accepted the work. With the queue off, a label
+    means `ready` as it always did, because nothing would drain the queue."""
+    if READY in names or URGENT in names:
+        return "queued" if queue else "ready"
+    return "planned" if PROPOSED in names else "issued"
+
+
+def queue_entry(urgent, at):
+    """One orchestrator queue entry (ADR-0135), stamped with its place in the order."""
+    return {"urgent": bool(urgent), "at": at, "claimedBy": None, "claimedAt": None}
+
+
+def intake(repo, issue, queue=True):
     """A new WorkItem (stateVersion 0) for an open issue, or a ValueError saying what is missing."""
     if "pull_request" in issue:
         raise ValueError(f"{repo}#{issue['number']} is a pull request, not an issue")
@@ -179,7 +194,7 @@ def intake(repo, issue):
                          "'- <claim> — done when: <check>' bullets. Without a check: "
                          + ("; ".join(missing) or "no bullets found"))
     names = labels(issue)
-    state = "ready" if READY in names else "planned" if PROPOSED in names else "issued"
+    state = entry_state(names, queue)
     stamp = now()
     return {"schemaVersion": "factory.workitem/v1", "id": workitem_id(repo, issue["number"]),
             "repo": repo, "issueNumber": issue["number"], "goal": issue["title"],
@@ -188,6 +203,7 @@ def intake(repo, issue):
             "branch": branch_for(issue["number"]), "prNumber": None,
             "headSha": None, "reviewedSha": None, "gateRound": 0, "attempts": [], "blockers": [],
             "pendingRetry": None, "projectId": None, "state": state, "stateVersion": 0,
+            "queue": queue_entry(URGENT in names, stamp) if state == "queued" else None,
             "createdAt": stamp, "updatedAt": stamp}
 
 
@@ -274,7 +290,7 @@ def gated(facts):
     return any(v["outcome"] == "MERGE" and v["headSha"] == head for v in facts["verdicts"])
 
 
-def reconcile(wi, facts):
+def reconcile(wi, facts, queue=True):
     """The WorkItem moved to what GitHub says is true. Returns a new dict; never mutates."""
     wi = dict(wi)
     if wi["state"] in TERMINAL:
@@ -294,8 +310,14 @@ def reconcile(wi, facts):
         return wi
     if pr is None:
         if wi["state"] in ("issued", "planned"):
-            names = set(issue["labels"])
-            wi["state"] = "ready" if READY in names else "planned" if PROPOSED in names else "issued"
+            wi["state"] = entry_state(set(issue["labels"]), queue)
+            if wi["state"] == "queued" and not wi.get("queue"):
+                wi.update(queue=queue_entry(URGENT in set(issue["labels"]), wi.get("updatedAt")))
+        elif wi["state"] == "queued":  # the label changed while it waited: re-order it, keep its claim
+            urgent = URGENT in set(issue["labels"])
+            entry = wi.get("queue") if isinstance(wi.get("queue"), dict) else queue_entry(urgent, wi["updatedAt"])
+            if bool(entry.get("urgent")) != urgent:
+                wi["queue"] = dict(entry, urgent=urgent)
         return wi
     if wi["state"] in BUSY:
         return wi
@@ -323,8 +345,12 @@ def reconcile(wi, facts):
                 "fix; read its latest comment, then retry with a note, regate or close"))
     elif wi["state"] == "changes_requested" and pr["headSha"] != wi.get("reviewedSha"):
         wi["state"] = "reviewing"  # someone pushed after the verdict; the gate re-runs on it
-    elif wi["state"] in ("issued", "planned", "ready"):
-        wi["state"] = "pr_open"  # rebuilt from GitHub: the PR exists already
+    elif wi["state"] in ("issued", "planned", "ready", "queued"):
+        # Rebuilt from GitHub: the PR exists already, so a queue entry waiting for a decision is stale.
+        # A verdict on that head has already put it in its own state above, and the entry goes with it.
+        wi["state"] = "pr_open"
+    if wi["state"] != "queued":
+        wi["queue"] = None  # only a queued WorkItem carries an entry (ADR-0135)
     if wi["state"] == "pr_open" and facts["gate"]:
         wi["state"] = "reviewing"
     # a run that started before the last regate is the one the regate asked to repeat, not its answer;

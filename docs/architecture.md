@@ -92,7 +92,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/server.py` | Streamable HTTP on loopback: `POST /mcp` with the bearer token, `POST /worker/ask` and `POST /worker/memory` with a pass's own token (ADR-0098, ADR-0117), the background tick loop |
 | `factory_mcp/mcp.py` | The MCP protocol: one JSON-RPC message in, one response out, no I/O |
 | `factory_mcp/tools.py` | The tools, and whether each one reads or writes |
-| `factory_mcp/foreman.py` | The Foreman: intake, rebuild, tick, dispatch, poll a task, open a PR, and the person's acts (resolve, approve an issue, start a plan, add a repo, bootstrap a repo, approve or retire a lesson) |
+| `factory_mcp/foreman.py` | The Foreman: intake, rebuild, the orchestrator queue (claim, approve), tick, dispatch, poll a task, open a PR, and the person's acts (resolve, approve an issue, start a plan, add a repo, bootstrap a repo, approve or retire a lesson) |
 | `factory_mcp/workitem.py` | Intake from an issue, observing GitHub, and `reconcile`: the fact-driven half of the state machine |
 | `factory_mcp/documents.py` | WorkOrders (with the repo's lessons), the worker input, the Result check, the PR body |
 | `factory_mcp/diagnostics.py` | What a failed attempt means, read from the Result's optional diagnostics (ADR-0050): one evidence-backed cause, or an unknown one, with sanitized bounded context. The next WorkOrder carries the latest attempt and, when that one is not actionable, the last failing-test finding an intervening timeout would otherwise bury — read from the durable attempt records, so it survives the person's retry (ADR-0078) |
@@ -141,6 +141,8 @@ A tick comes from the background loop or from `factory_tick`.
    it is the gate's merge of the base branch (ADR-0039); then act at most once. A fine-grained token cannot read
    check runs on a private repo, so the gate's workflow run stands in; when the token cannot read
    that either, the verdicts and `FACTORY_GATE_WAIT_SECONDS` still move the WorkItem:
+   - `queued`: nothing. The WorkItem waits for an orchestrator's claim and approval, so a tick adds no
+     action, no WorkOrder and no pass; the queue order and the claim are in `Foreman.next_queued`.
    - `ready`: dispatch an implement WorkOrder, unless the issue has a `Depends on #n` line and
      #n has not merged: then it waits, with `waitingOn: n` (ADR-0024). `changes_requested`:
      dispatch a fix WorkOrder that carries the gate's blocking findings as data.
@@ -189,8 +191,10 @@ The states are the enum in `schemas/workitem.schema.json`.
 
 | From | Fact or action | To |
 |---|---|---|
-| (none) | intake of an open issue | `issued`; `planned` if labelled `factory:proposed`; `ready` if labelled `factory:ready` |
-| `issued`, `planned` | the issue gains `factory:ready` | `ready` |
+| (none) | intake of an open issue | `issued`; `planned` if labelled `factory:proposed`; `queued` if labelled `factory:ready` or `factory:urgent` (ADR-0135) |
+| `issued`, `planned` | the issue gains `factory:ready` or `factory:urgent` | `queued` |
+| `queued` | no orchestrator has claimed it | `queued`, and no tick dispatches it: the queue is the orchestrator's, not the clock's |
+| `queued` | an orchestrator claims it and approves it, `factory_queue_approve` | `ready`, then `dispatching` on the next tick |
 | `ready` | the tick dispatches an implement WorkOrder, once each `Depends on #n` issue is closed with a merged PR on `factory/<n>` | `dispatching`, then `implementing` once the relay accepts |
 | `ready` | a `Depends on #n` issue is open | `ready` with `waitingOn: n`; nothing is dispatched |
 | `ready`, `changes_requested` | a `Worker:` line names an agent that is not in `FACTORY_WORKERS` | the name is dropped and routing picks among the named allowed workers, else all allowed ones, with an `unknown_worker_rerouted` audit row (ADR-0110); `human_waiting` only when none is eligible |

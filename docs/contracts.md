@@ -141,6 +141,12 @@ and direct the caller to the approved template. Credential mounts over container
   already uses that same scalar explicitly. A changed relay cap blocks an overridden dispatch
   before saving a WorkOrder or spending a pass and concludes any open recovery. A transport
   failure instead leaves the item pending for the next tick. Existing orders and the global default stay fixed.
+- **`WorkItem.queue` is the orchestrator's queue entry (ADR-0135).** Set while the state is
+  `queued`, and null in every other state. `urgent` comes from `factory:urgent`, `at` is when it
+  entered and is its place in the order, and `claimedBy`/`claimedAt` are written by the claim that
+  took it. A claim older than fifteen minutes is free again, so a crashed agent cannot strand an
+  entry, and the store's optimistic version means a second claim loses rather than double-booking.
+  An approval clears it and moves the item to `ready`.
 - **`WorkItem.pendingRetry` is one durable Day Desk retry intent (ADR-0095).** Null or
   absent means none. `factory_queue_retry` writes it with its request-journal row in one
   transaction, sanitized and bounded, spending nothing and starting nothing: a replay of the
@@ -414,20 +420,25 @@ worker, provider request, retry, allowance spend or host setting change.
 ## State machine
 
 ```
-issued → planned → ready → dispatching → implementing → pr_open
-                            ▲                                │
-                            │                                ▼
-                     changes_requested ◀────────────── reviewing
-                            │                                │
-                            │                                ▼
-                            │                          merge_pending
-                            │                                │
-                            │                                ▼
-                 human_waiting ──► (ready | closed)     merged → closed
+issued → planned → queued → ready → dispatching → implementing → pr_open
+                     │      ▲                                │
+                     │      │                                ▼
+        (claim, then │      │                         changes_requested ◀── reviewing
+         approve)    └──────┘                                │               │
+                                                             │               ▼
+                                                             │         merge_pending
+                                                             │               │
+                                                             ▼               ▼
+                                                 human_waiting ─► (ready|closed)   merged → closed
 ```
+
+`factory:ready` and `factory:urgent` put an issue in `queued`: it waits for an
+orchestrator to claim it and approve it, and no tick dispatches it before that.
+`factory:proposed` means `planned`, and an issue with no factory label is `issued`.
 
 Fault state: `blocked`. Budget ceiling: `exhausted`. Terminal states: `closed`,
 `cancelled`, `exhausted`. **`human_waiting` is not terminal.**
+**`queued` is not terminal either: it is the orchestrator's own queue.**
 
 ## Controller obligations (the guards)
 

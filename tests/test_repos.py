@@ -243,7 +243,7 @@ class EnableRepoTest(unittest.TestCase):
         self.assertEqual(self.foreman.add_repo(REPO, "amteshwar"),
                          {"repo": REPO, "added": True, "checkout": str(self.checkout)})
         self.assertTrue((self.checkout / ".git").is_dir())
-        self.assertEqual(self.github.labels[REPO], {"factory:ready", "factory:proposed"})
+        self.assertEqual(self.github.labels[REPO], {"factory:ready", "factory:proposed", "factory:urgent"})
         self.assertIn(REPO, self.foreman.config.repos)  # no restart
         self.assertEqual([(e["name"], e["added_by"]) for e in load(str(self.manifest))], [(REPO, "amteshwar")])
 

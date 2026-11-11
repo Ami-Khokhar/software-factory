@@ -162,6 +162,7 @@ class McpServerTest(unittest.TestCase):
         self.assertEqual(reads, {"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons",
                                  "factory_report", "factory_memory_events", "factory_memory_search", "factory_dream_status", "factory_improvement_status", "factory_docker_status", "factory_project_status"})
         self.assertEqual(writes, {"factory_improvement_validate", "factory_dream_run", "factory_memory_put", "factory_intake", "factory_tick", "factory_resolve_human",
+                                  "factory_queue_next", "factory_queue_approve",
                                   "factory_answer_question",
                                   "factory_propose_issue", "factory_add_repo", "factory_approve_issue",
                                   "factory_bootstrap_repo", "factory_approve_lesson",
@@ -202,7 +203,8 @@ class McpServerTest(unittest.TestCase):
         """Day Desk drives with FACTORY_AGENT_TOKEN (ADR-0030). The token, not the model, decides what
         it may call. A new tool joins AGENT_TOOLS on purpose."""
         listed = {t["name"] for t in self.rpc("tools/list", token=AGENT)["result"]["tools"]}
-        self.assertEqual(listed, {"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons", "factory_report", "factory_memory_events", "factory_memory_search", "factory_dream_status", "factory_improvement_status",
+        self.assertEqual(listed, {"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons",
+                                  "factory_queue_next", "factory_queue_approve", "factory_report", "factory_memory_events", "factory_memory_search", "factory_dream_status", "factory_improvement_status",
                                   "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
                                   "factory_start_project",
                                   "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
