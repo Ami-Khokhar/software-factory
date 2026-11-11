@@ -34,10 +34,12 @@ class FakeGitHub:
         self.timelines = {}
         self.workflow_run_list = {}  # (repo, sha) -> the gate's workflow runs, newest first
         self.posted = []  # (repo, number, body) of every comment the Foreman wrote
+        self.compares = []  # (repo, base, head) of every commit comparison the Foreman read
         self.branches, self.files = {}, {}  # (repo, branch) -> sha; (repo, sha) -> changed files
+        self.tags = {}  # (repo, tag) -> sha, which only `ref_revision` resolves
         self.repos = {}  # repo -> fields that differ from a pushable repo; None: GitHub has no such repo
         self.contents = {}  # (repo, path) -> file text on the default branch
-        self.labels = {}  # repo -> names of the labels the Foreman created
+        self.label_names = {}  # repo -> names of the labels the Foreman created
         self.labelled = []  # (repo, number, labels) of every label the Foreman added to an issue
         self.logs, self.deleted = {}, []  # run id -> failed job log; (repo, branch) of each branch deleted
         self.commits = {}  # (repo, sha) -> GitHub's commit; any other commit is a person's push
@@ -155,6 +157,12 @@ class FakeGitHub:
     def branch_head(self, repo, branch):
         return self.branches.get((repo, branch), "base0" if branch == "main" else None)
 
+    def ref_revision(self, repo, ref):
+        """A tag resolves only through here; `branch_head` answers None for one, as GitHub does."""
+        if (repo, ref) in self.branches:
+            return self.branches[(repo, ref)]
+        return self.tags.get((repo, ref), "base0" if ref == "main" else None)
+
     def has_refs(self, repo):
         return any(self.branch_head(r, b) for r, b in {*self.branches, (repo, "main")} if r == repo)
 
@@ -169,6 +177,7 @@ class FakeGitHub:
                                    for f in files]
 
     def changed_files(self, repo, base, head):
+        self.compares.append((repo, base, head))
         return self.files[(repo, head)]
 
     def comment(self, repo, number, body):
@@ -193,8 +202,13 @@ class FakeGitHub:
         self.issues[(repo, number)]["body"] = body
         return self.issues[(repo, number)]
 
+    def labels(self, repo):
+        return set(self.label_names.get(repo, ()))
+
     def create_label(self, repo, name, color, description):
-        self.labels.setdefault(repo, set()).add(name)
+        if self.repos.get(repo, {}) is None:  # a label write to a repo GitHub does not have
+            raise GitHubError(404, f"Not Found: {repo}")
+        self.label_names.setdefault(repo, set()).add(name)
 
     def add_labels(self, repo, number, labels):
         self.labelled.append((repo, number, list(labels)))

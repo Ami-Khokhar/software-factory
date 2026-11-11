@@ -120,6 +120,47 @@ class RegistryUnitTest(unittest.TestCase):
                     registry.build_agent(TEMPLATE, worker_id, model)
 
 
+class RunnerQuestionTest(unittest.TestCase):
+    """The one runner-path question, at each job's strictness (ADR-0138): the guarded write, the
+    activation gate and the status label accept one genuine registered worker and all refuse an
+    impostor's args[0]."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.agents_file = os.path.join(self.tmp.name, "agents.json")
+        self.write_registry([TEMPLATE])
+        self.config = Config(mcp_token="t", repos=frozenset(), agents_file=self.agents_file)
+
+    def write_registry(self, agents):
+        with open(self.agents_file, "w") as handle:
+            json.dump({"agents": agents}, handle)
+
+    def test_register_activate_and_label_agree_on_a_registered_worker_and_an_impostor(self):
+        """A registered pi-glm-factory entry passes the write, the activation gate and the label;
+        the same entry with args[0] pointing elsewhere fails all three."""
+        from factory_mcp import runtime, worker_ops
+        # This deployment's registry holds the template running this checkout's runner.
+        self.write_registry([dict(TEMPLATE, args=[str(worker_ops.RUNNER),
+                                                  *TEMPLATE["args"][1:]])])
+        registered = registry.register(self.agents_file, TEMPLATE_ID, "pi-glm-registered-factory",
+                                       "glm-5.3-flash")
+        self.assertEqual(registered["args"][0], str(worker_ops.RUNNER))
+        candidate = worker_ops._candidate(self.config, registered["id"])
+        self.assertEqual(candidate["agent"]["id"], registered["id"])
+        self.assertTrue(runtime._factory_runner(registered["command"], registered["args"]))
+        for args0 in ("/opt/standalone/agent.py", "/factory data/worker/runner.py"):
+            impostor = dict(TEMPLATE, args=[args0, *TEMPLATE["args"][1:]])
+            with self.subTest(args0=args0):
+                self.write_registry([impostor])
+                with self.assertRaisesRegex(ValueError, "worker/runner.py"):
+                    registry.register(self.agents_file, TEMPLATE_ID, "pi-glm-registered-factory",
+                                      "glm-5.3-flash")
+                with self.assertRaisesRegex(ToolError, "worker/runner.py"):
+                    worker_ops._candidate(self.config, TEMPLATE_ID)
+                self.assertFalse(runtime._factory_runner(impostor["command"], impostor["args"]))
+
+
 class RegisterWorkerTest(unittest.TestCase):
     """factory_register_worker through the Foreman: the registry write, the refusals, and the
     guarantee that a registered worker is not dispatchable until its health is checked and it is enabled."""

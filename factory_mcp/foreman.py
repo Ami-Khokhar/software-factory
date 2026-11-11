@@ -13,8 +13,8 @@ import threading
 import uuid
 from datetime import datetime
 
-from . import (diagnostics, documents, gate_secrets, jev_rank, lessons, memory, patches, projects, registry,
-               repos, routing, setup_merge, sizing, worker_ops, workitem)
+from . import (diagnostics, documents, followups, gate_secrets, jev_rank, lessons, memory, patches,
+               projects, registry, repos, routing, setup_merge, sizing, worker_ops, workitem)
 from .github import GitHubError
 from .mcp import ToolError
 from .relay import RelayError, RelayLimitError
@@ -24,6 +24,10 @@ from .verdict import blocking, fingerprint
 # States that need a person. Entering one posts a comment on the issue, so the owner hears of it.
 ATTENTION = ("human_waiting", "blocked", "exhausted")
 WORKING = ("dispatching", "implementing")
+QUEUE_POLL = 2.0  # seconds between store reads inside a waiting claim (ADR-0135)
+QUEUE_URGENT_POLL = 10.0  # seconds between GitHub reads inside a waiting claim: search allows 30 a minute
+QUEUE_WAIT_MAX = 300  # the longest a claim blocks, so a stuck caller cannot hold a thread
+QUEUE_LEASE = 900  # a claim older than this goes back to the queue
 # A node holds its `Paths:` files while it is one of these (ADR-0088); waiting for a person
 # holds nothing, so a stalled node never blocks its neighbours' files.
 PATHS_HOLDING = ("dispatching", "implementing", "pr_open", "reviewing", "changes_requested",
@@ -132,12 +136,16 @@ class Foreman:
         self.holder = uuid.uuid4().hex
         self._skipped = set()  # rebuild refusals already logged by this process
 
-    def intake(self, repo, number):
+    def intake(self, repo, number, issue=None, proof=None):
+        """`issue`/`proof` come from a caller that already fetched and validated them; then the
+        issue is not fetched again and provenance is not validated twice."""
         repo = self._allowlisted(repo)
         existing = self.store.get(workitem.workitem_id(repo, number))
         if existing:
             return self._joined(existing)
-        wi = self._admit(repo, self._issue(repo, number))
+        wi = self._admit(repo, issue or self._issue(repo, number), proof)
+        if not self.config.queue and wi.get("state") == "queued":
+            wi = dict(wi, state="ready", queue=None)  # nothing would drain it (ADR-0135)
         try:
             wi = self.store.put(wi)
         except Conflict:  # a concurrent tick took it in first
@@ -177,8 +185,7 @@ class Foreman:
                 raise ToolError(f"{repo}#{number} does not exist") from None
             raise
 
-    def _followup_approval(self, repo, issue):
-        from . import followups
+    def _followup_approval(self, repo, issue, proof=None):
         records = [h["detail"] for h in self.store.history(workitem.workitem_id(repo, issue["number"]))
                    if h["action"] == "gate_followup_approved"]
         if not records:
@@ -186,7 +193,8 @@ class Foreman:
         if records[-1]["digest"] != followups.digest(issue):
             raise ToolError("gate follow-up content changed after approval; "
                             "restore the approved content before retrying")
-        proof = followups.validate(self.github, repo, issue, records[-1]["sourcePr"])
+        if proof is None:
+            proof = followups.validate(self.github, repo, issue, records[-1]["sourcePr"])
         if any(proof[key] != records[-1].get(key) for key in proof):
             raise ToolError("gate follow-up provenance changed after approval")
         return True
@@ -198,14 +206,17 @@ class Foreman:
                 self._followup_approval(wi["repo"], issue)
                 workitem.intake(wi["repo"], issue)
             except (ToolError, ValueError) as exc:
-                return self._write(wi, dict(wi, state="human_waiting"),
+                # the cause travels in the WorkItem too: _notify, factory_status and the incident
+                # identity all read _reason, which prefers blockedOn over the bare state
+                return self._write(wi, dict(wi, state="human_waiting", blockedOn=str(exc)),
                                    "approval_invalid", reason=str(exc))
         return None
 
-    def _admit(self, repo, issue):
-        """The new WorkItem for `issue`, or a ToolError saying why the factory may not take it."""
+    def _admit(self, repo, issue, proof=None):
+        """The new WorkItem for `issue`, or a ToolError saying why the factory may not take it.
+        `proof` is provenance an approval path already validated; then `validate` runs once."""
         author = (issue.get("user") or {}).get("login")
-        if not self.config.trusts(repo, author) and not self._followup_approval(repo, issue):
+        if not self.config.trusts(repo, author) and not self._followup_approval(repo, issue, proof):
             raise ToolError(f"{repo}#{issue['number']} was opened by {author}, who is not a trusted "
                             "author (FACTORY_TRUSTED_AUTHORS); a trusted person must open the issue, or the owner "
                             "may approve an authentic gate follow-up with sourcePr and issueDigest")
@@ -228,16 +239,16 @@ class Foreman:
         if existing and existing["state"] in workitem.TERMINAL:
             raise ToolError(f"{existing['id']} is {existing['state']}; open a new issue for more work")
         issue = self._issue(repo, number)
+        proof = None
         if source_pr is not None or issue_digest is not None:
-            from . import followups
             identity = workitem.workitem_id(repo, number)
             try:
                 if issue_digest != followups.digest(issue):
                     raise ToolError("issueDigest must match the reviewed issue content")
-                if existing:
-                    self._followup_approval(repo, issue)  # an existing approval cannot expand its scope
-                workitem.intake(repo, issue)  # readiness/acceptance still apply before any write
                 proof = followups.validate(self.github, repo, issue, source_pr)
+                if existing:
+                    self._followup_approval(repo, issue, proof)  # an approval cannot expand its scope
+                workitem.intake(repo, issue)  # readiness/acceptance still apply before any write
             except (ToolError, ValueError) as exc:
                 self.store.log("gate_followup_refused", {"by": by, "validation": "refused"}, identity)
                 raise ToolError(str(exc)) from None
@@ -246,21 +257,32 @@ class Foreman:
                                                         "status": exc.status}, identity)
                 raise ToolError("gate follow-up provenance records unavailable; check GitHub access") from None
             self.store.log("gate_followup_approved", dict(proof, by=by, authority="owner token"), identity)
-        self._admit(repo, issue)  # refuse before labelling: a rebuild adopts any factory:ready issue
+        self._admit(repo, issue, proof)  # refuse before labelling: a rebuild adopts any factory:ready issue
         if workitem.READY not in workitem.labels(issue):
             self.github.add_labels(repo, number, [workitem.READY])
             self.store.log("approved", {"by": by}, workitem.workitem_id(repo, number))
-        return self.intake(repo, number)
+        return self.intake(repo, number, issue=issue, proof=proof)
 
     def add_repo(self, repo, by):
         """Enable a repo that passes the checks: its worker checkout, the factory labels, and an
-        entry in repos.json (ADR-0014). A failing check refuses it, changing nothing. Idempotent."""
+        entry in repos.json (ADR-0014). A failing check refuses it, after healing its missing labels.
+        Idempotent."""
         if not repos.NAME.match(repo):
             raise ToolError(f"{repo!r} is not a repo name in the form owner/repo")
         if not self.config.repos_file:
             raise ToolError("FACTORY_REPOS_FILE is not set, so there is no repos.json to add the repo to")
         if not self.config.checkout_root:
             raise ToolError("FACTORY_CHECKOUT_ROOT is not set, so there is no place for the worker checkout")
+        # Before the check, so re-adding an enabled repo heals its labels. Only a repo the token can
+        # write to is healed: a missing, archived or read-only repo has its own refusal in the check,
+        # and a label write would raise over it.
+        try:
+            writable = bool((self.github.repository(repo).get("permissions") or {}).get("push"))
+        except GitHubError:
+            writable = False  # the check below says GitHub shows no such repo, and what to do
+        if writable:
+            for name, color, text in repos.LABELS:
+                self.github.create_label(repo, name, color, text)
         failed = [c for c in repos.check(self.github, repo) if not c["ok"]]
         if failed:
             raise RepoNotReady(f"{repo} is not ready: " + " ".join(f"{c['detail']}. {c['fix']}" for c in failed))
@@ -273,8 +295,6 @@ class Foreman:
                 patches.clone(self.config.git_url.format(repo=repo), self.config.github_token, checkout)
             except patches.PatchError as exc:
                 raise ToolError(f"the worker checkout for {repo} was not cloned: {exc}") from None
-        for name, color, text in repos.LABELS:
-            self.github.create_label(repo, name, color, text)
         added = not listed and repos.add(self.config.repos_file, repo, by, now())  # who and when
         if not listed:  # works at once, in the spelling repos.json holds (a person may have added it)
             repo = next(e["name"] for e in repos.load(self.config.repos_file) if e["name"].lower() == repo.lower())
@@ -298,8 +318,6 @@ class Foreman:
             raise ToolError(f"{repo}'s default branch changed during bootstrap; check the repo and try again")
         branch = BOOTSTRAP_PREFIX + plan["fingerprint"][:16]
         response = {"repo": repo, "ready": False, "needsHumanMerge": True, "changedPaths": sorted(files)}
-        if plan.get("updates"):
-            response["updatedPaths"] = plan["updates"]  # an upgrade, not a first install
         existing = self._open_setup_pr(repo, plan["default_branch"])
         if existing:  # a retry: the owner reviews one setup PR, brought up to date with the plan
             head = self._update_setup_pr(repo, existing, files, by)
@@ -354,24 +372,18 @@ class Foreman:
     def _setup_pr_body(repo, plan, secrets):
         """The setup PR's body in the gate's format: the plan's files and each secret's status."""
         paths = sorted(plan["files"])
-        updates = set(plan.get("updates", ()))
-        upgraded = bool(updates)
         return "\n".join([
-            "## Task", "", f"Owner-approved {'control update' if upgraded else 'bootstrap'} for https://github.com/{repo}.", "",
+            "## Task", "", f"Owner-approved bootstrap for https://github.com/{repo}.", "",
             "## Intent", "",
-            ("Update the installed gate caller to the approved gate revision, leaving its verify "
-             "command, permissions, secrets and unrelated files as they are." if upgraded else
-             "Install the missing controls required for this repository to join the factory."), "",
+            "Install the missing controls required for this repository to join the factory.", "",
             "## Why it was needed", "",
-            ("The installed gate caller pins an older gate revision than software-factory ships." if upgraded else
-             "The factory cannot run reviewed PRs without its gate and written standard."), "",
+            "The factory cannot run reviewed PRs without its gate and written standard.", "",
             "## Why this approach", "",
-            ("The factory rewrote only the two gate revision pins in the installed workflow, "
-             "preserving every other line, and left the repo's verify command untouched." if upgraded else
-             "The factory prepared only the missing files from trusted templates."),
-            "The owner must review and merge this setup PR; normal workers still cannot change these paths.", "",
+            ("The factory prepared only the missing files from trusted templates, so a control this "
+             "repo already has is never rewritten. The owner must review and merge this setup PR; normal "
+             "workers still cannot change these paths."), "",
             "## What changed", "",
-            *(f"- `{path}`: {'update' if path in updates else 'install'} the factory control" for path in paths), "",
+            *(f"- `{path}`: install the factory control" for path in paths), "",
             "## Proof of work", "", "```text",
             f"$ git diff --name-only --no-renames -z {plan['base_sha']} HEAD", *paths, "```", "",
             "The factory set the gate's Actions secrets from the owner's Keychain:",
@@ -421,7 +433,9 @@ class Foreman:
         self._discover()
         found = []
         for repo in sorted(self.config.repos):
-            for issue in self.github.labelled_issues(repo, workitem.READY):
+            issues = {i["number"]: i for label in (workitem.READY, workitem.URGENT)
+                      for i in self.github.labelled_issues(repo, label)}
+            for issue in issues.values():
                 if self.store.get(workitem.workitem_id(repo, issue["number"])) is None:
                     try:
                         found.append(self.intake(repo, issue["number"])["id"])
@@ -545,7 +559,7 @@ class Foreman:
             return before, wi
         try:
             facts = workitem.observe(self.github, wi)
-            new = workitem.reconcile(wi, facts)
+            new = workitem.reconcile(wi, facts, queue=self.config.queue)
             detail = {"headSha": new.get("headSha")}
             if self._gate_merged_base(wi, new.get("headSha")):  # not a person's commit (ADR-0039)
                 detail["mergedBase"] = True
@@ -676,6 +690,10 @@ class Foreman:
             self.store.log("notify_failed", {"error": str(exc)}, wi["id"])
 
     def act(self, wi, facts):
+        if wi["state"] == "queued" and not self.config.queue:
+            # no orchestrator is configured to drain the queue, so a label keeps its old meaning:
+            # one write to ready, and this same tick dispatches it (ADR-0135)
+            wi = self._write(wi, dict(wi, state="ready", queue=None), "queue_off")
         if wi["state"] == "ready":
             wi = self._wait_for(wi, facts["issue"]["dependsOn"])
             if wi["state"] != "ready" or wi.get("waitingOn"):
@@ -688,7 +706,7 @@ class Foreman:
             return self.dispatch(wi, "implement", self._human_findings(wi) + self._attempt_findings(wi),
                                  facts["issue"]["workers"])
         if wi["state"] == "human_waiting":
-            return self._recheck_dependency(wi)
+            return self._recheck_worker(self._recheck_dependency(wi))
         # GitHub runs no workflow on a PR that conflicts with its base, so the gate would never answer;
         # an accepted MERGE never happens there either, so merge_pending takes the same redo (ADR-0114)
         conflict = (wi["state"] in ("pr_open", "reviewing", "changes_requested", "merge_pending")
@@ -868,6 +886,257 @@ class Foreman:
         the dispatch decision and before the relay call, so submit() rechecks at the submission point."""
         return self.store.active_pauses(wi["id"])
 
+    def next_queued(self, by, wait_seconds=0):
+        """The next WorkItem the orchestrator should look at: urgent first, then oldest, claimed under
+        its lease so two calls never take the same one (ADR-0135). It waits up to `wait_seconds`, and
+        while the store is empty it reads `factory:urgent` from GitHub itself, so an urgent label is
+        seen without waiting for the next tick. That is all the factory can do to wake an agent it
+        cannot call."""
+        if not isinstance(by, str) or not by.strip():
+            raise ToolError("a claim needs the name of the agent that took it")
+        wait = max(0, min(int(wait_seconds or 0), QUEUE_WAIT_MAX))
+        deadline = time.time() + wait
+        looked = 0.0  # when GitHub was last asked for urgent work: one search per QUEUE_URGENT_POLL
+        while True:
+            found = self._claim_next(by)
+            if found is not None:
+                return found
+            if time.time() >= deadline:
+                return None
+            if time.time() - looked >= QUEUE_URGENT_POLL:
+                looked = time.time()
+                self._intake_urgent()  # a label added while this claim waits is seen within one poll
+                found = self._claim_next(by)
+                if found is not None:
+                    return found
+                if time.time() >= deadline:
+                    return None
+            time.sleep(QUEUE_POLL)
+
+    def _claim_next(self, by):
+        """Claim the first free queue entry. A `Conflict` from the write is another claim winning the
+        same entry, so it moves on rather than double-booking, and a claim past `QUEUE_LEASE` is
+        free again so a crashed agent cannot strand an entry."""
+        def order(wi):
+            entry = wi.get("queue") if isinstance(wi.get("queue"), dict) else {}
+            return (0 if entry.get("urgent") else 1, entry.get("at") or wi["updatedAt"])
+        for wi in sorted((wi for wi in self.store.all() if wi["state"] == "queued"), key=order):
+            entry = wi.get("queue") if isinstance(wi.get("queue"), dict) else {}
+            if entry.get("leftForOwner"):
+                continue  # the owner has it: claiming it back would undo the decision (ADR-0137)
+            if entry.get("claimedBy") and not self._claim_expired(entry.get("claimedAt")):
+                continue
+            if not self.store.acquire(wi["id"], self.holder):
+                continue  # a tick holds it: the next entry may be free
+            try:
+                fresh = self.store.get(wi["id"])
+                if fresh is None or fresh["state"] != "queued":
+                    continue
+                before = fresh.get("queue") or {}
+                if before.get("claimedBy") and not self._claim_expired(before.get("claimedAt")):
+                    continue  # another agent claimed it while this call waited for the lease
+                taken = dict(before, urgent=bool(before.get("urgent")),
+                             at=before.get("at") or fresh["updatedAt"], claimedBy=by, claimedAt=now())
+                try:
+                    return self._queued_view(self._write(fresh, dict(fresh, queue=taken),
+                                                         "queue_claimed", by=by))
+                except Conflict:
+                    continue
+            finally:
+                self.store.release(wi["id"], self.holder)
+        return None
+
+    @staticmethod
+    def _claim_expired(claimed_at):
+        """Whether a claim is old enough to take over. An unreadable stamp is expired, so a broken
+        field never strands an entry."""
+        try:
+            at = calendar.timegm(time.strptime(claimed_at, "%Y-%m-%dT%H:%M:%SZ"))
+        except (TypeError, ValueError):
+            return True
+        return time.time() - at > QUEUE_LEASE
+
+    def budget(self, wi, orders=None):
+        """What a pass costs this WorkItem, as the dispatch decision computes it: the member cap for a
+        Project member, else the pass ceiling minus what a person's retry wrote off — and the gate's
+        first fix per round runs past the ceiling (ADR-0112). One definition, so the packet a manager
+        reads and the dispatch that spends it cannot disagree."""
+        orders = self.store.workorders(wi["id"]) if orders is None else orders
+        project_id = wi.get("projectId")
+        project = self.store.project(project_id) if project_id else None
+        member = bool(project and project["state"] != "done")
+        if member:
+            used, passes = len(orders), projects.MAX_MEMBER_PASSES
+        else:
+            used, passes = len(orders) - (wi.get("passesBefore") or 0), self.config.max_passes
+        round_ = wi.get("gateRound", 0)
+        # ADR-0112's extra fix pass belongs to a WorkItem's own budget. A member's cap is the Lead's,
+        # so a member at the cap exhausts even on a fix dispatch (ADR-0047).
+        return {"used": max(0, used), "passes": passes, "left": max(0, passes - used), "member": member,
+                "gateFixFirst": not member and not any(o.get("kind") == "fix" and o.get("round") == round_
+                                                       for o in orders)}
+
+    def queue_state(self, wi):
+        """The claim on a queued entry as a reader sees it: who holds it, and whether that claim has
+        lapsed. The drive text changes exactly when a claim lapses, so an agent that claimed and died
+        is woken again to reclaim it (ADR-0135)."""
+        claim = wi.get("queue")
+        if not isinstance(claim, dict):
+            return None
+        if claim.get("claimedBy"):  # a claim outranks the mark: a hidden claim is a stranded entry
+            return {"by": claim["claimedBy"], "expired": self._claim_expired(claim.get("claimedAt")),
+                    "leftForOwner": None}
+        left = claim.get("leftForOwner")
+        if left:
+            return {"by": left.get("by"), "expired": False, "leftForOwner": left.get("why")}
+        return None
+
+    def _queued_view(self, wi):
+        """A claimed entry as its manager needs it: the work, what it must satisfy, what it may touch,
+        what earlier attempts cost and why they failed, who may run it, and what it waits on. Facts
+        only. Which of them matters, and what to do about it, is the agent's decision (ADR-0136), and
+        the pack is read here so that decision never needs a second read."""
+        unreadable = None
+        try:
+            body = self._issue(wi["repo"], wi["issueNumber"]).get("body")
+        except (ToolError, GitHubError) as exc:
+            # Never an empty acceptance: a manager told "no bullets, no paths, no dependencies" would
+            # approve work it cannot see, so the packet says the read failed (ADR-0136).
+            body, unreadable = None, str(exc)
+        deps = [{"issue": number, "status": status, "how": how}
+                for number in workitem.depends_on(body)
+                for status, how in [self._dependency(wi["repo"], number)]]
+        criteria, _ = workitem.parse_acceptance(body)
+        history = self.store.history(wi["id"])
+        failures = [{"worker": h["detail"].get("worker"), "cause": h["detail"].get("cause"),
+                     "reason": h["detail"].get("reason")}
+                    for h in history if h["action"] == "attempt_failed"]
+        orders = self.store.workorders(wi["id"])  # read once: the budget and the pass count share it
+        ran = {}  # a WorkOrder document names no worker: the dispatch audit row is where it is written
+        for row in history:
+            if row["action"] == "dispatch" and row["detail"].get("worker"):
+                ran[row["detail"]["worker"]] = ran.get(row["detail"]["worker"], 0) + 1
+        # The workers a dispatch could actually take, not merely those enabled: a repo's locality and
+        # the gate reviewer's family (ADR-0085) exclude some, and naming one would strand the item.
+        local_only, excluded = self.config.local_only(wi["repo"]), self._reviewer_families(wi["repo"])
+        allowed = [agent for agent, place in worker_ops.effective_workers(self.store, self.config)
+                   if (place == "local" or not local_only) and routing.family(agent) not in excluded]
+        verdict = next((outcome for outcome, state in workitem.OUTCOME_STATE.items()
+                        if state == wi["state"]), None)
+        spent = self.budget(wi, orders)
+        if spent["member"]:
+            # A member's pass also spends the Project's budget, and a paused Project dispatches nothing:
+            # without this the manager approves work the next tick silently refuses (ADR-0136).
+            project = self.store.project(wi["projectId"])
+            spent.update(projectId=wi["projectId"], projectState=(project or {}).get("state"),
+                         projectLeft=max(0, ((project or {}).get("budget") or {}).get("passes", 0)
+                                         - ((project or {}).get("passesUsed") or 0)))
+        return {"workItem": wi, "dependsOn": deps,
+                "queued": sum(1 for other in self.store.all() if other["state"] == "queued"),
+                **({"issueError": unreadable} if unreadable else {}),
+                "acceptance": criteria,
+                "paths": workitem.paths_listed(body),
+                "attempts": {**spent, "failures": failures},
+                "workers": {"ran": [{"worker": agent, "passes": count} for agent, count in ran.items()],
+                            "failed": sorted({f["worker"] for f in failures if f["worker"]},
+                                             key=str),
+                            "allowed": allowed},
+                # A claim is normally in no gate round: regate goes to `reviewing`, a retry to `ready`.
+                # A re-queued item that had one still reports it, so the key is never a guess.
+                "gate": ({"round": wi["gateRound"], "verdict": verdict} if wi.get("gateRound")
+                         else None)}
+
+    def _intake_urgent(self):
+        """Take in a `factory:urgent` issue of an enabled repo the store does not know, so a waiting
+        claim sees it at once. A refused intake is the tick's business, not this call's: the tick says
+        why, once."""
+        for repo in sorted(self.config.repos):
+            try:
+                issues = self.github.labelled_issues(repo, workitem.URGENT)
+            except GitHubError as exc:
+                self.store.log("search_failed", {"author": "urgent", "error": str(exc)}, None)
+                continue
+            for issue in issues:
+                if self.store.get(workitem.workitem_id(repo, issue["number"])) is not None:
+                    continue
+                try:
+                    self.intake(repo, issue["number"], issue)
+                except (ToolError, ValueError):
+                    continue
+
+    def _choosable(self, wi, worker):
+        """The named worker if a dispatch of this WorkItem could take it, else a refusal that names the
+        ones it could take. One check, used by the approval and by the dispatch, so a choice cannot be
+        accepted and then silently replaced."""
+        local_only, excluded = self.config.local_only(wi["repo"]), self._reviewer_families(wi["repo"])
+        allowed = [agent for agent, place in worker_ops.effective_workers(self.store, self.config)
+                   if (place == "local" or not local_only) and routing.family(agent) not in excluded]
+        if worker not in allowed:
+            raise ToolError(f"{worker} cannot run {wi['id']}: a dispatch may take "
+                            f"{', '.join(allowed) or 'no worker'}"
+                            + (" (this repo is local-only)" if local_only else "")
+                            + ("; the gate reviewer's family is excluded" if excluded else ""))
+        return {"worker": worker}
+
+    def leave_for_owner(self, workitem_id, by, why):
+        """The agent's third verb: this one is the owner's, and it says so in the store (ADR-0137).
+        Without the record, an entry a crashed claim released and one a person holds read the same, so
+        the prompt cannot keep them apart and the agent trades the same line with the owner every
+        fifteen minutes. The claim is released: nothing waits on an agent that has finished deciding."""
+        if not isinstance(by, str) or not by.strip():
+            raise ToolError("leaving a queue entry needs the name of the agent that left it")
+        if not isinstance(why, str) or not why.strip():
+            raise ToolError("leaving a queue entry needs the one line the owner reads")
+        if not self.store.acquire(workitem_id, self.holder):
+            raise ToolError(f"{workitem_id} is being ticked; try again")
+        try:
+            wi = self.store.get(workitem_id)
+            if wi is None:
+                raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
+            if wi["state"] != "queued":
+                raise ToolError(f"{workitem_id} is {wi['state']}; only a queued WorkItem is left to the owner")
+            entry = wi.get("queue") if isinstance(wi.get("queue"), dict) else workitem.queue_entry(
+                False, wi["updatedAt"])
+            holder = entry.get("claimedBy")
+            if holder and holder != by and not self._claim_expired(entry.get("claimedAt")):
+                raise ToolError(f"{workitem_id} is claimed by {holder} until its claim lapses; "
+                                "only the agent that holds it leaves it to the owner")
+            # Stamped with the issue's own clock, not this machine's: `owner_acted` compares two stamps
+            # from the same source, so a skewed local clock cannot clear the mark or strand it (ADR-0137).
+            observed = None
+            try:
+                observed = self._issue(wi["repo"], wi["issueNumber"]).get("updated_at")
+            except (ToolError, GitHubError):
+                observed = None
+            left = dict(entry, claimedBy=None, claimedAt=None,
+                        leftForOwner={"by": by, "why": why, "at": now(), "issueUpdatedAt": observed})
+            return self._write(wi, dict(wi, queue=left), "queue_left_for_owner", by=by, why=why)
+        finally:
+            self.store.release(workitem_id, self.holder)
+
+    def approve_queued(self, workitem_id, by, note="", worker=None):
+        """The orchestrator's yes: the entry leaves the queue for `ready`, and the next tick dispatches
+        it through every existing guard, so one action per tick still holds (ADR-0135). `worker` is the
+        manager's own choice, refused here if no dispatch could take it, rather than stranded at
+        dispatch (ADR-0136)."""
+        if not isinstance(by, str) or not by.strip():
+            raise ToolError("an approval needs the name of the agent that gave it")
+        if not self.store.acquire(workitem_id, self.holder):
+            raise ToolError(f"{workitem_id} is being ticked; try again")
+        try:
+            wi = self.store.get(workitem_id)
+            if wi is None:
+                raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
+            if wi["state"] != "queued":
+                raise ToolError(f"{workitem_id} is {wi['state']}; only a queued WorkItem is approved")
+            chosen = self._choosable(wi, worker) if worker is not None else None
+            return self._write(wi, dict(wi, state="ready", queue=None,
+                                        **({"chosenWorker": chosen["worker"]} if chosen else {})),
+                               "queue_approved", by=by, **({"note": note} if note else {}),
+                               **({"worker": chosen["worker"]} if chosen else {}))
+        finally:
+            self.store.release(workitem_id, self.holder)
+
     def dispatch(self, wi, kind, findings=(), named=()):
         with self.runtime_lock:
             return self._dispatch(wi, kind, findings, named)
@@ -906,32 +1175,24 @@ class Foreman:
                       for other in self.store.all())
         if running >= self.config.passes_per_repo:
             return wi
-        orders = self.store.workorders(wi["id"])
         project_id = wi.get("projectId")
         project = self.store.project(project_id) if project_id else None
         if project and project["state"] in ("paused", "stopped"):
             return wi
-        member = project and project["state"] != "done"
-        if member:
-            used = len(orders)
-            if used >= projects.MAX_MEMBER_PASSES:
-                self._finish_recovery(wi, False)
-                return self._write(wi, dict(wi, state="exhausted", recovery=None, terminalReason=(
-                    f"the member pass cap is {projects.MAX_MEMBER_PASSES} and {used} passes are on record; "
-                    "the Lead splits it or the owner decides")),
-                    "exhausted", project=project_id)
-        else:
-            used = len(orders) - (wi.get("passesBefore") or 0)  # a person's retry buys a fresh budget
-            # ADR-0112: a PR that reaches the gate keeps one fix pass per round past the budget — the
-            # gate already caps fix rounds itself, so its first CHANGES verdict must not end the item.
-            first_gate_fix = kind == "fix" and not any(
-                o["kind"] == "fix" and o["round"] == wi.get("gateRound", 0) for o in orders)
-            if used >= self.config.max_passes and not first_gate_fix:
-                self._finish_recovery(wi, False)  # the budget stopped the attempt the recovery chose
-                return self._write(wi, dict(wi, state="exhausted", recovery=None, terminalReason=(
-                    f"{used} worker passes used; FACTORY_MAX_PASSES is {self.config.max_passes}")),
-                    "exhausted")
-        workers = worker_ops.effective_workers(self.store, self.config)
+        orders = self.store.workorders(wi["id"])  # read once: the budget and the attempt counter share it
+        spent = self.budget(wi, orders)
+        # ADR-0112: a PR that reaches the gate keeps one fix pass per round past the budget — the gate
+        # already caps fix rounds itself, so its first CHANGES verdict must not end the item.
+        if spent["used"] >= spent["passes"] and not (kind == "fix" and spent["gateFixFirst"]):
+            self._finish_recovery(wi, False)  # the budget stopped the attempt the recovery chose
+            reason = (f"the member pass cap is {spent['passes']} and {spent['used']} passes are on "
+                      "record; the Lead splits it or the owner decides" if spent["member"] else
+                      f"{spent['used']} worker passes used; FACTORY_MAX_PASSES is {spent['passes']}")
+            return self._write(wi, dict(wi, state="exhausted", recovery=None, terminalReason=reason),
+                               "exhausted", **({"project": project_id} if spent["member"] else {}))
+        # One membership walk per dispatch decision (#437): the rows are checked here, and the
+        # reason text is already at hand if routing finds no worker, instead of a second walk.
+        workers, problems = worker_ops.membership(self.store, self.config)
         named, unknown = self._allowed_named(named, workers)
         failed = {h["detail"].get("worker") for h in self.store.history(wi["id"])
                   if h["action"] == "attempt_failed"}
@@ -940,8 +1201,21 @@ class Foreman:
         # two-strike block ever sees the case. The gate reviewer's family is excluded outright (ADR-0085).
         avoid, from_worker, category = self._timeout_causes(wi)
         excluded = self._reviewer_families(wi["repo"])
-        worker = routing.route(workers, self.config.local_only(wi["repo"]), failed, named,
-                               avoid_families=avoid, exclude_families=excluded)
+        chosen = wi.get("chosenWorker")
+        if chosen:  # the manager's own choice, re-checked here in case it was disabled since (ADR-0136)
+            try:
+                worker = self._choosable(wi, chosen)["worker"]
+                if worker in failed and not named:  # it failed here before: the policy's block stands
+                    self.store.log("chosen_worker_blocked", {"worker": worker}, wi["id"])
+                    worker = None
+            except ToolError as exc:
+                self.store.log("chosen_worker_refused", {"worker": chosen, "reason": str(exc)}, wi["id"])
+                worker = None
+        else:
+            worker = None
+        if worker is None:
+            worker = routing.route(workers, self.config.local_only(wi["repo"]), failed, named,
+                                   avoid_families=avoid, exclude_families=excluded)
         if worker is None:
             self._finish_recovery(wi, False)  # no attempt will run, so the open recovery finds no outcome
             local_only = self.config.local_only(wi["repo"])
@@ -962,7 +1236,6 @@ class Foreman:
                 return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=(
                     "every allowed worker is in the reviewer family "
                     + ", ".join(sorted(excluded)) + dropped)), "no_worker", **audit)
-            problems = worker_ops.unusable_reasons(self.store, self.config)
             # An enabled row that could not be honoured says why, so a person never chases
             # FACTORY_WORKERS when the real cause is Docker, a drifted binding or bad registry data.
             no_worker = (f"{wi['repo']} is local-only and FACTORY_WORKERS has no local worker"
@@ -1005,7 +1278,7 @@ class Foreman:
         packet = self.store.knowledge.packet(self.config, wi)
         if packet:
             order["memory"] = packet
-        if member:
+        if spent["member"]:
             try:
                 self.store.charge_project_pass(project_id)
             except Conflict as exc:
@@ -1020,28 +1293,83 @@ class Foreman:
         wi = self._write(wi, dict(wi, state="dispatching", activeWorkOrderId=order["id"], worker=worker,
                                   recovery=recovery, question=None),
                          "dispatch", workOrder=order["id"], worker=worker)
-        return self.submit(wi, order)
+        # _dispatch just guarded provenance; handing it through keeps one validation per pass
+        return self.submit(wi, order, guarded=True)
 
-    def submit(self, wi, order):
-        refused = self._guard_followup(wi)
-        if refused is not None:
-            return refused
+    def submit(self, wi, order, guarded=False):
+        """`guarded=True` when the caller just ran _guard_followup: then provenance validates
+        once per pass, not once in _dispatch and again here."""
+        if not guarded:
+            refused = self._guard_followup(wi)
+            if refused is not None:
+                return refused
         paused = self._barrier(wi)  # the race guard: rechecked immediately before the worker runs (#234)
         if paused:  # the intent was written (state dispatching); a released barrier resumes it
             self.store.log("submit_paused", {"order": order["id"],
                                              "pausedBy": [row["requestId"] for row in paused]}, wi["id"])
             return wi
-        if any(row["worker"] == wi["worker"] for row in self.store.worker_activations()):
-            # Reload before a controlled worker runs, then recheck disk/image/credential drift.
-            self.relay.reload()
-            if (wi["worker"] not in dict(worker_ops.effective_workers(self.store, self.config))
-                    or routing.family(wi["worker"]) in self._reviewer_families(wi["repo"])):
-                raise ToolError("worker activation changed or drifted; recheck health and activation")
+        fault = self._worker_fault(wi, wi.get("worker"))
+        if fault:  # the worker cannot run this pass, so no raise out of the tick (#522)
+            return self._hold_worker(wi, fault)
         task = self.relay.submit(wi["worker"], documents.worker_input(order, wi["branch"]),
                                  order["idempotencyKey"], order["budget"]["wallMs"],
                                  cwd=self.config.checkout(wi["repo"]))
         return self._write(wi, dict(wi, state="implementing", providerTaskId=task["id"]),
                            "submitted", task=task["id"])
+
+    def _worker_fault(self, wi, worker):
+        """Why `worker` may not run this pass now, or None (ADR-0085, ADR-0094). An activated worker is
+        revalidated against the live registry, image and credential immediately before the relay call;
+        a worker the configuration pins has no activation that can drift."""
+        if not any(row["worker"] == worker for row in self.store.worker_activations()):
+            return None
+        self.relay.reload()  # the registry may have changed since the WorkOrder was built
+        excluded = self._reviewer_families(wi["repo"])
+        if routing.family(worker) in excluded:
+            return (f"{worker} names the gate reviewer's model family "
+                    f"({', '.join(sorted(excluded))}), so a pass there would answer its own reviewer")
+        return worker_ops.unusable_reason(self.store, self.config, worker)
+
+    def _hold_worker(self, wi, reason):
+        """Hold the WorkItem on the worker's own fault instead of raising out of the tick (#522). The
+        order and its idempotency key stay on record with the pointer to them, so the resume submits
+        that order rather than buying a second one, and no attempt has concluded, so an open recovery
+        waits for the pass that runs instead of being closed here: `_recheck_worker` resumes it, the
+        pass's outcome concludes it, and an answer by a person concludes it in `resolve_human`. The
+        reason is stable, so an unchanged fault writes once and the next tick does nothing."""
+        return self._write(wi, dict(wi, state="human_waiting", blockedOn=reason,
+                                    question=None),
+                           "worker_unavailable", worker=wi.get("worker"))
+
+    def _recheck_worker(self, wi):
+        """A held worker fault is re-read each tick, the way `_recheck_dependency` re-reads a
+        dependency (ADR-0081): one that has cleared resumes the WorkOrder already on record, under its
+        own idempotency key, so the relay can hold at most one task for it; one that has not cleared
+        writes nothing. A relay that cannot answer leaves the hold as it is: the WorkItem already waits
+        on this exact subject, so a second environment fault must not become a row per tick. A rebuilt
+        image changes the binding an activation pins, so that repair still needs a re-enable
+        (ADR-0094, ADR-0133)."""
+        incident = wi.get("incident") or {}
+        if incident.get("action") != "worker_unavailable" or not wi.get("activeWorkOrderId"):
+            return wi
+        order = next((o for o in self.store.workorders(wi["id"])
+                      if o["id"] == wi["activeWorkOrderId"]), None)
+        if order is None:
+            return wi
+        try:
+            fault = self._worker_fault(wi, wi.get("worker"))
+        except RelayError:
+            return wi
+        if fault:  # still unusable: the same incident, unchanged
+            return wi
+        refused = self._guard_followup(wi)  # the issue may have changed while this waited
+        if refused is not None:
+            return refused
+        resumed = dict(incident, id=incident.get("id", 0) + 1, action="worker_resumed",
+                       reason=self._norm_reason(wi), since=now(), agentAnswered=True)
+        wi = self._write(wi, dict(wi, state="dispatching", blockedOn=None, incident=resumed),
+                         "worker_resumed", worker=wi.get("worker"))
+        return self.submit(wi, order, guarded=True)
 
     def worker_memory(self, token, args):
         found = self.store.order_by_ask_token(token)
@@ -1682,6 +2010,10 @@ class Foreman:
             if resolution == "retry":
                 new = dict(wi, state="changes_requested" if wi.get("prNumber") else "ready", terminalReason=None,
                            passesBefore=wi.get("passesBefore") if agent and not owner_asked else passes)
+                if (wi.get("incident") or {}).get("action") == "worker_unavailable":
+                    # the held order was never submitted, and a retry builds a new one (ADR-0133), so
+                    # the pointer must not make the WorkItem look like a running pass
+                    new = dict(new, activeWorkOrderId=None, providerTaskId=None)
             elif resolution == "regate" and wi.get("prNumber"):
                 regated_at = now()  # before the edit, so the run the edit starts begins after it
                 rerun = {"gateRerun": self._rerun_gate(wi)}
@@ -1693,6 +2025,7 @@ class Foreman:
             if agent and not owner_asked and not lead_ok and wi.get("incident") is not None:
                 # Day Desk's answer is spent on this incident; the next one it may answer is a new record
                 new = dict(new, incident=dict(wi["incident"], agentAnswered=True))
+            self._finish_recovery(wi, False)  # an answer ends the attempt a recovery chose before it ran
             return self._write(wi, dict(new, blockedOn=None, attempts=[], recovery=None, pendingRetry=None,
                                         infraRetries=0), "human_resolved",
                                resolution=resolution, note=note, by=by, **rerun, **({"agent": True} if agent else {}),
@@ -2180,9 +2513,10 @@ class Foreman:
             wi = self.store.get(workitem_id)
             if wi is None:
                 raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
-            if wi["state"] not in ("issued", "planned", "ready", "human_waiting"):
+            if wi["state"] not in ("issued", "planned", "queued", "ready", "human_waiting"):
                 raise ToolError(f"{workitem_id} is {wi['state']}; dependencies change only on an issued, planned, "
-                                "ready or human_waiting WorkItem. Answer it with factory_resolve_human instead")
+                                "queued, ready or human_waiting WorkItem. Answer it with "
+                                "factory_resolve_human instead")
             if self.store.workorders(workitem_id):
                 raise ToolError(f"{workitem_id} already had a worker pass, so its dependencies stay. Close it and "
                                 "open a new issue to run it in another order")
@@ -2711,7 +3045,13 @@ class Foreman:
         """A worker pass may still be running on the WorkItem: an active WorkOrder, a live relay
         task, or a state whose next step dispatches or polls one. The per-WorkItem lease in
         replace_issue already excludes a concurrent tick. Past attempts that failed or were
-        exhausted and wrote no live marker are history, not a live worker."""
+        exhausted and wrote no live marker are history, not a live worker. A WorkItem held on a
+        worker fault is the exception: it keeps `activeWorkOrderId` so its resume submits that same
+        order instead of buying a second one (#522), and nothing runs while it waits, so the repairs
+        its escalation asks for are not refused as live work."""
+        if (wi["state"] == "human_waiting"
+                and (wi.get("incident") or {}).get("action") == "worker_unavailable"):
+            return False
         return bool(wi.get("activeWorkOrderId") or wi.get("providerTaskId")) or wi["state"] in WORKING
 
     def _check_dependency(self, wi, number):
@@ -2753,13 +3093,13 @@ class Foreman:
         text = f"{item['title']}\n{item['body']}".lower()  # code cannot tell a request from a mention
         # Refuse any mention of a protected name as whole path segments (ADR-0125): the same tokens
         # patches.is_protected refuses drive a plan's paths, so the plan refuses them up front — a
-        # dotted name bare (`.github`) or deeper (`.github/workflows`), and a slash-joined root
-        # spelling. A plain word ("secrets") must still keep its slash: the English word in prose
-        # is not the path.
+        # file entry by its whole-word name (`.env`, `Dockerfile`), a directory entry by its
+        # slash-joined spelling (`secrets/`, `backend/secrets/`, `.github/workflows`). A plain word
+        # ("secrets") must still keep its slash: the English word in prose is not the path.
         named = []
         for path in self.config.protected_paths:
             stem = path.lower().rstrip("/")
-            boundary = r"(?:/|(?![\w.-]))" if ("." in stem or "/" in stem) else "/"
+            boundary = "/" if path.endswith("/") and "." not in stem else r"(?:/|(?![\w.-]))"
             if re.search(rf"(?<![\w.-]){re.escape(stem)}{boundary}", text):
                 named.append(path)
         if named:

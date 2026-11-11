@@ -77,7 +77,7 @@ class PausingForeman(Foreman):
         super().__init__(*args)
         self.paused = False
 
-    def submit(self, wi, order):
+    def submit(self, wi, order, guarded=False):
         if not self.paused:
             self.paused = True
             request = f"{REQUEST}-{len(self.store.requests()) + 1}"

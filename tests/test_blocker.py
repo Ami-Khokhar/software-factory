@@ -1,8 +1,12 @@
 """A WorkItem that no longer waits on a person drops its blockedOn, and factory_status shows it."""
+import re
 import unittest
+from pathlib import Path
+from unittest import mock
 
-from factory_mcp import tools
+from factory_mcp import metrics, tools
 from factory_mcp.config import Config
+from factory_mcp.github import GitHubError
 from factory_mcp.foreman import Foreman
 from factory_mcp.store import Store
 from factory_mcp.workitem import reconcile
@@ -77,6 +81,185 @@ class BlockerDroppedTest(unittest.TestCase):
         self.assertEqual(wi["state"], "cancelled")
         self.assertIsNone(wi["blockedOn"])
         self.assertIsNone(self.status_row()["blockedOn"])
+
+
+class EscalationSaysWhatIsNewTest(unittest.TestCase):
+    """#480: an escalation says what the person has not seen yet, not only what is wrong."""
+
+    BLOCKERS = [{"fingerprint": "a1", "firstSeenRound": 1, "resolved": False},
+                {"fingerprint": "b2", "firstSeenRound": 1, "resolved": False},
+                {"fingerprint": "c3", "firstSeenRound": 3, "resolved": False}]
+    ANSWERED_AT_2 = [{"action": "reconcile", "at": "t1", "detail": {"headSha": "c1", "round": 2}},
+                     {"action": "human_resolved", "at": "t2",
+                      "detail": {"resolution": "retry", "by": "owner"}}]
+
+    def workitem(self, **fields):
+        wi = {"id": ID, "state": "human_waiting", "blockedOn": HUMAN_BLOCKED_ON, "owner": "o",
+              "attempts": [], "gateRound": 3, "blockers": list(self.BLOCKERS)}
+        wi.update(fields)
+        return wi
+
+    def setUp(self):
+        self.github, self.relay = FakeGitHub(), FakeRelay()
+        self.git = FakeGit(self.github).install(self)
+        self.github.add_issue(REPO, 7)
+        self.foreman = Foreman(Store(":memory:"), self.github,
+                               Config(mcp_token="t", repos=frozenset({REPO})), self.relay)
+        self.foreman.intake(REPO, 7)
+        self.assertEqual(self.tick()["state"], "implementing")
+
+    def tick(self):
+        return self.foreman.tick(ID)["workItem"]
+
+    def land(self, sha):
+        """One worker pass whose patch lands as `sha`."""
+        wi = self.tick()
+        self.git.sha = sha
+        self.relay.finish(wi["providerTaskId"], output=result_line(wi["activeWorkOrderId"]))
+        return self.tick()
+
+    def status(self):
+        """factory_status for this one WorkItem, which is where an escalation is built."""
+        return tools.build(self.foreman.store, self.foreman)["factory_status"].fn({"id": ID})
+
+    def escalate_again(self, sha, round_):
+        """A gate verdict on `sha`, so the WorkItem comes back to a person."""
+        self.github.add_run(REPO, sha, conclusion="failure")
+        self.github.add_verdict(REPO, 100, "HUMAN", round_, sha, findings=[
+            {"severity": "blocking", "path": "src/app.py", "problem": "the parse drops a null"}])
+        return self.tick()
+
+    def test_new_counts_the_findings_first_reported_after_the_round_the_answer_covered(self):
+        """A first escalation is often raised at the round in which the same problem repeated
+        (ADR-0005), so "new" is measured from the round the last answer covered, never from the gate's
+        current one."""
+        esc = metrics.escalation(self.workitem(), self.ANSWERED_AT_2)
+        self.assertEqual(esc["findings"], {"new": 1, "reported": 2, "resolved": 0})
+
+    def test_every_open_finding_is_new_when_nobody_has_answered_yet(self):
+        history = [{"action": "reconcile", "at": "t1", "detail": {"headSha": "c1", "round": 3}}]
+        self.assertEqual(metrics.escalation(self.workitem(), history)["findings"],
+                         {"new": 3, "reported": 0, "resolved": 0})
+
+    def test_a_finding_they_already_answered_at_the_same_round_is_not_new_again(self):
+        """A regate keeps its round (ADR-0113), so the findings it repeats are not new."""
+        blockers = [{"fingerprint": "a1", "firstSeenRound": 2, "resolved": False},
+                    {"fingerprint": "b2", "firstSeenRound": 2, "resolved": False}]
+        esc = metrics.escalation(self.workitem(blockers=blockers, gateRound=2), self.ANSWERED_AT_2)
+        self.assertEqual(esc["findings"], {"new": 0, "reported": 2, "resolved": 0})
+
+    def test_a_resolved_finding_is_counted_apart_from_new_and_reported(self):
+        blockers = self.BLOCKERS + [{"fingerprint": "d4", "firstSeenRound": 1, "resolved": True}]
+        esc = metrics.escalation(self.workitem(blockers=blockers), self.ANSWERED_AT_2)
+        self.assertEqual(esc["findings"], {"new": 1, "reported": 2, "resolved": 1})
+
+    def test_a_reader_who_answered_before_any_verdict_sees_every_finding_as_new(self):
+        """An answer can come before any accepted verdict. Its round is 0, not nothing, so a finding
+        reported afterwards is new to the reader."""
+        history = [{"action": "reconcile", "at": "t1", "detail": {"headSha": "c1"}},
+                   {"action": "human_resolved", "at": "t2", "detail": {"by": "owner"}}]
+        self.assertEqual(metrics.last_answer(history), {"head": "c1", "round": 0, "by": "owner"})
+        blockers = [{"fingerprint": "a1", "firstSeenRound": 2, "resolved": False},
+                    {"fingerprint": "b2", "firstSeenRound": 2, "resolved": False}]
+        esc = metrics.escalation(self.workitem(blockers=blockers, gateRound=2), history)
+        self.assertEqual(esc["findings"], {"new": 2, "reported": 0, "resolved": 0})
+
+    def test_a_workitem_the_gate_never_reported_on_says_nothing_about_findings(self):
+        self.assertIsNone(metrics.escalation(self.workitem(blockers=[]), [])["findings"])
+
+    def test_it_owes_a_comparison_from_the_head_the_last_answer_was_given_on(self):
+        """The base is the head the answer was given on, not the default branch and not the reviewed
+        head: what has not been read is what changed after that answer."""
+        self.assertEqual(metrics.changed_since(self.workitem(headSha="c2"), self.ANSWERED_AT_2),
+                         {"from": "c1", "to": "c2", "by": "owner"})
+
+    def test_the_answer_travels_so_an_agents_answer_is_not_shown_as_the_owners(self):
+        history = [{"action": "reconcile", "detail": {"headSha": "c1", "round": 1}},
+                   {"action": "human_resolved", "detail": {"agent": True, "by": "day-desk"}}]
+        self.assertEqual(metrics.changed_since(self.workitem(headSha="c2"), history)["by"],
+                         "day-desk")
+
+    def test_it_owes_no_comparison_when_nobody_has_answered_yet(self):
+        history = [{"action": "reconcile", "at": "t1", "detail": {"headSha": "c1"}}]
+        self.assertIsNone(metrics.changed_since(self.workitem(headSha="c1"), history))
+
+    def test_it_owes_no_comparison_when_the_head_is_the_one_the_answer_covered(self):
+        history = [{"action": "reconcile", "detail": {"headSha": "c1"}},
+                   {"action": "human_resolved", "detail": {}},
+                   {"action": "reconcile", "detail": {"headSha": "c1"}}]
+        self.assertIsNone(metrics.changed_since(self.workitem(headSha="c1"), history))
+
+    def test_the_paths_the_caller_read_ride_on_the_escalation_unchanged(self):
+        changed = {"from": "c1", "to": "c2", "by": "owner", "paths": ["src/app.py"]}
+        self.assertEqual(metrics.escalation(self.workitem(), [], changed=changed)["changedSince"],
+                         changed)
+
+    def test_a_first_escalation_compares_nothing(self):
+        self.land("c1")
+        self.assertEqual(self.escalate_again("c1", 1)["state"], "human_waiting")
+        before = list(self.github.compares)
+        self.assertIsNone(self.status()["escalation"]["changedSince"])
+        self.assertEqual(self.github.compares, before)
+
+    def test_it_lists_the_paths_that_changed_since_the_last_answer(self):
+        self.land("c1")
+        self.assertEqual(self.escalate_again("c1", 1)["state"], "human_waiting")
+
+        self.foreman.resolve_human(ID, "retry", "try the parse again", by="owner")
+        self.land("c2")  # a fix pass onto the same pull request, so the head moves
+        self.assertEqual(self.escalate_again("c2", 2)["state"], "human_waiting")
+
+        changed = self.status()["escalation"]["changedSince"]
+        self.assertEqual(changed, {"from": "c1", "to": "c2", "by": "owner", "paths": ["src/app.py"]})
+        self.assertIn((REPO, "c1", "c2"), self.github.compares)
+
+    def test_a_comparison_github_refuses_is_reported_and_not_raised(self):
+        """A base a force-push erased must not fail the status call that would have shown it."""
+        self.land("c1")
+        self.assertEqual(self.escalate_again("c1", 1)["state"], "human_waiting")
+        self.foreman.resolve_human(ID, "retry", "try the parse again", by="owner")
+        self.land("c2")
+        self.assertEqual(self.escalate_again("c2", 2)["state"], "human_waiting")
+
+        refused = mock.patch.object(self.github, "changed_files",
+                                    side_effect=GitHubError(404, "Not Found"))
+        with refused:
+            escalation = self.status()["escalation"]
+        self.assertEqual(escalation["changedSince"],
+                         {"from": "c1", "to": "c2", "by": "owner", "paths": None,
+                          "error": "GitHub could not compare c1..c2: GitHub 404: Not Found"})
+
+
+class EscalationWordingTest(unittest.TestCase):
+    """ADR-0132 has one wording: the counts and the comparison are measured from the last answer,
+    whoever gave it. Five pull requests reworded one instance at a time and missed another each
+    round, so the rule is checked instead."""
+
+    # Present and past tense both: a first pass matched exact substrings and the past tense it missed
+    # reached main.
+    BANNED = re.compile(r"the reader('s\b| has| had| answered| sees| saw)"
+                        r"|(round|head) they (last )?answered"
+                        r"|\bthey have not\b")
+    ROOT = Path(__file__).resolve().parent.parent
+
+    def test_no_doc_or_docstring_attributes_the_last_answer_to_its_reader(self):
+        offenders = []
+        for folder in ("docs", "factory_mcp", "tests"):
+            for path in sorted((self.ROOT / folder).rglob("*")):
+                if path.suffix not in (".md", ".py") or not path.is_file():
+                    continue
+                for number, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+                    if self.BANNED.search(line):
+                        offenders.append(f"{path.relative_to(self.ROOT)}:{number}: {line.strip()}")
+        self.assertEqual(offenders, [])
+
+    def test_the_adr_does_not_cite_itself(self):
+        """Another document may cite it; its own section may not."""
+        text = (self.ROOT / "docs" / "decisions.md").read_text()
+        start = text.index("## ADR-0132")
+        end = text.find("\n## ADR-", start + 1)
+        self.assertNotIn("(ADR-0132)", text[start:end if end > 0 else len(text)])
+        self.assertIn("(ADR-0132)", (self.ROOT / "docs" / "contracts.md").read_text())
 
 
 if __name__ == "__main__":

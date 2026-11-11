@@ -1,6 +1,8 @@
 """Speak Streamable HTTP to a real factory-mcp server on an ephemeral port."""
 import json
 import threading
+import time
+from datetime import datetime, timedelta, timezone
 import unittest
 import urllib.error
 import urllib.request
@@ -162,6 +164,8 @@ class McpServerTest(unittest.TestCase):
         self.assertEqual(reads, {"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons",
                                  "factory_report", "factory_memory_events", "factory_memory_search", "factory_dream_status", "factory_improvement_status", "factory_docker_status", "factory_project_status"})
         self.assertEqual(writes, {"factory_improvement_validate", "factory_dream_run", "factory_memory_put", "factory_intake", "factory_tick", "factory_resolve_human",
+                                  "factory_queue_next", "factory_queue_approve",
+                                  "factory_queue_leave",
                                   "factory_answer_question",
                                   "factory_propose_issue", "factory_add_repo", "factory_approve_issue",
                                   "factory_bootstrap_repo", "factory_approve_lesson",
@@ -202,7 +206,9 @@ class McpServerTest(unittest.TestCase):
         """Day Desk drives with FACTORY_AGENT_TOKEN (ADR-0030). The token, not the model, decides what
         it may call. A new tool joins AGENT_TOOLS on purpose."""
         listed = {t["name"] for t in self.rpc("tools/list", token=AGENT)["result"]["tools"]}
-        self.assertEqual(listed, {"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons", "factory_report", "factory_memory_events", "factory_memory_search", "factory_dream_status", "factory_improvement_status",
+        self.assertEqual(listed, {"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons",
+                                  "factory_queue_next", "factory_queue_approve", "factory_queue_leave",
+                                  "factory_report", "factory_memory_events", "factory_memory_search", "factory_dream_status", "factory_improvement_status",
                                   "factory_approve_issue", "factory_propose_issue", "factory_start_plan",
                                   "factory_start_project",
                                   "factory_set_dependencies", "factory_replace_issue", "factory_resolve_human",
@@ -298,6 +304,30 @@ class McpServerTest(unittest.TestCase):
         row = json.loads(result["content"][0]["text"])["workItems"][0]
         self.assertEqual((row["headSha"], row["prNumber"], row["gateRound"], row["worker"]),
                          ("c2", 15, 2, "codex"))
+
+    def test_a_queued_summary_carries_its_claim_and_whether_it_lapsed(self):
+        """The drive text is the only wake Day Desk gets (ADR-0135), and it can only report a lapsed
+        claim if the summary carries the claim: a live one, a lapsed one, and no claim at all."""
+        def stamp(seconds_ago):
+            return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)
+                    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.store.put(dict(workitem(id="o/r#1"), state="queued",
+                            queue={"at": stamp(10), "claimedBy": "day-desk", "claimedAt": stamp(10)}))
+        self.store.put(dict(workitem(id="o/r#2"), state="queued",
+                            queue={"at": stamp(3600), "claimedBy": "day-desk",
+                                   "claimedAt": stamp(3600)}))
+        self.store.put(dict(workitem(id="o/r#3"), state="queued"))
+        self.store.put(dict(workitem(id="o/r#4"), state="queued",
+                            queue={"at": stamp(10), "claimedBy": "day-desk"}))  # no stamp: never strands it
+        result = self.rpc("tools/call", {"name": "factory_status", "arguments": {}})["result"]
+        rows = {row["id"]: row for row in json.loads(result["content"][0]["text"])["workItems"]}
+        self.assertEqual(rows["o/r#1"]["queue"], {"by": "day-desk", "expired": False,
+                                                 "leftForOwner": None})
+        self.assertEqual(rows["o/r#2"]["queue"], {"by": "day-desk", "expired": True,
+                                                 "leftForOwner": None})
+        self.assertIsNone(rows["o/r#3"]["queue"])
+        self.assertEqual(rows["o/r#4"]["queue"], {"by": "day-desk", "expired": True,
+                                                 "leftForOwner": None})
 
     def test_protocol_errors(self):
         self.assertEqual(self.rpc("nope")["error"]["code"], -32601)

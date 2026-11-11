@@ -10,6 +10,7 @@ from .mcp import Tool, ToolError
 # What Day Desk may call when it drives the factory with FACTORY_AGENT_TOKEN (ADR-0030). Setting up
 # a repo, its gate secrets, and the lessons workers read stay with the owner's token.
 AGENT_TOOLS = frozenset({"factory_runtime_status", "factory_status", "factory_repo_check", "factory_lessons",
+                         "factory_queue_next", "factory_queue_approve", "factory_queue_leave",
                          "factory_report", "factory_memory_events", "factory_memory_search", "factory_dream_status",
                          "factory_improvement_status",
                          "factory_check_worker", "factory_reload_workers", "factory_set_worker_enabled",
@@ -35,18 +36,48 @@ def last_allowance_use(history):
             "evidence": detail.get("evidence"), "remaining": detail.get("remaining")}
 
 
-def _gate_pins(foreman):
-    """Each repo's pr-gatekeeper revision pin (its gatekeeper_ref, ADR-0080), as the weekly report
-    stamps it on every gauge (ADR-0083), so two windows under different pins never read as one
-    trend. Best effort: a repo the factory cannot read yields "unknown", never a failed report."""
-    pins = {}
+def _changed(foreman, wi, history):
+    """The paths that are new since the last answer (#480): from the head that answer was given on
+    to the current head, in one read that only an escalation whose head moved is owed. A failed
+    comparison says so in the payload rather than failing the status call that shows it."""
+    if wi["state"] not in WAITING:
+        return None
+    since = metrics.changed_since(wi, history)
+    if since is None:
+        return None
+    base, head = since["from"], since["to"]
+    try:
+        files = foreman.github.changed_files(wi["repo"], base, head)
+    except GitHubError as exc:
+        return dict(since, paths=None,
+                    error=f"GitHub could not compare {base[:7]}..{head[:7]}: {exc}")
+    return dict(since, paths=[f["filename"] for f in files])
+
+
+def _gate_revisions(foreman):
+    """Each repo's gate revision, for the first-pass gauges (ADR-0083, ADR-0134): the commit its
+    caller froze, or the revision the release channel resolves to when it names the channel. Two
+    windows under different gate revisions are not one trend, so every gauge carries what it ran.
+    Reading is all this does: nothing compares a pin, upgrades one, or refuses a caller, and a repo
+    the factory cannot read is "unknown", never a failed report."""
+    channel, revisions = None, {}
     for repo in sorted(foreman.config.repos):
         try:
-            text = foreman.github.file(repo, ".github/workflows/pr-gatekeeper.yml")
-            pins[repo] = (repos._gate_pins(text) or {}).get("refSha") or "unknown"
+            caller = foreman.github.file(repo, repos.GATE_WORKFLOW)
         except GitHubError:
-            pins[repo] = "unknown"
-    return pins
+            revisions[repo] = "unknown"
+            continue
+        if not caller:  # no caller installed: this repo ran no gate, so it names none
+            revisions[repo] = "unknown"
+            continue
+        frozen = repos.frozen_revision(caller)
+        if frozen:
+            revisions[repo] = frozen
+            continue
+        if channel is None:
+            channel = repos.channel_revision(foreman.github) or "unknown"
+        revisions[repo] = channel
+    return revisions
 
 
 def build(store, foreman, agent=False):
@@ -73,6 +104,8 @@ def build(store, foreman, agent=False):
                         reason = reason or f"member used {projects.MAX_MEMBER_PASSES} passes"
                 if project["state"] == "active":
                     row["leadBlockedBy"] = reason
+        if wi["state"] == "queued":
+            row["queue"] = foreman.queue_state(wi)
         question = wi.get("question") or {}
         if (wi["state"] in ("dispatching", "implementing") and question.get("text")
                 and not question.get("answer")):
@@ -99,7 +132,8 @@ def build(store, foreman, agent=False):
         if wi is None:
             raise ToolError(f"No WorkItem {workitem_id}")
         history = store.history(workitem_id)
-        return {"workItem": wi, "escalation": metrics.escalation(wi, history),
+        return {"workItem": wi, "escalation": metrics.escalation(
+                    wi, history, changed=_changed(foreman, wi, history)),
                 "passes": len(store.workorders(workitem_id)), "history": history,
                 "allowanceUse": last_allowance_use(history)}
 
@@ -147,6 +181,7 @@ def build(store, foreman, agent=False):
         checks = repos.check(foreman.github, repo)
         return {"repo": repo, "enabled": foreman.config.listed(repo) is not None,
                 "ready": all(c["ok"] for c in checks), "checks": checks,
+                "gateRevision": repos.channel_revision(foreman.github) or "unknown",
                 "setupMergeAuthorized": foreman.store.setup_merge(repo) is not None}
 
     def show_lessons(args):
@@ -171,7 +206,7 @@ def build(store, foreman, agent=False):
                       for candidate in lessons.candidates(store, repo)]
         return metrics.weekly(store.all(), store.history, candidates,
                               metrics.lesson_effect(approved, store.all_workorders),
-                              datetime.now(timezone.utc), store.all_workorders, _gate_pins(foreman))
+                              datetime.now(timezone.utc), store.all_workorders, _gate_revisions(foreman))
 
     tools = [
         Tool("factory_docker_status", "Check whether the host Docker engine is running.",
@@ -220,10 +255,9 @@ def build(store, foreman, agent=False):
              "write", lambda args: foreman.add_repo(args["repo"], args["by"])),
         Tool("factory_bootstrap_repo",
              "Prepare an owner-reviewed setup PR containing only missing gate files and the "
-             "factory-standard block. An installed pr-gatekeeper caller whose gate revision pins "
-             "are older than the approved revision is upgraded on the same PR, changing only those "
-             "two pins and leaving its verify command, permissions, secrets and unrelated files as "
-             "they are. Never merges or enables the repo. Requires a verify command "
+             "factory-standard block. An installed pr-gatekeeper caller is left exactly as the repo "
+             "wrote it: the gate revision follows the release channel, so no caller carries a pin to "
+             "keep current (ADR-0134). Never merges or enables the repo. Requires a verify command "
              "when the gate config is missing. An empty repo first gets one commit with only a "
              "README.md on its default branch; the result names it as initialCommit. An open setup "
              "PR is adopted; when its files differ from the plan, a commit is added to it (updatedSha), "
@@ -274,6 +308,46 @@ def build(store, foreman, agent=False):
                              "requestId": {"type": "string", "minLength": 1,
                                            "description": "stable ID for the request; every retry carries it"}}},
              "write", lambda args: foreman.merge_setup_pr(args["repo"], args["by"], args["requestId"])),
+        Tool("factory_queue_next",
+             "Claim the next WorkItem waiting for an orchestrator's decision (ADR-0135): urgent first, "
+             "then oldest, and none when the queue is empty. A claim is exclusive for 15 minutes, so "
+             "two agents never take the same one, and this call can wait up to 300 seconds: while the "
+             "queue is empty it reads `factory:urgent` from GitHub itself, so an urgent label is seen "
+             "without waiting for a tick. It changes nothing about the work.",
+             {"type": "object", "required": ["by"], "additionalProperties": False,
+              "properties": {"by": {"type": "string", "minLength": 1,
+                                    "description": "the agent taking it, like day-desk"},
+                             "waitSeconds": {"type": "integer", "minimum": 0, "maximum": 300}}},
+             "write", lambda args: {"next": foreman.next_queued(args["by"], args.get("waitSeconds", 0))}),
+        Tool("factory_queue_approve",
+             "Approve a claimed queue entry so the factory works on it: it leaves the queue for ready, "
+             "and the next tick dispatches it through every existing guard. Refused for any WorkItem "
+             "that is not queued. Approve it when the issue is worth a worker pass as it stands. Leave "
+             "it queued for the owner when the case, or a change to its acceptance, goes to the owner, "
+             "and do not claim it again until the owner acts.",
+             {"type": "object", "required": ["id", "by"], "additionalProperties": False,
+              "properties": {"id": {"type": "string"},
+                             "by": {"type": "string", "minLength": 1},
+                             "note": {"type": "string", "description": "why it is approved"},
+                             "worker": {"type": "string",
+                                        "description": "the agent that should run it, when the facts "
+                                                       "say another model fits; refused if a dispatch "
+                                                       "could not take it, naming the ones it could"}}},
+             "write", lambda args: {"workItem": foreman.approve_queued(
+                 args["id"], args["by"], args.get("note", ""), args.get("worker"))}),
+        Tool("factory_queue_leave",
+             "Record that a queued WorkItem is the owner's, not yours, and why in one line: it stays "
+             "queued, its claim is released, and the drive text says so, so you are not woken to decide "
+             "it again (ADR-0137). Use it for the cases the skill sends to the owner. The owner acting on "
+             "the issue puts the entry back in your hands.",
+             {"type": "object", "required": ["id", "by", "why"], "additionalProperties": False,
+              "properties": {"id": {"type": "string"},
+                             "by": {"type": "string", "minLength": 1,
+                                    "description": "the agent leaving it, like day-desk"},
+                             "why": {"type": "string", "minLength": 1,
+                                     "description": "the one line the owner reads"}}},
+             "write", lambda args: {"workItem": foreman.leave_for_owner(
+                 args["id"], args["by"], args["why"])}),
         Tool("factory_intake",
              "Create a WorkItem from an open GitHub issue in an allowlisted repo. The issue needs an "
              "'## Acceptance' list of '- <claim> — done when: <check>' bullets. Idempotent.",
@@ -290,7 +364,8 @@ def build(store, foreman, agent=False):
               "properties": {"repo": {"type": "string", "description": "owner/repo"},
                              "issue": {"type": "integer", "minimum": 1},
                              "by": {"type": "string", "minLength": 1, "description": "who approved"},
-                             "sourcePr": {"type": "integer", "minimum": 1},
+                             "sourcePr": {"type": "integer", "minimum": 1,
+                                          "description": "the merged source PR number the gate follow-up came from"},
                              "issueDigest": {"type": "string", "description": "SHA256 of JSON identity/title/body/author ID as documented"}}},
              "write", lambda args: {"workItem": foreman.approve_issue(
                  args["repo"], args["issue"], args["by"], args.get("sourcePr"), args.get("issueDigest"), agent=agent)}),

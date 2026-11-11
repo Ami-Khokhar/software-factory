@@ -168,6 +168,29 @@
         "provenanceVersion": { "type": "integer", "enum": [0, 1] }
       }
     },
+    "queue": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "description": "Set while the state is `queued` (ADR-0135): the orchestrator's queue entry. `urgent` puts it first and comes from factory:urgent, `at` is when it entered and is its place in the order, and a claim writes who took it and when. A claim past its lease is free again. Null in every other state.",
+      "properties": {
+        "leftForOwner": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "description": "Set when the orchestrator sent this entry to the owner (ADR-0137): who left it, the one line the owner reads, when, and the issue's own updatedAt at that moment, so the comparison that gives it back uses GitHub's clock and not this machine's. A claim never takes an entry that carries it.",
+          "required": ["by", "why", "at"],
+          "properties": {
+            "by": { "type": "string" },
+            "why": { "type": "string" },
+            "at": { "type": "string" },
+            "issueUpdatedAt": { "type": ["string", "null"] }
+          }
+        },
+        "urgent": { "type": "boolean" },
+        "at": { "type": ["string", "null"] },
+        "claimedBy": { "type": ["string", "null"] },
+        "claimedAt": { "type": ["string", "null"] }
+      }
+    },
     "state": { "$ref": "#/$defs/state" },
     "stateVersion": {
       "type": "integer",
@@ -177,6 +200,10 @@
     "activeWorkOrderId": { "type": ["string", "null"] },
     "providerTaskId": { "type": ["string", "null"], "description": "agent-relay's id for the active task." },
     "worker": { "type": ["string", "null"], "description": "agent-relay agentId used." },
+    "chosenWorker": {
+      "type": ["string", "null"],
+      "description": "The worker the orchestrator chose when it approved the queue entry (ADR-0136): the dispatch takes it when it can still run, else the routing policy does."
+    },
     "remoteVerify": {
       "type": ["object", "null"],
       "additionalProperties": false,
@@ -240,6 +267,7 @@
       "enum": [
         "issued",
         "planned",
+        "queued",
         "ready",
         "dispatching",
         "implementing",

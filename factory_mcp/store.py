@@ -12,7 +12,7 @@ import sqlite3
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .knowledge import Knowledge
@@ -404,6 +404,27 @@ class Store:
             rows = self._db.execute(
                 "SELECT at, action, detail FROM audit WHERE workitem_id IS NULL ORDER BY seq").fetchall()
         return [{"at": at, "action": action, "detail": json.loads(detail)} for at, action, detail in rows]
+
+    def log_worker_drift(self, worker, reason, window):
+        """One `worker_membership_drift` audit row per (worker, reason) per window at most (#437):
+        the duplicate check and the insert run under the store lock, so concurrent membership
+        walks log exactly one row, and the throttle reads the audit itself, so it survives a
+        restart instead of keeping unsynchronized state in the caller."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=window)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT at, detail FROM audit WHERE action = 'worker_membership_drift' "
+                "AND workitem_id IS NULL ORDER BY seq").fetchall()
+            for at, detail in reversed(rows):
+                said = json.loads(detail)
+                if said.get("worker") == worker and said.get("reason") == reason:
+                    if at >= cutoff:
+                        return
+                    break
+            self._db.execute(
+                "INSERT INTO audit (at, workitem_id, action, detail) VALUES (?, ?, ?, ?)",
+                (now(), None, "worker_membership_drift",
+                 json.dumps({"worker": worker, "reason": reason}, sort_keys=True)))
 
     def acquire(self, workitem_id, holder, ttl=300):
         """Take the per-WorkItem lease. False if another holder has an unexpired one."""

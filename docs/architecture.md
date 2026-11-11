@@ -61,9 +61,10 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
   pushes one README-only commit to an empty repo's default branch; the owner merges the PR before
   normal worker passes start (ADR-0019), or grants an auditable, revocable per-repo authorization
   and then only that PR may merge without a person, digest-checked and read back (ADR-0074). An
-  installed gate caller that pins an older gate revision is upgraded on the same PR by rewriting
-  only its two revision pins, so its verify command, permissions and secrets stay untouched
-  (ADR-0080). One
+  installed gate caller is left exactly as the repo wrote it: the gate revision follows the release
+  channel, where the gate's own `pr_body` job reads `gatekeeper-version.json` from the public
+  wrapper and passes the commit it names to `gates` and `review`, so no caller carries a pin to
+  keep current (ADR-0134). One
  owner approval of `factory_start_plan` opens all the
   issues of a plan, and they run in order (ADR-0024); `factory_set_dependencies` then frees the
   independent ones before a worker starts them, and re-points one stranded on a dependency that
@@ -91,7 +92,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/server.py` | Streamable HTTP on loopback: `POST /mcp` with the bearer token, `POST /worker/ask` and `POST /worker/memory` with a pass's own token (ADR-0098, ADR-0117), the background tick loop |
 | `factory_mcp/mcp.py` | The MCP protocol: one JSON-RPC message in, one response out, no I/O |
 | `factory_mcp/tools.py` | The tools, and whether each one reads or writes |
-| `factory_mcp/foreman.py` | The Foreman: intake, rebuild, tick, dispatch, poll a task, open a PR, and the person's acts (resolve, approve an issue, start a plan, add a repo, bootstrap a repo, approve or retire a lesson) |
+| `factory_mcp/foreman.py` | The Foreman: intake, rebuild, the orchestrator queue (claim, approve), tick, dispatch, poll a task, open a PR, and the person's acts (resolve, approve an issue, start a plan, add a repo, bootstrap a repo, approve or retire a lesson) |
 | `factory_mcp/workitem.py` | Intake from an issue, observing GitHub, and `reconcile`: the fact-driven half of the state machine |
 | `factory_mcp/documents.py` | WorkOrders (with the repo's lessons), the worker input, the Result check, the PR body |
 | `factory_mcp/diagnostics.py` | What a failed attempt means, read from the Result's optional diagnostics (ADR-0050): one evidence-backed cause, or an unknown one, with sanitized bounded context. The next WorkOrder carries the latest attempt and, when that one is not actionable, the last failing-test finding an intervening timeout would otherwise bury — read from the durable attempt records, so it survives the person's retry (ADR-0078) |
@@ -103,7 +104,7 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/github.py` | The GitHub REST client |
 | `factory_mcp/relay.py` | The agent-relay task client, and where it finds the relay's token |
 | `factory_mcp/patches.py` | The git work factory-mcp does: cloning a worker checkout, pushing a patch Result, and the owner-approved bootstrap pushes (`initial_commit`, `bootstrap`, `update_bootstrap`) |
-| `factory_mcp/repos.py` | The repo check, the bootstrap plan (`bootstrap_plan`, `plan_on`) that installs missing controls and upgrades stale gate revision pins, and `repos.json` (ADR-0014, ADR-0080) |
+| `factory_mcp/repos.py` | The repo check, the bootstrap plan (`bootstrap_plan`, `plan_on`) that installs only missing controls, the release channel's gate revision, and `repos.json` (ADR-0014, ADR-0134) |
 | `factory_mcp/setup_merge.py` | The owner-authorized merge of a repo's one canonical setup PR, digest-checked, fail-closed, journalled by request ID, with readback and readiness (ADR-0074) |
 | `factory_mcp/gate_secrets.py` | A repo's gate Actions secrets, set from the owner's Keychain through `gh` (ADR-0022) |
 | `factory_mcp/lessons.py` | Lesson candidates from the audit log, and `lessons.json` (ADR-0020) |
@@ -113,9 +114,9 @@ Owner ── Telegram ──► Day Desk (Hermes, tenant/hermes)        factory 
 | `factory_mcp/routing.py` | Which worker takes the next attempt: locality first, then one that has not failed |
 | `factory_mcp/dreaming.py` | Durable evidence windows, fair repo selection and the seven-day reflection cooldown (ADR-0118) |
 | `factory_mcp/outcomes.py` | Report merge facts and context exposure; validate owner-reported effects and demote stale measured advice (ADR-0121) |
-| `factory_mcp/metrics.py` | The escalation text, the autonomy rate, whether each lesson works, and the weekly report's numbers |
+| `factory_mcp/metrics.py` | The escalation (its reason, the decision, what was tried, how many of the gate's findings are new since the last answer, and the paths that changed since that answer, naming who gave it; ADR-0132), the autonomy rate, whether each lesson works, and the weekly report's numbers |
 | `factory_mcp/runtime.py` | Sanitized, read-only runtime facts and observational MCP schema-cache diagnostics (ADR-0091) |
-| `factory_mcp/worker_ops.py` | Validates and runs one bounded sanitized provider-health check, stores its binding/quarantine record, manages health-bound membership overrides and drift checks, and calls the relay's fixed registry-reload endpoint (ADR-0094) |
+| `factory_mcp/worker_ops.py` | Validates and runs one bounded sanitized provider-health check, stores its binding/quarantine record, manages health-bound membership overrides, computes membership once per routing decision and logs `worker_membership_drift` when an enabled member stops being routed (ADR-0131), and calls the relay's fixed registry-reload endpoint (ADR-0094) |
 | `factory_mcp/config.py` | Settings from the environment and `repos.json` |
 | `worker/runner.py` | Runs one WorkOrder in the sandbox and prints its Result |
 | `worker/Dockerfile` | The sandbox image: git, Python, Node, pinned pi, Codex and OpenCode, and no GitHub credential |
@@ -140,6 +141,10 @@ A tick comes from the background loop or from `factory_tick`.
    it is the gate's merge of the base branch (ADR-0039); then act at most once. A fine-grained token cannot read
    check runs on a private repo, so the gate's workflow run stands in; when the token cannot read
    that either, the verdicts and `FACTORY_GATE_WAIT_SECONDS` still move the WorkItem:
+   - `queued`: nothing. The WorkItem waits for an orchestrator's claim and approval, so a tick adds no
+     action, no WorkOrder and no pass; the queue order and the claim are in `Foreman.next_queued`, and
+     the claim returns the decision packet `_queued_view` builds: acceptance, paths, attempts, workers,
+     gate and dependencies (ADR-0136).
    - `ready`: dispatch an implement WorkOrder, unless the issue has a `Depends on #n` line and
      #n has not merged: then it waits, with `waitingOn: n` (ADR-0024). `changes_requested`:
      dispatch a fix WorkOrder that carries the gate's blocking findings as data.
@@ -188,8 +193,11 @@ The states are the enum in `schemas/workitem.schema.json`.
 
 | From | Fact or action | To |
 |---|---|---|
-| (none) | intake of an open issue | `issued`; `planned` if labelled `factory:proposed`; `ready` if labelled `factory:ready` |
-| `issued`, `planned` | the issue gains `factory:ready` | `ready` |
+| (none) | intake of an open issue | `issued`; `planned` if labelled `factory:proposed`; `queued` if labelled `factory:ready` or `factory:urgent` (ADR-0135) |
+| `issued`, `planned` | the issue gains `factory:ready` or `factory:urgent` | `queued` |
+| `queued` | no orchestrator has claimed it | `queued`, and no tick dispatches it: the queue is the orchestrator's, not the clock's |
+| `queued` | an orchestrator claims it and approves it, `factory_queue_approve` | `ready`, then `dispatching` on the next tick |
+| `queued` | an orchestrator leaves it to the owner, `factory_queue_leave` | `queued` with `queue.leftForOwner`, unclaimable until the issue's `updatedAt` moves (ADR-0137) |
 | `ready` | the tick dispatches an implement WorkOrder, once each `Depends on #n` issue is closed with a merged PR on `factory/<n>` | `dispatching`, then `implementing` once the relay accepts |
 | `ready` | a `Depends on #n` issue is open | `ready` with `waitingOn: n`; nothing is dispatched |
 | `ready`, `changes_requested` | a `Worker:` line names an agent that is not in `FACTORY_WORKERS` | the name is dropped and routing picks among the named allowed workers, else all allowed ones, with an `unknown_worker_rerouted` audit row (ADR-0110); `human_waiting` only when none is eligible |
@@ -199,6 +207,7 @@ The states are the enum in `schemas/workitem.schema.json`.
 | `implementing` | the task completed, the Result is valid and the guards pass | `pr_open`, or `reviewing` when the PR already exists |
 | `implementing` | the task failed, or the Result or a guard failed | back to `ready` (`changes_requested` for a fix) with an `attempts` entry, routed to another model family when the failure ran out of the clock; `blocked` after 2, with one deferred attempt first after a timeout-class failure while an untried worker remains (once per budget, ADR-0081); a WorkItem whose second failure is a timeout gets one 60-minute run first, unless it belongs to a `paused`, `stopped` or missing Project (a `done` Project's member counts as a non-member) (`auto_longer_run`, ADR-0103, ADR-0108); a diagnosis that names the environment pauses as `human_waiting` on the first attempt (ADR-0051) |
 | `implementing` | the relay no longer knows the accepted task | `dispatching` again with the same WorkOrder and idempotency key, no `attempts` entry, bounded per budget by `RELAY_RETRIES_MAX`; past the bound or with a pending remote verify, an ordinary failed attempt (ADR-0081) |
+| `dispatching` | the routed worker cannot run: it was disabled, its image or credential changed since it was enabled, its health is stale for that binding, or its family is the gate reviewer's | `human_waiting` with that reason on it, keeping the order and its idempotency key, and one unchanged fault writes once. Each tick re-reads the worker: one that works again resumes that same order under its own key, so no second order and no second task. A rebuilt image changes the binding an activation pins, so it needs a re-enable first (ADR-0094, ADR-0129, ADR-0133) |
 | `pr_open` | the gate's check run, or its workflow run when the token cannot read check runs, exists on the head | `reviewing` |
 | `reviewing` | a verdict on the current head: MERGE, CHANGES or HUMAN | `merge_pending`, `changes_requested` or `human_waiting` |
 | `reviewing` | the gate's check run (or workflow run) finished, not cancelled, with no verdict | `human_waiting` |
@@ -273,7 +282,7 @@ for a decision `factory_resolve_human` makes, Day Desk's once per incident or th
 | A stale write loses | `store.put` | `test_store`: `test_stale_version_loses` |
 | No duplicate worker task | idempotency key = relay request id | `test_actions`: `test_relay_down_then_resubmit_with_same_key`, `test_duplicate_tick_is_a_no_op` |
 | Only allowlisted repos | `Foreman.intake`, `Foreman.tick` | `test_reconcile`: `test_intake_is_idempotent_and_allowlisted`; `test_actions`: `test_a_repo_off_the_allowlist_is_left_alone` |
-| Only trusted authors or owner-approved verified gate follow-ups reach a worker | `Foreman._admit` | `test_safety`: `test_only_trusted_authors_reach_a_worker`, `test_logins_ignore_case` |
+| Only trusted authors or owner-approved verified gate follow-ups reach a worker | `Foreman._admit`, `Foreman._followup_approval`, `Foreman._guard_followup` | `test_safety`: `test_only_trusted_authors_reach_a_worker`, `test_logins_ignore_case`; `test_followup_approval`: `test_owner_admits_original_and_repeated_approval_is_idempotent`, `test_bot_author_alone_still_refuses_even_an_authentic_followup`, `test_agent_and_wrong_owner_cannot_grant_approval`, `test_missing_forged_or_ambiguous_records_refuse_before_labelling` |
 | A Result meets its contract | `documents.check_result` | `test_schemas`: `test_check_result_accepts_what_the_result_schema_accepts` |
 | Only factory-mcp pushes, and only a patch (ADR-0017) | `Foreman.push_patch`, `patches.apply` | `test_actions`: `test_ready_to_pr_open`; `test_gate_loop`: `test_changes_fix_merge_closed`; `test_workers`: `test_unified_and_mbox_patches_push_the_workers_change` |
 | Changed paths come from GitHub, protected paths refused | `Foreman.check_pushed`, `patches.apply` | `test_actions`: `test_renaming_a_protected_path_fails_the_result`; `test_workers`: `test_a_patch_to_a_protected_path_is_never_pushed` |
@@ -282,6 +291,8 @@ for a decision `factory_resolve_human` makes, Day Desk's once per incident or th
 | One PR per WorkItem | `Foreman.open_pr` | `test_actions`: `test_a_result_for_a_branch_with_an_open_pr_joins_that_pr`, `test_open_pr_adopts_a_pr_opened_after_the_reconcile` |
 | A verdict is selected for the exact live PR head despite later comments for another head, and older rounds remain stale | `workitem.current_verdict`, `Foreman.act` | `test_gate_loop`: `test_a_live_head_changes_verdict_survives_a_later_comment_for_another_head`; `test_actions`: `test_stale_verdict_ignored`; `test_reconcile`: `test_old_round_is_stale` |
 | Transient GitHub GET resets, rate limits and server errors retry within a fixed wait bound; exhausted transport failures normalize to `GitHubError`; writes never retry | `GitHub._request` | `test_github`: `test_get_retries_bounded_rate_limits_and_server_errors`, `test_non_finite_retry_after_does_not_sleep_or_retry`, `test_get_retries_a_connection_reset`, `test_exhausted_get_transport_failures_are_github_errors`, `test_a_write_is_never_retried_after_a_server_error` |
+| A worker that cannot run holds its WorkItem once instead of raising out of the tick, and the fault repeats no row while it is unchanged | `Foreman._worker_fault`, `Foreman._hold_worker` | `test_worker_ops`: `test_a_worker_that_loses_its_image_holds_the_workitem_once_and_resumes_after_a_repair`, `test_deactivation_holds_a_pending_submission_without_buying_another_pass` |
+| Register, activate and label answer one runner-path question at their own strictnesses (ADR-0138) | `registry.runs_the_runner`, `registry.runs_this_runner` | `test_registry`: `test_register_activate_and_label_agree_on_a_registered_worker_and_an_impostor` |
 | The same problem twice goes to a person | `workitem.reconcile` | `test_gate_loop`: `test_same_problem_twice_goes_to_a_human` |
 | A merge without the gate is recorded | `workitem.reconcile` | `test_gate_loop`: `test_merge_without_a_merge_verdict_is_flagged` |
 | A PR that conflicts with its base is made again on the current base, including one already accepted to merge | `Foreman.act` | `test_gate_loop`: `test_a_pr_that_conflicts_with_main_is_made_again_on_the_current_main`, `test_a_merge_pending_pr_that_conflicts_is_made_again_on_the_current_main`, `test_a_conflict_while_waiting_to_merge_cannot_spend_past_the_budget` |

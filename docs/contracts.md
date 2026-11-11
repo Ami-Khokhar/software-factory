@@ -54,12 +54,14 @@ Credential-file readability is not provider authentication; only a returned `fac
 status of `ok` proves the synthetic response was received.
 
 The check also carries one launch step (`factory.health/v1` event type `launch`) when the probe
-returned `ok` and it runs for a repo whose configured checkout folder is a cloned checkout (`git`
-folder present, as `factory_set_worker_enabled` creates it): one tiny relay task to the agent
-itself, with the same task cwd (`Config.checkout(repo)`) and request-id idempotency a real
-WorkOrder submit sends. The input is `worker/runner.py`'s fixed launch marker, which it answers
-with a completed `factory.result/v1` Result and no WorkOrder, so the reply is judged by that
-document and not by its text. This is the launch path the sandboxed probe cannot see: the
+returned `ok` and it runs for a repo whose configured checkout folder is a cloned checkout (a `git`
+folder present, which `factory_add_repo` clones): one tiny relay task to the agent itself, with the
+same task cwd (`Config.checkout(repo)`) a real WorkOrder submit sends and a one-off request id,
+because the step is never retried. The input is `worker/runner.py`'s fixed launch marker, which it
+answers with its own `factory.launch/v1` document — a `status` of `completed` or `failed`, never a
+`factory.result/v1` Result, which would need a WorkOrder id and, when completed, a patch. The
+reply is judged by that document and not by its text; it is an internal health-check reply, not
+one of the four contracts below. This is the launch path the sandboxed probe cannot see: the
 interpreter the agent entry names, the task cwd, and macOS privacy denials on the checkout
 folder. A refused submit, a lost or timed-out task, a task that reports failure, or a reply that
 is not a completed launch quarantines the worker with a reason that names the launch step,
@@ -90,6 +92,11 @@ changes. Runtime status and selection use effective membership. After activation
 is not a running lease, but changed config, credential metadata, image or quarantine removes the
 worker from eligibility. Pending submissions reload the relay and recheck membership and reviewer
 family immediately before submit. Repair requires another health check and explicit reactivation.
+Membership is computed in one pass over the activation rows per routing decision
+(`worker_ops.membership`), so a dispatch inspects each worker's Docker image at most once. When an
+enabled row stops matching — an unavailable image, drifted binding, missing healthy checks or
+malformed registry data — `worker_ops` writes one `worker_membership_drift` audit row per worker
+and cause within a short window, so a routing tick is not logged twice.
 
 Pi's fixed `--no-extensions`, `--no-skills` and `--no-prompt-templates` switches are supported.
 Unsupported harness diagnostics expose only bounded flag names, never values or positional text,
@@ -151,6 +158,29 @@ and direct the caller to the approved template. Credential mounts over container
   already uses that same scalar explicitly. A changed relay cap blocks an overridden dispatch
   before saving a WorkOrder or spending a pass and concludes any open recovery. A transport
   failure instead leaves the item pending for the next tick. Existing orders and the global default stay fixed.
+- **A claim carries the facts the manager decides on (ADR-0136).** `factory_queue_next` returns, with
+  the entry it claimed: `acceptance` (the issue's bullets, parsed), `paths` (its fence), `attempts`
+  (`used`, `left`, the pass ceiling, and every failure with its worker, cause and reason), `workers`
+  (`ran` with a pass count each, `failed`, `allowed`), `gate` (the round, or null) and `dependsOn`.
+  Facts only, and read once: an agent deciding retry, split, hold or another worker needs no second
+  call to make the decision it was handed.
+- **Choosing the worker is `factory_set_worker` (ADR-0029) or the approval's `worker` (ADR-0136).**
+  Both write the same fact: the issue's `Worker:` lines, and `WorkItem.chosenWorker` for the approval,
+  which the dispatch takes when it can still run it and otherwise falls back to the routing policy. A
+  worker no dispatch could take — not enabled, not local for the repo, or in the gate reviewer's family
+  — is refused with the ones it could take named, so a choice is never accepted and silently replaced.
+  The name lands in the audit's `dispatch` row and in `WorkItem.worker`, not in the WorkOrder document,
+  which carries no worker key.
+- **`WorkItem.queue` is the orchestrator's queue entry (ADR-0135).** Set while the state is
+  `queued`, and null in every other state. `urgent` comes from `factory:urgent`, `at` is when it
+  entered and is its place in the order, and `claimedBy`/`claimedAt` are written by the claim that
+  took it. A claim older than fifteen minutes is free again, so a crashed agent cannot strand an
+  entry, and the store's optimistic version means a second claim loses rather than double-booking.
+  An approval clears it and moves the item to `ready`.
+  `leftForOwner` is the orchestrator's record that it sent the entry to the owner (ADR-0137): `by`,
+  `why` (the one line the owner reads), `at`, and `issueUpdatedAt`, the issue's own stamp when it was
+  left. A claim never takes an entry that carries it; the mark clears when the issue's `updatedAt`
+  moves past `issueUpdatedAt`, so the wake uses GitHub's clock and not the factory's.
 - **`WorkItem.pendingRetry` is one durable Day Desk retry intent (ADR-0095).** Null or
   absent means none. `factory_queue_retry` writes it with its request-journal row in one
   transaction, sanitized and bounded, spending nothing and starting nothing: a replay of the
@@ -187,6 +217,18 @@ and direct the caller to the approved template. Credential mounts over container
   terminal or not waiting has `blockedOn` `null`. WorkItems stored before #110
   could keep a stale `blockedOn`; the store's migration 2 drops it from any
   WorkItem whose state is not `human_waiting` or `blocked`.
+- **An escalation says what is new since the last answer (ADR-0132).** It counts the gate's
+  blocking findings against that answer, whoever gave it: `new` (first reported after the round the
+  answer covered, and every open one when nobody has answered), `reported` (the answer already
+  covered it) and `resolved` (the latest verdict no longer reports it). The base is the round of the newest
+  `human_resolved`, not the gate's current round: a first escalation is often raised at the round
+  in which the same problem repeated (ADR-0005), and a regate keeps its round (ADR-0113). When the
+  pull request head moved after that answer, the payload also carries `changedSince`
+  `{from, to, by, paths}`: the head the answer was given on, the current head, who gave the answer,
+  and the paths between them. An answer may be Day Desk's, which is why `by` travels and the reader
+  is never told they answered when they did not. That comparison is one read, made only for an
+  escalation whose head moved; a comparison GitHub refuses is reported as an error in the payload
+  rather than failing the status call that shows it. The metric itself makes no GitHub call.
 - **Budgets have two ceilings.** `WorkOrder.budget` requires `maxPasses` and
   `wallMs`. Reaching `maxPasses` moves the WorkItem to `exhausted`, except the
   first fix WorkOrder of a gate round, which is free for a non-member
@@ -412,20 +454,25 @@ worker, provider request, retry, allowance spend or host setting change.
 ## State machine
 
 ```
-issued → planned → ready → dispatching → implementing → pr_open
-                            ▲                                │
-                            │                                ▼
-                     changes_requested ◀────────────── reviewing
-                            │                                │
-                            │                                ▼
-                            │                          merge_pending
-                            │                                │
-                            │                                ▼
-                 human_waiting ──► (ready | closed)     merged → closed
+issued → planned → queued → ready → dispatching → implementing → pr_open
+                     │      ▲                                │
+                     │      │                                ▼
+        (claim, then │      │                         changes_requested ◀── reviewing
+         approve)    └──────┘                                │               │
+                                                             │               ▼
+                                                             │         merge_pending
+                                                             │               │
+                                                             ▼               ▼
+                                                 human_waiting ─► (ready|closed)   merged → closed
 ```
+
+`factory:ready` and `factory:urgent` put an issue in `queued`: it waits for an
+orchestrator to claim it and approve it, and no tick dispatches it before that.
+`factory:proposed` means `planned`, and an issue with no factory label is `issued`.
 
 Fault state: `blocked`. Budget ceiling: `exhausted`. Terminal states: `closed`,
 `cancelled`, `exhausted`. **`human_waiting` is not terminal.**
+**`queued` is not terminal either: it is the orchestrator's own queue.**
 
 ## Controller obligations (the guards)
 
@@ -732,6 +779,17 @@ required for success. The digest is SHA256 of the default Python JSON encoding
 (`ensure_ascii=True`) of `[GitHub issue id, number, title, complete body, author id]`.
 GitHub timeline, merged PR, reviewed gate comment and pinned reusable workflow run
 records must uniquely corroborate original creation and reviewed non-blocking work.
+The gate comment must carry a pr-gatekeeper marker whose fields the approval reads:
+`outcome: MERGE`, `head_sha` equal to the source PR's head, `findings` with the residual
+minor/nit work, and `reviewed: true`. The gate revision comes from the release channel:
+`Ami-Khokhar/pr-gatekeeper-workflow/gatekeeper-version.json` names the commit the gate's own
+`pr_body` job passes to `gates` and `review`, and a caller carries no pin. `factory_repo_check`
+reports the commit the channel resolves to now. An approval binds the run to the wrapper commit
+the base caller froze, or, for a caller on the channel, to the commit `v1` names at the time of
+the approval: a head can write its own `uses:` line, so only the tag may choose what approves. A marker without `reviewed` is treated as
+missing, forged or ambiguous provenance and the approval refuses: do not approve; check which
+gate revision produced the marker against the channel's `gate_revision` and report before
+retrying.
 Acceptance remains mandatory. Approval is stored in audit records, not WorkItem
 fields. The source review body digest also binds provenance against later comment edits.
 No schema or stored WorkItem migration is required. The digest and source
@@ -751,3 +809,9 @@ The control defaults live in factory_mcp/config.py: .github/, .env, .env.local, 
 or a directory prefix ending in /. These defaults do not promise basename matching at every
 depth. List actual nested controls, such as worker/.env or backend/secrets/, in the repository's
 base protected_paths. Its list can add to the factory floor, never subtract from it.
+
+A protected name matches whole path segments at any depth in a patch path. A plan mention is
+refused the same way, through the factory floor's entries: a file entry whole-word (.env,
+Dockerfile), a directory entry by its slash-joined spelling (secrets/, backend/secrets/), so the
+prose word "secrets" alone does not refuse a plan. The plan check reads no repo base list; a
+base-only entry is refused at push time instead.

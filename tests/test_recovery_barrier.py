@@ -156,7 +156,7 @@ class BarrierTest(unittest.TestCase):
         class RacingForeman(Foreman):
             """A replace operation that begins exactly between the dispatch decision and submit."""
 
-            def submit(self_, wi, order):
+            def submit(self_, wi, order, guarded=False):
                 if not flight["started"] and wi["id"] == f"o/r#{A}":
                     flight["started"] = True
                     self_.store.open_request(request, "replace",

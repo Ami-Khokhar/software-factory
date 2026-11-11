@@ -137,11 +137,13 @@ class SetupMergeTest(unittest.TestCase):
     def test_the_approved_setup_merges_exactly_and_reads_the_repo_back_ready(self):
         pr = self.setup_pr()
         self.green()
+        for name, color, text in repos.LABELS:  # factory_add_repo creates these, not the setup PR
+            self.github.create_label(REPO, name, color, text)
         merged = self.foreman.merge_setup_pr(REPO, "day-desk", "req-1")
 
         self.assertEqual((merged["prNumber"], merged["mergeSha"], merged["alreadyMerged"]),
                          (pr["prNumber"], MERGE, False))
-        self.assertTrue(merged["ready"])  # gate config, workflow and standard all landed
+        self.assertTrue(merged["ready"])  # gate config, workflow, standard and labels all in place
         readback = self.github.pull(REPO, pr["prNumber"])
         self.assertEqual((readback["state"], readback["merged_at"], readback["merge_commit_sha"]),
                          ("closed", "2026-09-24T03:00:00Z", MERGE))

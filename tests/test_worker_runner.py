@@ -16,7 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from factory_mcp import documents, diagnostics
+from factory_mcp import documents, diagnostics, worker_ops
 from factory_mcp.config import Config
 from tests.fakes import workitem
 
@@ -295,6 +295,14 @@ class RunnerTest(unittest.TestCase):
 
     def test_the_runner_and_the_controller_agree_on_the_ask_marker(self):
         self.assertEqual(runner.ASK_CHANNEL, documents.ASK_CHANNEL)
+
+    def test_the_runner_and_the_controller_agree_on_the_launch_marker_and_schema(self):
+        """Both literals cross the image boundary, where no import of factory_mcp exists, so a
+        drift would quarantine every worker with nothing failing (#430, ADR-0139)."""
+        self.assertEqual(runner.LAUNCH_INPUT, worker_ops.LAUNCH_PROMPT)
+        self.assertEqual(runner.LAUNCH_SCHEMA, worker_ops.LAUNCH_SCHEMA)
+        # A Result needs a WorkOrder and, when completed, a patch. The launch reply has neither.
+        self.assertNotEqual(worker_ops.LAUNCH_SCHEMA, "factory.result/v1")
 
     def test_the_verify_gets_the_reserve_and_a_short_pass_bounds_it(self):
         """The verify's own clock is the flat reserve, and a quarter of a short pass."""

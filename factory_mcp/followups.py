@@ -4,8 +4,13 @@ import json
 import re
 from datetime import datetime
 
+from . import repos
 from .mcp import ToolError
 from .verdict import GATE_LOGIN, parse_marker
+
+# A caller line that calls this factory's gate wrapper, on the release channel or a frozen commit.
+CALLER_USES = re.compile(
+    r"(?m)^\s*uses:\s*Ami-Khokhar/pr-gatekeeper-workflow/\.github/workflows/gatekeeper\.yml@\S+")
 
 
 def digest(issue):
@@ -34,8 +39,9 @@ def validate(github, repo, issue, source_pr):
     pr = github.pull(repo, source_pr)
     if (not pr.get("merged_at")
             or any((pr.get("merged_by") or {}).get(k) != v for k, v in bot.items())
-            or pr.get("base", {}).get("repo", {}).get("full_name") != repo
-            or pr.get("head", {}).get("repo", {}).get("full_name") != repo):
+            # head/base `repo` is null on GitHub when the repository was deleted
+            or ((pr.get("base") or {}).get("repo") or {}).get("full_name") != repo
+            or ((pr.get("head") or {}).get("repo") or {}).get("full_name") != repo):
         refuse()
     created = issue.get("created_at")
     if not created or created < pr["merged_at"]:
@@ -76,16 +82,24 @@ def validate(github, repo, issue, source_pr):
     comment, marker = reviews[0]
     # Trust the caller pinned on the source PR's base, never a pin supplied by the issue/PR head.
     caller = github.file(repo, ".github/workflows/pr-gatekeeper.yml", pr["base"]["sha"]) or ""
-    pins = re.findall(r"^\s*uses:\s*Ami-Khokhar/pr-gatekeeper-workflow/\.github/workflows/"
-                      r"gatekeeper\.yml@([0-9a-f]{40})\s*(?:#.*)?$", caller, re.M)
-    if len(pins) != 1:
+    # The caller must call this factory's wrapper exactly once (ADR-0134). A caller that names the
+    # release channel leaves the commit to the gate's own `pr_body` job, so the commit comes from
+    # GitHub's `referenced_workflows` record below, never from the caller or the PR text; a caller
+    # that froze a commit binds the run to that commit. A commented line is not a `uses:` line.
+    if len(CALLER_USES.findall(caller)) != 1:
         refuse()
+    # A caller that froze the wrapper commit binds the run to it. A caller on the release channel
+    # binds it to the commit `v1` names now: the head may write its own `uses:` line and GitHub
+    # records whatever it wrote, but it cannot move the tag, so the approval keeps the guarantee the
+    # deleted pin gave it (#422, ADR-0134).
+    pinned = repos.wrapper_revision(caller) or repos.channel_wrapper(github)
     runs = []
     for run in github.workflow_runs(repo, pr["head"]["sha"]):
         refs = run.get("referenced_workflows") or []
         trusted = [ref for ref in refs if re.fullmatch(
             r"Ami-Khokhar/pr-gatekeeper-workflow/\.github/workflows/gatekeeper\.yml@[0-9a-f]{40}",
-            ref.get("path", "")) and ref["path"].endswith("@" + ref.get("sha", "missing")) and ref.get("sha") == pins[0]]
+            ref.get("path", "")) and ref["path"].endswith("@" + ref.get("sha", "missing"))
+            and ref.get("sha") == pinned]
         if (run.get("path") == ".github/workflows/pr-gatekeeper.yml"
                 and run.get("head_sha") == pr["head"]["sha"]
                 and run.get("event") == "pull_request" and run.get("conclusion") == "success"

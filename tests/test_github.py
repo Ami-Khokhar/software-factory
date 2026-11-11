@@ -55,6 +55,10 @@ class Api(BaseHTTPRequestHandler):
                                                               {"name": "ci", "id": 1}]}, ""
         elif self.path.startswith("/repos/o/r/pulls?"):
             body, link = [{"number": 3}], ""
+        elif self.path.startswith("/repos/o/r/commits/v1"):
+            body, link = {"sha": "t" * 40}, ""
+        elif self.path.startswith("/repos/o/r/commits/gone"):
+            body, link, status = {"message": "No commit found for the ref gone"}, "", 422
         elif self.path in ("/repos/o/r/issues/404", "/repos/o/r/contents/.github/missing.json"):
             body, link, status = {"message": "Not Found"}, "", 404
         elif self.path == "/repos/o/r/pulls/3":
@@ -65,6 +69,10 @@ class Api(BaseHTTPRequestHandler):
             body, link = [{"event": "labeled"},
                           {"event": "cross-referenced", "source": {"issue": {"number": 3, "pull_request": {}}}},
                           {"event": "cross-referenced", "source": {"issue": {"number": 77, "pull_request": {}}}}], ""
+        elif self.path == "/repos/o/r/labels?per_page=100":
+            body, link = [{"name": "factory:ready"}, {"name": "factory:proposed"}], ""
+        elif self.path == "/repos/o/none/labels?per_page=100":
+            body, link = [], ""
         elif self.path == "/repos/o/r/git/matching-refs/":
             body, link = [{"ref": "refs/tags/v1"}], ""
         elif self.path == "/repos/o/empty/git/matching-refs/":
@@ -144,9 +152,20 @@ class GitHubClientTest(unittest.TestCase):
         self.assertEqual(Api.seen[0][0], "/search/issues?q=is%3Aissue+is%3Aopen+label%3A%22factory%3Aready%22"
                                          "+author%3Aamteshwar&per_page=100")
 
+    def test_a_ref_resolves_whether_it_is_a_tag_a_branch_or_a_sha(self):
+        """The release channel is a tag (`refs/tags/v1`), and the branches endpoint answers 404 for one,
+        so a tag that resolves here is the only proof the approval can read the channel at all."""
+        self.assertEqual(self.github.ref_revision("o/r", "v1"), "t" * 40)
+        self.assertIsNone(self.github.ref_revision("o/r", "gone"))
+
     def test_a_file_is_its_decoded_text_or_none(self):
         self.assertEqual(self.github.file("o/r", ".github/pr-gatekeeper.json"), '{"verify": "make test"}')
         self.assertIsNone(self.github.file("o/r", ".github/missing.json"))
+
+    def test_labels_are_the_names_the_repo_has_and_an_empty_list_is_not_an_error(self):
+        self.assertEqual(self.github.labels("o/r"), {"factory:ready", "factory:proposed"})
+        self.assertEqual(Api.seen[0][0], "/repos/o/r/labels?per_page=100")
+        self.assertEqual(self.github.labels("o/none"), set())
 
     def test_open_pulls_asks_for_the_open_prs_into_a_base(self):
         self.assertEqual(self.github.open_pulls("o/r", "main"), [{"number": 3}])

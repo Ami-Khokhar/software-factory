@@ -19,8 +19,53 @@ MOMENT = "%Y-%m-%dT%H:%M:%SZ"
 IST = timezone(timedelta(hours=5, minutes=30))  # the owner reads windows in Asia/Kolkata, no DST
 
 
-def escalation(wi, history):
-    """What an escalation tells the owner: the reason, the one decision needed, and what was tried."""
+def last_answer(history):
+    """The WorkItem's last answer, as `{head, round, by}`: the newest head and gate round GitHub
+    reported before the newest `human_resolved` row, and who gave that answer (`by` is empty when
+    the store recorded none). None when nobody has answered. The answer may be an agent's, which is
+    why `by` travels: a base labelled as the owner's answer must never be an answer they did not
+    give."""
+    answer, head, round_ = None, None, 0
+    for row in history:
+        if row["action"] == "reconcile":
+            head = row["detail"].get("headSha") or head
+            round_ = row["detail"].get("round") or round_  # only an accepted verdict records one
+        elif row["action"] == "human_resolved":
+            answer = {"head": head, "round": round_, "by": row["detail"].get("by") or ""}
+    return answer
+
+
+def changed_since(wi, history):
+    """What is new since the last answer, as `{from, to, by}`: the head that answer was given on,
+    the current head, and who gave it. None when nobody has answered, or when the head is still the
+    one that answer covered. The caller reads the paths; this decides whether a read is owed at
+    all."""
+    answer, head = last_answer(history), wi.get("headSha")
+    if not (answer and answer["head"] and head and answer["head"] != head):
+        return None
+    return {"from": answer["head"], "to": head, "by": answer["by"]}
+
+
+def finding_counts(wi, history):
+    """The gate's blocking findings an escalation carries, counted against the last answer, whoever
+    gave it: how many were first reported after the round that answer covered, how many it already
+    covered, and how many the latest verdict no longer reports (ADR-0005). A round, not the gate's
+    current one, because a first escalation is often raised at the round in which the same problem
+    repeated, and a regate keeps its round (ADR-0113). None for a WorkItem the gate has never
+    reported a finding on."""
+    blockers = wi.get("blockers") or []
+    if not blockers:
+        return None
+    answered = (last_answer(history) or {}).get("round")
+    open_now = [b for b in blockers if not b.get("resolved")]
+    new = sum(1 for b in open_now if answered is None or (b.get("firstSeenRound") or 0) > answered)
+    return {"new": new, "reported": len(open_now) - new,
+            "resolved": sum(1 for b in blockers if b.get("resolved"))}
+
+
+def escalation(wi, history, changed=None):
+    """What an escalation tells the owner: the reason, the one decision needed, what was tried, the
+    findings that are new since the last answer, and the paths that changed since that answer."""
     if wi["state"] not in HUMAN_STATES:
         return None
     tried = list(wi.get("attempts") or []) or [
@@ -30,7 +75,8 @@ def escalation(wi, history):
             "needFromYou": f"Decide {wi['id']}: call factory_resolve_human with retry (the factory "
                            "tries again), regate (re-run the gate: on a fix you pushed, or on the same head "
                            "when the gate failed itself) or close.",
-            "owner": wi.get("owner"), "tried": tried}
+            "owner": wi.get("owner"), "tried": tried,
+            "findings": finding_counts(wi, history), "changedSince": changed}
 
 
 def autonomy(workitems, history_of):

@@ -124,6 +124,38 @@ class StartPlanTest(unittest.TestCase):
                     with self.assertRaisesRegex(ToolError, "which only a person changes"):
                         self.foreman.start_plan(REPO, [{"title": "T", "body": body}], "amteshwar")
 
+    def test_a_plain_word_protected_file_entry_still_refuses_the_plan(self):
+        cases = [("edit the Dockerfile", False), ("docs/Dockerfile.md", True),
+                 ("a Dockerfile is needed", False), ("touch Dockerfiles", True)]
+        for mention, accepted in cases:
+            with self.subTest(mention):
+                self.setUp()
+                self.foreman.config = dataclasses.replace(self.foreman.config,
+                                                          protected_paths=(".github/", "Dockerfile"))
+                body = FENCED + f"- it mentions {mention} — done when: the README says so\n"
+                if accepted:
+                    self.assertEqual(len(self.foreman.start_plan(REPO, [{"title": "T", "body": body}],
+                                                                 "amteshwar")["issues"]), 1)
+                else:
+                    with self.assertRaisesRegex(ToolError, "which only a person changes"):
+                        self.foreman.start_plan(REPO, [{"title": "T", "body": body}], "amteshwar")
+
+    def test_a_multi_segment_directory_entry_refuses_a_plan_at_any_depth(self):
+        cases = [("rename backend/secrets/key", False), ("see src/backend/secrets/handler.py", False),
+                 ("keep the backend secrets of the design", True)]
+        for mention, accepted in cases:
+            with self.subTest(mention):
+                self.setUp()
+                self.foreman.config = dataclasses.replace(self.foreman.config,
+                                                          protected_paths=("backend/secrets/",))
+                body = FENCED + f"- it mentions {mention} — done when: the README says so\n"
+                if accepted:
+                    self.assertEqual(len(self.foreman.start_plan(REPO, [{"title": "T", "body": body}],
+                                                                 "amteshwar")["issues"]), 1)
+                else:
+                    with self.assertRaisesRegex(ToolError, "which only a person changes"):
+                        self.foreman.start_plan(REPO, [{"title": "T", "body": body}], "amteshwar")
+
     def test_after_empty_opens_the_issue_with_no_depends_on_line(self):
         made = self.foreman.start_plan(REPO, [{"title": "One", "body": FENCED},
                                               {"title": "Two", "body": FENCED, "after": []}],

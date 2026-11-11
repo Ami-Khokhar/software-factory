@@ -13,7 +13,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from . import documents, repos, routing
+from . import documents, registry, repos, routing
 from .mcp import ToolError
 from .relay import RelayError
 
@@ -28,9 +28,11 @@ HEALTH_EVENTS = {"preflight", "probe", "launch"}
 # The launch step: one tiny relay task whose cwd is the configured checkout folder, so the check
 # proves the whole launch path the probe cannot see (#430): the interpreter the agent entry names,
 # the task cwd and macOS privacy denials on that folder. One attempt, no retries, never a WorkOrder.
-# The input is worker/runner.py's LAUNCH_INPUT, which it answers with a completed Result instead of
-# asking for a WorkOrder (ADR-0096).
+# The input is worker/runner.py's LAUNCH_INPUT, which answers with its own LAUNCH_SCHEMA document
+# instead of asking for a WorkOrder (ADR-0139). Both literals cross the image boundary, so
+# tests/test_worker_runner.py holds them equal to the runner's.
 LAUNCH_PROMPT = "factory-launch-probe"
+LAUNCH_SCHEMA = "factory.launch/v1"
 LAUNCH_SECONDS = 120
 HEALTH_FIELDS = {"ts", "event", "tool", "status", "exitCode", "retries", "latencyMs",
                  "promptBytes", "responseBytes", "diagnosticBytes"}
@@ -49,6 +51,7 @@ IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 IMAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}\Z")
 CONTAINER_ID = re.compile(r"[0-9a-f]{12,64}\Z")
 ROOT = Path(__file__).resolve().parent.parent
+DRIFT_WINDOW = 60  # seconds one (worker, cause) may log worker_membership_drift again
 RUNNER = ROOT / "worker" / "runner.py"
 HEALTH_SCRIPT = ROOT / "scripts" / "provider_health.py"
 
@@ -96,7 +99,7 @@ def _candidate(config, worker_id):
     args = agent.get("args")
     if (agent.get("command") != "python3" or not isinstance(args, list)
             or not all(isinstance(arg, str) for arg in args)
-            or not args or args[0] != str(RUNNER)):
+            or not registry.runs_this_runner(args, RUNNER)):
         raise ToolError("worker does not run this deployment's worker/runner.py")
     if any("\0" in arg for arg in args):
         raise ToolError("worker configuration contains an invalid argument")
@@ -311,6 +314,15 @@ def _run(candidate):
     return _safe_report(stdout, process.returncode, candidate["harness"]), True
 
 
+def _launch_completed(output):
+    """The launch reply is its own document (LAUNCH_SCHEMA), not a Result: it carries no WorkOrder
+    and no patch, so judging it as one would break the Result contract. Anything else is a worker
+    that did not prove the launch."""
+    reply = documents.parse_result(output)
+    return (isinstance(reply, dict) and reply.get("schemaVersion") == LAUNCH_SCHEMA
+            and reply.get("status") == "completed")
+
+
 def _launch(relay, config, repo, worker_id):
     """One relay task that proves the relay can start the agent's interpreter in the checkout
     folder: its cwd is `config.checkout(repo)`, the same value a real WorkOrder submit sends.
@@ -354,8 +366,7 @@ def _launch(relay, config, repo, worker_id):
     if task_status != "completed":
         return failed("provider_error", 1, f"the launch step failed: task {task_status}", started)
     latency = max(0, int((_now() - started).total_seconds() * 1000))
-    reply = documents.parse_result(task.get("output"))
-    if reply is None or reply.get("status") != "completed" or reply.get("workOrderId") is not None:
+    if not _launch_completed(task.get("output")):
         return ({"ts": _stamp(_now()), "event": "launch", "tool": "relay",
                  "status": "unexpected_response", "exitCode": 0, "retries": 0,
                  "latencyMs": latency},
@@ -475,19 +486,13 @@ def _honour(store, config, worker_id, row):
     return binding, None
 
 
-def unusable_reasons(store, config):
-    """Why each enabled activation row is missing from effective workers; [] when none fails."""
-    reasons = []
-    for row in store.worker_activations():
-        if row["enabled"]:
-            _, reason = _honour(store, config, row["worker"], row)
-            if reason:
-                reasons.append(reason)
-    return reasons
-
-
-def effective_workers(store, config):
+def membership(store, config):
+    """One walk over the activation rows that a routing decision uses (#437): the effective
+    `workers` in the configured preference order, and the reasons an enabled row is missing
+    (ADR-0129). Routing order and thresholds are unchanged; a host with no enabled rows routes
+    exactly as before."""
     workers = dict(config.workers)
+    reasons = []
     for row in store.worker_activations():
         worker_id = row["worker"]
         workers.pop(worker_id, None)
@@ -495,6 +500,42 @@ def effective_workers(store, config):
             binding, reason = _honour(store, config, worker_id, row)
             if reason is None:
                 workers[worker_id] = dict(config.workers).get(worker_id, "hosted")
+            else:
+                _membership_drift(store, worker_id, reason)
+                reasons.append(reason)
     # Retain the configured preference order, appending newly activated hosted workers.
     order = dict.fromkeys([*(name for name, _ in config.workers), *workers])
-    return tuple((name, workers[name]) for name in order if name in workers)
+    return (tuple((name, workers[name]) for name in order if name in workers), reasons)
+
+
+def _membership_drift(store, worker_id, reason):
+    """One `worker_membership_drift` audit row per (worker, cause) per short window (#437): the
+    Foreman computes membership per dispatch decision, so an operator sees an enabled worker stop
+    being routed, and a ticking instance does not flood the audit. The throttle lives in the
+    store (like Foreman._refuse_repo), so a concurrent membership walk from another request
+    thread sees the same state and logs at most one row."""
+    store.log_worker_drift(worker_id, reason, DRIFT_WINDOW)
+
+
+def unusable_reasons(store, config):
+    """Why each enabled activation row is missing from effective workers; [] when none fails."""
+    return membership(store, config)[1]
+
+
+def unusable_reason(store, config, worker_id):
+    """Why `worker_id` may not run now, or None when the store holds no activation row for it.
+
+    `membership` answers this for every row at once, which is what a routing decision needs. A
+    WorkItem that already holds a WorkOrder needs the same fact for one worker, and needs it
+    without the drift row `membership` writes: the WorkItem's own escalation is the incident
+    (#522). A disabled row is a reason too, because only a person or Day Desk puts a worker back."""
+    row = next((row for row in store.worker_activations() if row["worker"] == worker_id), None)
+    if row is None:
+        return None
+    if not row["enabled"]:
+        return f"{worker_id} is disabled; repair it and enable it again"
+    return _honour(store, config, worker_id, row)[1]
+
+
+def effective_workers(store, config):
+    return membership(store, config)[0]

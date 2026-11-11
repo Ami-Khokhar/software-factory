@@ -687,14 +687,17 @@ class UpdateTest(unittest.TestCase):
 
 
 class AddRepoTest(unittest.TestCase):
-    def add_repo(self, ready):
+    def add_repo(self, ready, labels_missing=False):
         """The tools add-repo called, and how it exited. It must run no command of its own."""
         calls = []
 
         def call(tool, arguments=None, timeout=60):
             calls.append((tool, timeout))
-            return {"repo": "o/r", "ready": ready, "added": True,
-                    "checks": [{"id": "gate_workflow", "ok": ready, "detail": "d", "fix": "f"}]}
+            checks = [{"id": "gate_workflow", "ok": ready, "detail": "d", "fix": "f"}]
+            if labels_missing:
+                checks.append({"id": "labels", "ok": False, "detail": "missing factory:urgent",
+                               "fix": "Call factory_add_repo <repo>: it creates the labels it finds missing."})
+            return {"repo": "o/r", "ready": ready and not labels_missing, "added": True, "checks": checks}
 
         with mock.patch.object(cli, "call", call), mock.patch("builtins.print"), \
                 mock.patch.object(cli, "run", side_effect=AssertionError("add-repo ran a command")):
@@ -704,12 +707,19 @@ class AddRepoTest(unittest.TestCase):
                 return calls, str(stopped)
         return calls, None
 
-    def test_a_ready_repo_is_enabled_through_the_tools(self):
-        # enabling clones the worker checkout, which may take up to 900s
+    def test_a_ready_repo_is_checked_then_enabled(self):
+        """It shows the table, then enables. Enabling clones the worker checkout, which may take 900s."""
         self.assertEqual(self.add_repo(ready=True),
                          ([("factory_repo_check", 60), ("factory_add_repo", 960)], None))
 
-    def test_a_failing_check_stops_it_before_the_repo_is_enabled(self):
+    def test_a_repo_missing_only_the_labels_is_enabled_because_this_command_heals_them(self):
+        """The circle the review found: refusing on the labels check told the owner to call the tool that
+        creates them. The labels gap is the one gap this command fixes (ADR-0136)."""
+        calls, stopped = self.add_repo(ready=True, labels_missing=True)
+        self.assertEqual((calls, stopped), ([("factory_repo_check", 60), ("factory_add_repo", 960)], None))
+
+    def test_another_gap_still_refuses_with_the_table_shown(self):
+        """Any other gap refuses, and it must be refused here: `factory_add_repo` would only say so."""
         calls, stopped = self.add_repo(ready=False)
         self.assertEqual(calls, [("factory_repo_check", 60)])
         self.assertIn("o/r is not ready", stopped)
@@ -788,6 +798,42 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(self.project_run([], row, command=cli.cmd_drive_queue), ["o/r#8 asks question q1"])
         answered = dict(row, question=dict(pending, answer="postgres"))
         self.assertEqual(self.project_run([], answered, command=cli.cmd_drive_queue), [])
+
+    def test_drive_queue_names_a_queued_issue_until_the_queue_is_drained(self):
+        """A queued issue reaches no worker until Day Desk approves it (ADR-0135), so the drive text
+        has to name it: the new line wakes the agent, and it goes once the queue is drained."""
+        queued = {"id": "o/r#12", "state": "queued"}
+        self.assertEqual(self.project_run([], queued, command=cli.cmd_drive_queue), ["o/r#12 is queued"])
+        self.assertEqual(self.project_run([], dict(queued, state="ready"), command=cli.cmd_drive_queue), [])
+        self.assertEqual(self.project_run([], dict(queued, state="dispatching"), command=cli.cmd_drive_queue), [])
+
+    def test_drive_queue_says_when_a_claim_lapsed_and_says_nothing_while_it_holds(self):
+        """Hermes wakes only when this text changes, so a live claim must leave it byte-identical (no
+        wake for the claim the agent just made) and a lapsed one must change it, or an agent that
+        claimed and then died is never woken to reclaim the entry (ADR-0135)."""
+        queued = {"id": "o/r#12", "state": "queued"}
+        live = dict(queued, queue={"by": "day-desk", "expired": False})
+        lapsed = dict(queued, queue={"by": "day-desk", "expired": True})
+        self.assertEqual(self.project_run([], live, command=cli.cmd_drive_queue), ["o/r#12 is queued"])
+        self.assertEqual(self.project_run([], lapsed, command=cli.cmd_drive_queue),
+                         ["o/r#12 is queued (the claim by day-desk lapsed)"])
+
+    def test_drive_queue_says_an_entry_is_the_owners_and_does_not_wake_for_it(self):
+        """A line saying the owner has it must be stable: Hermes wakes on change, so a line that changed
+        every poll would trade the same message with the owner for ever (ADR-0137)."""
+        queued = {"id": "o/r#12", "state": "queued",
+                  "queue": {"by": "day-desk", "expired": False, "leftForOwner": "needs a decision"}}
+        self.assertEqual(self.project_run([], queued, command=cli.cmd_drive_queue),
+                         ["o/r#12 is queued (left for the owner)"])
+
+    def test_drive_queue_puts_the_queue_before_the_escalations(self):
+        """The skill drains the queue before it recovers a member, so the wake has to show the queue
+        first: a reorder that hides it behind an escalation would change what the agent reads first."""
+        lines = self.project_run([], {"id": "o/r#12", "state": "queued"},
+                                 {"id": "o/r#13", "state": "blocked", "agentMayResolve": True,
+                                  "blockedOn": "verify exited 1"}, command=cli.cmd_drive_queue)
+        self.assertEqual(lines[0], "o/r#12 is queued")
+        self.assertIn("o/r#13", lines[1])
 
     def test_drive_queue_lists_a_stuck_acceptance_item(self):
         for state in ("blocked", "human_waiting", "changes_requested", "implementing", "closed"):
@@ -1203,6 +1249,58 @@ class StatusTest(unittest.TestCase):
     def test_a_lessons_file_the_factory_cannot_read_is_named(self):
         lines = self.status(lessonsError="lessons.json is not JSON: Expecting value")
         self.assertEqual(lines[-1], "lessons: lessons.json is not JSON: Expecting value")
+
+    def one(self, escalation):
+        """The lines `factory status <id>` prints, given what factory_status returns for one."""
+        value = {"workItem": {"id": "o/r#13", "state": "human_waiting", "prNumber": 42,
+                               "gateRound": 2, "blockedOn": "pr-gatekeeper decided HUMAN"},
+                 "escalation": escalation, "passes": 2, "history": []}
+        printed = io.StringIO()
+        with mock.patch.object(cli, "call", lambda tool, arguments=None: value), \
+                contextlib.redirect_stdout(printed):
+            cli.cmd_status(["o/r#13"])
+        return printed.getvalue().splitlines()
+
+    def test_an_escalation_says_what_is_new_since_the_last_answer(self):
+        lines = self.one({"reason": "pr-gatekeeper decided HUMAN",
+                          "findings": {"new": 1, "reported": 3, "resolved": 1},
+                          "changedSince": {"from": "a" * 40, "to": "b" * 40, "by": "owner",
+                                            "paths": ["src/app.py", "tests/test_app.py"]}})
+        self.assertIn("  gate findings: 1 new, 3 already reported, 1 resolved", lines)
+        self.assertIn("  changed since the last answer (aaaaaaa..bbbbbbb by owner): "
+                      "src/app.py, tests/test_app.py", lines)
+
+    def test_an_agents_answer_is_named_as_the_base_of_the_comparison(self):
+        lines = self.one({"reason": "pr-gatekeeper decided HUMAN", "findings": None,
+                          "changedSince": {"from": "a" * 40, "to": "b" * 40, "by": "day-desk",
+                                            "paths": ["src/app.py"]}})
+        self.assertIn("  changed since the last answer (aaaaaaa..bbbbbbb by day-desk): src/app.py",
+                      lines)
+
+    def test_an_empty_comparison_does_not_print_a_dangling_colon(self):
+        lines = self.one({"reason": "pr-gatekeeper decided HUMAN", "findings": None,
+                          "changedSince": {"from": "a" * 40, "to": "b" * 40, "by": "owner",
+                                            "paths": []}})
+        self.assertIn("  changed since the last answer (aaaaaaa..bbbbbbb by owner): no file changed",
+                      lines)
+
+    def test_a_comparison_github_refused_prints_the_reason(self):
+        lines = self.one({"reason": "pr-gatekeeper decided HUMAN", "findings": None,
+                          "changedSince": {"from": "a" * 40, "to": "b" * 40, "by": "owner",
+                                            "paths": None,
+                                            "error": "GitHub could not compare aaaaaaa..bbbbbbb: "
+                                                     "GitHub 404: Not Found"}})
+        self.assertIn("  changed since the last answer (aaaaaaa..bbbbbbb by owner): "
+                      "GitHub could not compare aaaaaaa..bbbbbbb: GitHub 404: Not Found", lines)
+
+    def test_an_escalation_with_nothing_new_prints_only_what_it_always_did(self):
+        """Neither line may print an empty or missing value: an escalation the gate never reported
+        on, or a head nobody has answered, says nothing rather than "None"."""
+        lines = self.one({"reason": "pr-gatekeeper decided HUMAN", "findings": None,
+                          "changedSince": None})
+        self.assertIn("  needs you: pr-gatekeeper decided HUMAN", lines)
+        self.assertEqual([line for line in lines if "gate findings" in line or "changed since" in line],
+                         [])
 
 
 class Relay(BaseHTTPRequestHandler):

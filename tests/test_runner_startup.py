@@ -34,7 +34,7 @@ class RunnerStartupTest(unittest.TestCase):
         self.assertEqual(documents.check_result(result, self.order), [])
         return result
 
-    def test_the_launch_probe_answers_with_a_completed_result_and_runs_nothing(self):
+    def test_the_launch_probe_answers_with_a_completed_launch_and_runs_nothing(self):
         """The health check's launch step: no WorkOrder, no harness, no git (#430)."""
         args = ["--env", "TEST_SECRET=secret-env-value", "--", "sentinel-harness",
                 runner.LAUNCH_INPUT]
@@ -46,8 +46,11 @@ class RunnerStartupTest(unittest.TestCase):
         lines = output.getvalue().splitlines()
         self.assertEqual(len(lines), 1)
         result = json.loads(lines[0])
-        self.assertEqual((result["status"], result["workOrderId"]), ("completed", None))
-        self.assertEqual(documents.parse_result(lines[0])["status"], "completed")
+        self.assertEqual((result["schemaVersion"], result["status"]),
+                         (runner.LAUNCH_SCHEMA, "completed"))
+        # Not a Result: it has no WorkOrder and no patch, so it must not claim to be one.
+        self.assertNotIn("workOrderId", result)
+        self.assertNotIn("patch", result)
         process.assert_not_called()
         prepare.assert_not_called()
 

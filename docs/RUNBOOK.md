@@ -108,7 +108,7 @@ crosses 1001 (a `human_waiting` WorkItem whose `blockedOn` names the decompositi
 | `factory project <id>` | Six lines: title, state and pause reason, used/total passes, deadline in IST, members and states, acceptance item |
 | `factory extend <id> <passes> [<deadline>]` | Owner adds 1 to 60 passes and makes the Project active, even if stopped; optional ISO date-time with timezone replaces the deadline |
 | `factory stop-project <id> <note>` | Owner stops the Project and holds its members, recording the note |
-| `factory status [<repo#n>]` | What the factory is doing, and what it needs from you |
+| `factory status [<repo#n>]` | What the factory is doing, and what it needs from you. For one WorkItem it also says how many of the gate's findings are new since the last answer, and which paths changed since that answer, naming who gave it |
 | `factory retry\|regate\|close <repo#n> <note>` | Answers an escalation |
 | `factory add-repo <owner/repo>` | Makes a repo a factory target (it needs pr-gatekeeper) |
 | `factory bench <repo> [-w <worker>] ...` | Files the benchmark's tasks as `factory:ready` issues in a sandbox repo (see "Measuring workers") |
@@ -130,7 +130,9 @@ crosses 1001 (a `human_waiting` WorkItem whose `blockedOn` names the decompositi
 Limits: a WorkItem gets at most 4 worker passes (then `exhausted`); your `retry` gives it 4 more, also from
 `exhausted` (ADR-0035). One exception (ADR-0112): a PR the gate returned CHANGES on keeps one fix pass per gate
 round past that count. You may also ask Day Desk in Telegram to retry it (ADR-0043). Two failed attempts in a
-row block it. Each pass has 20 minutes. Two passes of one repo run at once (`FACTORY_PASSES_PER_REPO`). A PR
+row block it. Each pass has 20 minutes. Two passes of one repo run at once (`FACTORY_PASSES_PER_REPO`).
+`FACTORY_QUEUE=on` makes `factory:ready` wait for an orchestrator's claim instead of dispatching
+at once, and `factory:urgent` puts an issue first in that queue. A PR
 with no gate verdict for 2 hours goes to you. For a Project member, the Project's shared budget and the 8-pass
 lifetime cap apply instead (see [the Project contract](contracts.md#project), ADR-0101).
 
@@ -424,9 +426,9 @@ Day Desk steers worker and timeout decisions within the same allowlist and crede
   `factory.health/v1` report plus a binding to the worker config, credential-file metadata and
   image id. Success is valid for 15 minutes; any later configuration or file metadata change
   needs another check. When the probe returned `ok` and `repo`'s checkout folder is a cloned
-  checkout, one bounded launch task also runs on the worker itself in that folder (ADR-0131): it
-  costs one tiny model task, has a 120 second deadline, is never retried, and quarantines the
-  worker if the launch fails. With no relay, no repo, no checkout folder, or a failing probe, the
+  checkout, one bounded launch task also runs on the worker itself in that folder (ADR-0139): it
+  costs one tiny relay task and no model call, has a 120 second deadline, is never retried, and
+  quarantines the worker if the launch fails. With no relay, no repo, no checkout folder, or a failing probe, the
   check is the synthetic provider steps alone. A failed check is recorded as quarantined. File
   readability alone is not authentication; only an `ok` probe confirms the synthetic response.
   The probe does not start OrbStack when Docker is stopped.
@@ -538,15 +540,12 @@ the tool adds one commit with them to that PR and returns it as `updatedSha`. Wh
 or the secret statuses change, it rewrites the PR body to match (ADR-0023). It never force-pushes,
 and it refuses a repo with several open setup PRs: close all but one.
 
-A repo the factory already set up can still pin an older gate. When the installed caller names
-a `uses: .../gatekeeper.yml@<sha>` and a `gatekeeper_ref: <sha>` older than the revision this
-checkout ships in `.github/workflows/pr-gatekeeper.yml`, `factory_repo_check` reports the caller
-as stale and the same bootstrap PR rewrites only those two pins, leaving the repo's `verify`
-command, permissions, secrets, runner and every other line exactly as they are (ADR-0080). A
-workflow the factory did not write, or one already at the current revision, is left alone. The
-update merges only by your hand or an explicit setup-merge grant, like any setup PR, and it can
-move a repo only to the revision a person has merged into this checkout; correcting that revision
-to the 700/1000 policy is a protected `.github/` change you own.
+A repo the factory already set up keeps its caller exactly as it wrote it. The gate revision comes
+from the release channel: `gatekeeper-version.json` in the public wrapper names the commit the
+gate's own `pr_body` job passes to `gates` and `review`, and `factory_repo_check` reports the
+revision the channel resolves to now. The factory never compares, rewrites or refuses a caller, so a
+setup PR it opens holds only the files a repo was missing (ADR-0134). It merges only by your hand or
+an explicit setup-merge grant, like any setup PR.
 
 The merge stays manual unless you grant it. To let Day Desk merge this repo's setup PR itself,
 say so to the owner's tool `factory_authorize_setup_merge` (with the verify command when the
@@ -790,6 +789,16 @@ Run `factory update` yourself to deploy at once. The
 tests need the packages in `requirements.txt`, installed once for the Python that runs `factory`
 and that the `factory-update` job names: `/usr/bin/python3 -m pip install -r requirements.txt`.
 
+An upgrade can add a factory label, as `factory:urgent` was added for the queued issue that wakes
+Day Desk: a repo enabled before that label existed never gets it, and a restart does not create it.
+A repo the check refuses for a missing factory label is still enabled by `factory add-repo`: that one
+gap is what this command heals, and every other gap still refuses with the table shown.
+After such an upgrade, re-run `factory_add_repo` once on each enabled repo (`factory add-repo
+<owner>/<repo>` in the CLI, or the tool from Day Desk): it creates the labels it finds missing and
+adds nothing else, leaving `repos.json` with the one entry it already had. `factory_repo_check`
+reports the labels, so a repo that still lacks one shows a failed `labels` check whose fix is that
+same call.
+
 ## When something looks wrong
 
 - **Nothing happens to a labelled issue.** Check the author (only trusted authors), the repo (in
@@ -906,7 +915,8 @@ hermes -p day-desk cron create "every 10m" --no-agent --script factory-update.sh
 ```
 
 `factory drive-queue` lists each escalation Day Desk may answer as
-`o/r#13 is blocked (waiting 30m): verify exited 1`. The wait rounds down to 30-minute
+`o/r#13 is blocked (waiting 30m): verify exited 1`, and each issue waiting in the queue as
+`o/r#13 is queued`, which wakes Day Desk to claim it and hand it to a worker (ADR-0135). The wait rounds down to 30-minute
 steps for six hours, then rises in 120-minute steps and stops at 2880 minutes (48 hours,
 ADR-0109). It lists `o/r#13 asks question <questionId>` for a worker question nobody has
 answered. It also lists a stuck acceptance item of an active Project as
@@ -1176,12 +1186,13 @@ Do not rewrite stored WorkOrders to bypass their fences.
 Migrate each installation through a separate owner-reviewed configuration PR following
 pr-gatekeeper's docs/documentation-policy-migration.md. Remove only the specifically approved
 AGENTS.md entry. Keep custom directories, permission files, credentials, models, budgets and
-verification commands. Pin the reviewed gate revision only after it merges. Base-branch rules
+verification commands. The gate revision follows the release channel, so nothing in a caller is
+pinned: a release updates `gatekeeper-version.json` in the wrapper (ADR-0134). Base-branch rules
 review the migration PR. Bootstrap never rewrites an existing protection list to adopt this policy.
 Recheck readiness after any prerequisite setup PR, including pr-gatekeeper#75. The current
 agent-relay factory-standard block already meets readiness. Its conflicting #42 is not required.
 
 After activation, create one small documentation-only issue through factory_start_plan, record its
 WorkOrder protections, worker result, successful configured verification, independent review and
-bot merge. Report merged code, deployed factory/gate pins, migrated settings, and verified-in-use
+bot merge. Report merged code, the factory and gate revisions in use, migrated settings, and verified-in-use
 proof separately. A local test or green code PR does not establish activation.

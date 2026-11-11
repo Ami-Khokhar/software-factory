@@ -1933,6 +1933,9 @@ policy are deployed together.
 
 ## ADR-0080 — An installed gate caller is upgraded by its two revision pins, on the same reviewed setup PR
 
+**Superseded by ADR-0134:** the gate revision follows the release channel, so a caller carries no pin
+for the factory to upgrade.
+
 **Context.** `factory_bootstrap_repo` wrote a control file only when the repo lacked it, so a repo
 that already had `.github/workflows/pr-gatekeeper.yml` kept whatever gate revision it pinned. The
 factory's own caller and self-maintaining-apis pinned an older wrapper and `gatekeeper_ref`, and
@@ -2328,7 +2331,7 @@ the probe uses a unique label so timeout cleanup targets only its own process gr
 Only the sanitized `factory.health/v1` status and allowlisted event fields are stored and returned.
 SQLite binds the latest success or quarantine record to a digest of the worker configuration,
 model, credential-file metadata and image identity; records expire after 15 minutes. A health
-check never dispatches or activates a worker. (Superseded for the launch step by ADR-0131: the
+check never dispatches or activates a worker. (Superseded for the launch step by ADR-0139: the
 check now submits one bounded launch task to the worker itself when a cloned checkout folder
 exists. A health check still never dispatches a WorkOrder or activates a worker.) `factory_reload_workers` calls only the relay's
 fixed registry-reload endpoint and never writes its registry or the factory worker order.
@@ -2982,10 +2985,14 @@ separate owner-reviewed PRs. Never silently delete custom protections during boo
 
 **Consequence.** Instruction changes can ship without filename-only escalation after activation.
 They do not authorise themselves, weaken review, or bypass a blocking finding. Existing orders
-retain their original fences. docs/RUNBOOK.md records migration and live acceptance. A control or
-credential name matches whole path segments at any depth when a patch path or a plan mention is
-checked (worker/.env under `.env`, worker/secrets/key under `secrets/`, .github/workflows/ci.yml
-under `.github/`), so the plan consummately refuses what the patch guard would refuse.
+retain their original fences. docs/RUNBOOK.md records migration and live acceptance. When a patch
+path is checked, a control or credential name matches whole path segments at any depth
+(worker/.env under `.env`, worker/secrets/key under `secrets/`, backend/secrets/key under
+`backend/secrets/`). The plan check refuses the same tokens for the factory floor it reads, so a
+plan cannot name a protected path for the default entries: a file entry whole-word (`.env`,
+`.claude/settings.json`, a plain-word name like `Dockerfile`), a directory entry by its
+slash-joined spelling (`secrets/`, `backend/secrets/`, `.github`). It reads no repo's base list,
+so a base-only entry is still refused at push time instead of at the plan.
 
 
 ## ADR-0126 — Owner-approved, health-bound worker membership
@@ -3099,7 +3106,266 @@ misses the retained work. Rollout is evidence-bound: merged source is not a depl
 runner, so the relay item that triggered this stays blocked until the running revision and a
 representative guarded continuation are verified.
 
-## ADR-0131 — A worker health check runs one bounded launch task in the checkout folder
+
+## ADR-0131 — Membership is walked once per routing decision, and drift names itself in the audit
+
+**Context.** Follow-up to #436 (issue #437): the Foreman computed `effective_workers`, and on the
+no-worker path asked `unusable_reasons` for why enabled rows were missing — two docker image
+inspects per enabled row per dispatch decision — and when a worker silently dropped out, no row
+distinguished `not activated` from `activated but failed closed`.
+
+**Decision.** `worker_ops.membership` returns the effective workers and the missing-row reasons
+(#458, ADR-0129) from one pass over the activation rows; the dispatch uses that pair, so routing
+order and thresholds never see a membership computed twice. A dropped enabled row writes a
+`worker_membership_drift` audit row naming the worker and the cause, at most once per worker and
+cause per short window, so a ticking instance does not flood the audit. No tool, schema, or
+threshold changes; a host with no enabled rows routes exactly as before.
+
+**Consequence.** A store with several activated workers costs one image inspect per row per
+decision instead of two, and an operator reads in the audit why an enabled member stopped being
+routed. The duplicated row is the price of visibility from any membership read, not only the
+no-worker escalation. Follow-up (r3, #437): the short-window throttle is not module state in
+worker_ops; it is one atomic check-and-log in the store (`Store.log_worker_drift`), so a
+concurrent membership walk from another request thread cannot double-log or crash an iterating
+walker, and the throttle survives a restart like `Foreman._refuse_repo`'s.
+
+---
+
+## ADR-0132 — An escalation reports what is new since the last answer
+
+**Context.** #480 gave an escalation two derived values: the gate's findings told apart by round,
+and the paths that changed since the last answer. Review of that change (#486) found the first
+version measured "new" against the gate's current round rather than against the round that answer
+covered, so the very first ping for a problem that repeated said "0 new", and a regate's repeated
+findings counted as new again; and it labelled an answer Day Desk gave as the owner's own.
+
+**Decision.** `metrics.last_answer` reads one answer from the audit: the head and gate round GitHub
+reported before the newest `human_resolved`, and who gave it. An answer given before any accepted
+verdict has round 0, so a finding reported afterwards is new to it. `finding_counts` counts a
+blocking finding as new when it was first reported after that round, and every open finding as new
+when nobody has answered. `changed_since` returns `{from, to, by}` from that answer's head to the current
+head, and the status tool reads the paths for it in one `changed_files` call. The metric stays
+GitHub-free; a refused comparison is data in the payload, not an exception out of `factory_status`.
+
+**Consequence.** `factory_status <id>` costs one GitHub read per call while a WorkItem waits on a
+person and its head has moved since the last answer, and none otherwise. The numbers mean what the
+last answer covered, whoever gave it, rather than what the gate last said, and the CLI names the
+answerer, so an agent's answer is never shown as the owner's. A WorkItem whose last answer was Day
+Desk's compares from that answer and says so.
+
+---
+
+## ADR-0133 — A worker that cannot run holds its WorkItem, and the hold is re-read each tick
+
+**Context.** `Foreman.submit` rechecked the routed worker immediately before the relay call and
+raised a bare `ToolError` when it had been disabled, when its image or credential had changed since
+it was enabled, when its health was stale for that binding, or when its family was the gate
+reviewer's. The raise came after the `dispatching` write and the WorkOrder save, and `tick_one`
+catches only `Conflict`, `GitHubError` and `RelayError`, so it reached `Foreman.tick`'s per-WorkItem
+handler: one `tick_error` row per tick, and the WorkItem left in `dispatching` with no reason on it.
+ADR-0129 had already throttled the `worker_membership_drift` row; the raise and the stranded state
+were not addressed. On the live store on 10 Nov 2026 that one condition had produced 2,221
+`tick_error` rows and 2,359 drift rows, and `Ami-Khokhar/agent-relay#287` had held `dispatching` for
+over eight hours.
+
+**Decision.** `Foreman._worker_fault` answers with the reason instead of raising, and
+`worker_ops.unusable_reason` answers the per-worker form of the reasons `membership` already
+computes. It writes no drift row, because here the WorkItem's own escalation is the incident.
+`Foreman._hold_worker` writes `human_waiting` with that reason and keeps `activeWorkOrderId`, so the
+order and its idempotency key stay live. `Foreman._recheck_worker` re-reads a `worker_unavailable`
+hold on each tick, as `_recheck_dependency` re-reads a dependency: a fault that has cleared resumes
+`dispatching` and submits the order already on record, under its own key, so the relay can hold at
+most one task for it; a fault that has not cleared writes nothing. The hold is not a rollback to
+`ready`: `ready` would re-dispatch every tick, which is the same flood under another label, and it
+would spend a pass on a fault no pass can fix.
+
+**Consequence.** One fault is one escalation and one audit row, and no `tick_error`. The WorkItem
+leaves `dispatching`, so `factory_status` and the issue say why. A resume cannot save a second
+WorkOrder or start a second relay task. A fault that clears on its own resumes with nobody, and one
+that needs a rebuild does not, because a rebuilt image changes the binding an activation pins
+(ADR-0094), so that repair waits for Day Desk or the owner to re-enable it. That re-enable is
+followed by a retry, which does build a new order, because the recorded one carries the base commit
+of the attempt that never ran; a Project member counts that new order as a pass, which is the
+existing ordering rule for a saved order and is not changed here. A held item that is answered by a
+person rather than resumed keeps the order on record and its key unused.
+
+Three consequences the review of #522 forced out, because the hold changes what the rest of the
+file may assume. `_worker_live` exempts the hold: an item in `human_waiting` on a
+`worker_unavailable` incident has an order on record and nothing running, so it is not refused as
+"has a worker running now", which would block `factory_set_worker`, `factory_set_timeout`, an
+allowance retry and `factory_replace_issue` — exactly what its person needs. Every other reading of
+a live marker is unchanged, because a waiting item can still hold a relay task. `resolve_human` concludes an open recovery, so a `recovery` decision
+row always finds its `recovery_result` even when a person answers instead of the resume. And the
+per-tick re-read treats a relay that cannot answer as "still held": the WorkItem already waits on
+this subject, so a second environment fault adds no row.
+## ADR-0134 — The gate revision is the release channel's, not a caller's pin
+
+**Context.** ADR-0080 made the factory the owner of an installed caller's two gate revision pins: it
+rewrote the wrapper's `uses:` sha and the `gatekeeper_ref:` input on the same reviewed setup PR. That
+worked while every caller pinned a commit. Then `Ami-Khokhar/pr-gatekeeper` v1 became a release
+channel: job `pr_body` reads `gatekeeper-version.json` from the public wrapper and passes the commit
+it names to `gates` and `review`, and the caller template carries no pin (pr-gatekeeper #105). The
+declared interface is unchanged, so a caller that freezes a sha still runs that gate.
+
+Against that, the factory's pin machinery turned into damage:
+
+- `repos._gate_pins` needs both a 40-hex `uses:` and a `gatekeeper_ref:`. A caller on `@v1` has
+  neither, so it read as "not a caller the factory manages" and its workflow check passed for the
+  wrong reason. Three tests that pin the upgrade path fail on `main`, which makes the gate report
+  `HUMAN / verify fails on head and base` for every pull request in this repo, so none can merge.
+- Four enabled repos still carry both pins, so `_upgraded_workflow` reached its `want is None` branch
+  and raised `ValueError: the software-factory gate workflow pins no gate revision` out of
+  `repos.check`, which `factory_repo_check`, `factory_add_repo`, `factory_bootstrap_repo` and
+  `merge_setup_pr` all call without expecting it.
+
+**Decision.** The caller is left exactly as the repo wrote it. `_gate_pins` and `_upgraded_workflow`
+are gone, `bootstrap_plan` adds the workflow only when the repo has none, and the `gate_workflow`
+check asks only whether it is installed, so it cannot raise on a caller it cannot parse. The plan no
+longer carries an `updates` list, and the setup PR's body says "bootstrap" only. `repos` gains
+`channel_revision`, which reads `gatekeeper-version.json` and returns the commit it names, and
+`frozen_revision`, which reads a commit a caller froze for reporting. `factory_repo_check` reports
+the channel's revision, and the weekly gauges stamp the revision each repo actually ran: its frozen
+`gatekeeper_ref` or wrapper commit when it has one, else what the channel resolves to, else
+`unknown`. ADR-0080 is superseded.
+
+**One consumer had to follow.** The gate follow-up approval (#422) bound an approval to the exact
+commit the source PR's base caller pinned, and read it with the deleted helper. It now requires
+the base caller to call this factory's wrapper exactly once, and takes the commit that ran from
+GitHub's own `referenced_workflows` record of the run. A caller that froze a commit binds the run
+to that commit. A caller on the channel binds it to the commit `v1` names at the time of the
+approval, because a pull request head writes its own `uses:` line and GitHub faithfully records
+whatever it wrote: the head chooses the commit in the record, so the tag has to choose the
+commit that may approve. A tag that cannot be read refuses rather than trusts, which keeps the
+guarantee the deleted pin gave this approval (ADR-0042). `v1` is a tag (`refs/tags/v1`), not a
+branch, and GitHub's branches endpoint answers 404 for one, so the factory resolves a ref
+(`GitHub.ref_revision`) rather than a branch head here.
+
+**Consequence.** Updating the gate is one file in one repo, with no caller change and no factory
+involvement, and nothing in the factory can refuse or rewrite a caller's workflow. A repo that
+deliberately froze a sha keeps running that gate and the factory neither notices nor objects; the
+weekly report still names the revision it ran, so a frozen repo's numbers never read as the
+channel's. The factory no longer checks that an installed caller is current, so a repo left on an
+older frozen commit is a person's business, not the factory's. Reading the release file costs one
+GitHub call per report.
+## ADR-0135 — `factory:ready` queues the work for the orchestrator, and `factory:urgent` is read first
+
+**Context.** ADR-0030 makes Day Desk the factory's front door, and the audit of this repo found that
+six subsystems were attempting its judgement in code — Projects, dreaming, improvement publication,
+the retry queue, Jev ranking and the knowledge graph — while the one decision that mattered had no
+durable home. `factory:ready` went from a label to a worker pass inside a single tick: `act` saw
+`ready`, `_dispatch` built a WorkOrder and `submit` handed it to the relay. No agent ever had the
+chance to decide whether the issue should be worked at all, in what order, or with which worker, and
+`factory_replace_issue` already showed the cost of having no state between "taken in" and "pushed to
+a worker".
+
+ADR-0095 had already tried a queue and failed the other way: `pendingRetry` was written by
+`factory_queue_retry` and read by nothing, which is why #512 deletes it. The lesson was not "no
+queue" but "a queue needs a consumer in the same change".
+
+**Decision.** A labelled issue enters a new state, `queued`, and nothing dispatches from it. The
+queue is the store: a WorkItem in `queued` **is** an entry, ordered urgent first then by `queue.at`,
+so there is no second table and no second drain path to keep true, and the queue inherits the
+store's durability, its rebuild from GitHub and its per-WorkItem lease. `factory:ready` and
+`factory:urgent` both queue an issue, and `urgent` is the flag that puts it first. `Foreman.next_queued`
+claims the first free entry under that lease and writes `queue.claimedBy`/`claimedAt`, so the store's
+optimistic version makes a second claim lose instead of double-booking; a claim older than
+`QUEUE_LEASE` (fifteen minutes) is free again. `Next_queued` waits up to five minutes, and while the
+store is empty it reads `factory:urgent` from GitHub itself, so an urgent label is seen by a waiting
+agent without waiting for the tick. `factory_queue_approve` moves the entry to `ready`, and the next
+tick dispatches it through every existing guard: one action per tick, one WorkOrder, and the routing,
+budget and gate rules unchanged. `factory:urgent` is created with the other factory labels.
+
+**Switch.** `FACTORY_QUEUE=on` turns the queue on and it is off by default, because a factory no
+orchestrator drives must not strand work in a queue nobody drains: with it off, a label means
+`ready` as it did before, and one bridge in `act` moves any `queued` item a store already holds.
+Production turns it on with the same deployment that gives Day Desk its token.
+
+**Consequence.** The label no longer starts work by itself: between the label and a worker there is
+one orchestrator decision and one tick, and an issue nobody claims waits indefinitely in `queued`
+with the queue length visible in `factory_status`. An agent that is already waiting on a claim sees
+urgent work within one poll of its wait, ten seconds, and a store rebuilt from scratch takes in
+urgent issues as well as ready ones; an agent that is asleep sees it on its next call. The factory
+cannot wake an agent it has no way to call, so a push channel — Telegram from the factory to Day
+Desk — is a separate decision and is not assumed here. The queue is not ADR-0095's: it is the
+WorkItem's own state, drained by the tools added in the same change, and `test_queue` fails if a
+tick ever dispatches a queued item again.
+
+## ADR-0136 — The manager gets the facts and the choice, and the skill carries principles, not a table
+
+**Context.** ADR-0135 gave the orchestrator a queue and ADR-0133 gave it a hold, so the agent decides
+the work. Two things still ran around it. A claim returned the WorkItem, its dependencies and the queue
+length, so an agent deciding retry versus split versus hold had to read prose conditions and then make
+a second call for the rest of the facts. And `tenant/hermes/skills/software-factory/SKILL.md` carried a
+13-row "what the attempts show → what to do" table: the decision tree had moved out of Python into
+Markdown, which is the same tree with a worse type system.
+
+**Decision.** The claim's worker history comes from the audit, not from a WorkOrder document: a
+WorkOrder carries no worker key, and the first version of this packet read one and reported null for
+every pass. The approval takes an optional `worker`, refused unless a dispatch could take it, stored as
+`chosenWorker` and honoured by the dispatch before the routing policy. A claim returns the facts a manager decides on: the acceptance bullets, the paths fence,
+the passes used and left, every failure with its cause, who ran and who may run, the gate round, and
+the dependencies. Facts only: which of them matters is the agent's call. The skill says what each state
+means, what a decision costs, what may be decided and what is forbidden, and it says that a case it
+does not name is still the agent's. The table is gone. Choosing the worker reuses `factory_set_worker`,
+which already edits the issue's `Worker:` lines: one way to choose, already tested, rather than a second
+argument that sets the same fact.
+
+**Consequence.** Deleting the skill now removes the decisions, which is what makes the factory agentic
+rather than a workflow with an agent attached to the failures. The cost is variance: two runs of the
+same failure may decide differently, and the only record of why is the audit note the agent writes.
+That is the trade this factory makes, and the limits stay in code: dispatch, the pass budget, the push,
+the pull request and the merge are still the factory's, not the agent's (ADR-0133, ADR-0135).
+## ADR-0137 — A queue entry the owner holds is a record, not a memory
+
+**Context.** ADR-0135 gave the queue a claim, and the driver that wakes Day Desk prints a line per
+queued entry. Reviewing that driver found the hole: a claim that lapsed after a crash and an entry the
+agent decided to leave to the owner produce the same line, so nothing durable says who has it. The
+prompt told the agent to leave an owner's entry alone, which is the opposite of what a lapsed line
+means — reclaim it — and a prompt cannot remember which ids it left across a restart. An ordinary
+entry whose claim lapsed after a crash was therefore stranded for ever, and an entry left for the
+owner flapped: lapse, wake, reclaim, report, every fifteen minutes.
+
+**Decision.** `factory_queue_leave` writes the decision: `queue.leftForOwner` holds who left it, why,
+and when, and the claim is released, so nothing waits on an agent that has finished deciding. The
+drive text tells the three states apart: plain for nobody holds it, `(the claim by X lapsed)` for a
+wake that died and must be reclaimed, `(left for the owner)` for an entry that is the owner's. The
+entry goes back to the agent as a plain line when the owner acts on the issue: GitHub's `updated_at`
+is the only durable signal for that, and `reconcile` clears the mark when it moves.
+
+**Consequence.** The agent has three queue verbs — claim, approve, leave — and the store, not the
+prompt, is what keeps them apart. Two rules make the mark safe. A claim never takes an entry that
+carries it, and a claim is reported before the mark, so a hidden claim can never strand an entry. The
+mark is stamped with the issue's own `updated_at` at the moment it is left and compared stamp to stamp,
+so this machine's clock cannot clear it early or hold it for ever; any issue activity counts as the
+owner moving, not only the owner's own, because the alternative is a timeline read on every reconcile
+and a re-leave re-stamps the mark, so the wake is bounded by real activity rather than by time. The cost is a third write tool and one field on the entry, and the
+dependence on `updated_at`: an owner action that does not touch the issue, such as a chat instruction,
+is not seen. That is accepted, because a chat instruction is a decision the agent records itself.
+
+## ADR-0138 — The runner-path question is asked once, at each job's strictness
+
+**Context.** Three jobs decided whether a relay registry entry is a factory worker, and each had
+its own check: `factory_register_worker` accepted any absolute `worker/runner.py` path (it copies
+a template, it never executes it), `factory_check_worker` and activation accepted only this
+checkout's exact runner path (they decide whether a worker may run here), and
+`factory_runtime_status` labelled anything ending in `worker/runner.py` as sandboxed (it reports
+and never refuses). One question, three answers: the status could label `sandboxed` an entry the
+registry would refuse as a template, and what counts as the factory runner had no single place to
+read or to change.
+
+**Decision.** `factory_mcp/registry.py` answers once. `runs_the_runner(args)` is the lenient
+answer, used by the guarded write and by the status label; `runs_this_runner(args, runner_path)`
+is the strict answer, used only by the activation gate. Each job keeps the rest of its contract:
+the write still checks the command, harness, model pin and credential boundary before it touches
+the registry, the activation gate still requires this deployment's exact path, and the status
+still returns a boolean instead of raising on a malformed entry.
+
+**Consequence.** What counts as a runner path is one function, so the three verdicts move
+together, and an entry the write refuses is never labelled sandboxed. A caller that needs a
+different strictness must name it where it asks, instead of quietly comparing paths itself —
+which is how the three drifted apart.
+
+## ADR-0139 — A worker health check runs one bounded launch task in the checkout folder
 
 **Context.** ADR-0094 decided that a health check never dispatches a worker, because the check had
 to stay inside the deployed sandbox and could not see the launch path: the interpreter the relay
@@ -3110,17 +3376,21 @@ that cannot see the launch path cannot tell the owner which of the two is broken
 **Decision.** `factory_check_worker` accepts an optional `repo`, validated against
 `FACTORY_REPOS`/`repos.json` in code, and, when the probe returned `ok` and that repo has a cloned
 checkout folder, submits exactly one relay task to the worker itself: cwd
-`Config.checkout(repo)`, a fixed `launch` input `worker/runner.py` answers with a completed
-`factory.result/v1` Result and no WorkOrder, one attempt, a 120 second deadline, never retried.
-The reply is judged by parsing that Result, not by comparing text, because a runner agent always
-prints a Result. A refused submit, a lost or timed-out task, a non-`completed` task, or a reply
-that is not a completed launch quarantines the worker with a reason naming the step. With no
-relay, no repo, no checkout folder, or a probe that did not return `ok`, the check stays the
-synthetic provider steps alone. This supersedes the sentence "A health check never dispatches or
-activates a worker" in ADR-0094; the rest of ADR-0094 stands.
+`Config.checkout(repo)`, a fixed `launch` input `worker/runner.py` answers with its own
+`factory.launch/v1` document and no WorkOrder, one attempt, a 120 second deadline, never retried.
+The reply is judged by parsing that document, not by comparing text, because a runner agent always
+prints a document. It is deliberately not a `factory.result/v1` Result: that contract requires a
+WorkOrder id and, when `completed`, a patch, and the launch step has neither, so labelling the
+reply a Result would break the contract silently. A refused submit, a lost or timed-out task, a
+non-`completed` task, or a reply that is not a completed launch quarantines the worker with a
+reason naming the step. With no relay, no repo, no checkout folder, or a probe that did not
+return `ok`, the check stays the synthetic provider steps alone. This supersedes the sentence "A
+health check never dispatches or activates a worker" in ADR-0094; the rest of ADR-0094 stands.
 
-**Consequence.** A health check can now spend one tiny model task and can quarantine a worker that
-the probe called healthy, which is the point. The probe's own status stays the stored report's
-status, so a `provider_auth` failure still names the provider rather than being flattened into
-`unavailable`. The launch input is a marker `worker/runner.py` answers before it looks for a
-WorkOrder, so a deployment whose runner predates this ADR quarantines itself instead of passing.
+**Consequence.** A health check can now spend one tiny relay task — no model call is made, because
+the runner answers the launch marker before preflight or the harness runs — and can quarantine a
+worker that the probe called healthy, which is the point. The probe's own status stays the
+stored report's status, so a `provider_auth` failure still names the provider rather than being
+flattened into `unavailable`. The launch input is a marker `worker/runner.py` answers before it
+looks for a WorkOrder, so a deployment whose runner predates this ADR quarantines itself instead
+of passing.

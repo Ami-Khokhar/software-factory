@@ -41,35 +41,75 @@ bound them. Setting up a repo (factory_bootstrap_repo, factory_add_repo) and the
 6. **Report the start** in one line with the Project id, the number of issues, the budget and the expected finish in IST.
    After that, say nothing until the Project is done or paused, unless the owner asks.
 
-## Recover a member
+## Work the queue
 
-Read only the one WorkItem the drive queue names with `factory_status` and its id.
-Read only its last 2 `attempts`.
-Do not read the full status unless a decision needs another item.
-Use the first row that matches.
-Do one action.
-Read back the state.
-Use `factory_resolve_human` for retry and regate.
+An `o/r#13 is queued` line in the drive text is an accepted issue that reaches no worker until you
+hand it on. Drain the queue before you recover a member, and go on until the only lines left are the
+ones you left for the owner.
+- `o/r#13 is queued`: nobody holds it. Claim it.
+- `o/r#13 is queued (the claim by day-desk lapsed)`: a claim ran out, which is what a wake that died
+  looks like. Claim it again.
+- `o/r#13 is queued (left for the owner)`: you sent it to the owner. Leave it. It comes back to you
+  as a plain line when the owner acts on the issue.
 
-| What the attempts and state show | Action |
-|---|---|
-| `leadBlockedBy` is a safety stop or an environment fault | Do nothing. The owner gets the notice. |
-| Timeout, and the member's `wip` is set (partial work was kept) | `factory_resolve_human` retry. Note: "Continue from the kept partial work. Finish the remaining acceptance bullets: <list them>." |
-| Timeout, no `wip`, fewer than 2 timeouts on this member | `factory_set_worker` to the next worker in `FACTORY_WORKERS` that has not failed here, then retry. Note: "Start by editing <files from the blueprint>. Do not explore other code." |
-| Timeout, no `wip`, 2 or more timeouts on this member | Split with `factory_replace_issue` into 2 or 3 replacements that keep every acceptance bullet. Give each replacement the files and signatures from the blueprint. Approve each replacement with `factory_approve_issue`. |
-| Failing test named in the attempt | Retry. Note: "Make <test id> pass. The failure: <one line>." |
-| Size ceiling (over 1000 source lines) | Split as in the timeout row, along the blueprint's module lines. |
-| Gate CHANGES with blocking findings | Do nothing. The factory dispatches the fix pass. |
-| Gate CHANGES with no finding, or the gate was silent | `factory_resolve_human` regate, once. The second time, do nothing: the owner gets the notice. |
-| A worker question is waiting | Answer it with `factory_answer_question` from the blueprint. |
-| `exhausted` with "passes on one member" | Split as in the timeout row. |
-| Anything else | Retry once with a note that names the evidence. The next time, split. |
+1. Call `factory_queue_next` with `by: "day-desk"`.
+   It claims one item, a `factory:urgent` one first, and returns none when the queue is empty.
+   Stop when the only line left is one you left for the owner: the drain ends there.
+2. Read that one item with `factory_status` and its id before you decide.
+3. Ordinary work: approve it with `factory_queue_approve`, with the `id` the claim returned and
+   `by: "day-desk"`.
+   It leaves the queue for `ready`, and the next tick dispatches it through every guard, as for any
+   accepted issue.
+4. Not ordinary work, as "What goes to the owner" lists it: leave it with `factory_queue_leave`, with
+   the one line the owner reads as `why`.
+   That is a record in the store, not a note to yourself: it survives a restart, it stops the drive
+   text from waking you again, and the owner acting on the issue takes it back.
+   You do not edit issues: no tool re-writes them, and the shell is no way in.
+5. Never approve an issue you have not read, and never spend a worker pass to find out what it says.
 
-Approve split replacements that keep the acceptance with `factory_approve_issue`.
-Never ask the owner about a row in this table.
-Never retry the same failure with the same note twice.
-Never spend a pass only to diagnose.
-If you need facts, read the attempts and the audit.
+## Decide what the work needs
+
+The claim hands you the facts: `acceptance`, `paths`, `attempts` (used, left, and every failure with
+its cause), `workers` (who ran it, which failed, who may run it), `gate` and `dependsOn`.
+Decide from those facts.
+Nothing in this section is a row to look up: a case it does not name is still yours, and the audit
+records what you chose.
+
+What a state means:
+- `queued`: nobody has started it. Claim it, then approve it or hand it to the owner.
+- `dispatching`, `implementing`: a worker is running. Do not start a second.
+- `blocked`, `human_waiting`: it waits. `agentMayResolve` says whether you may answer.
+- `changes_requested`: the gate asked for a fix, and the factory dispatches that pass.
+- `exhausted`: the passes are spent. A split, or the owner's budget, is the only way on.
+- `pr_open`, `merge_pending`: the work is done and the gate decides the merge.
+
+What deciding costs: a retry is one of `attempts.left`, and so is each replacement you approve. A
+Project member spends the Project's budget as well, so `attempts.projectState` and `projectLeft` decide
+whether there is any work to give it: a paused Project dispatches nothing, and that is a hold.
+
+A gate that asked for changes with no finding a worker can fix, or that went silent, is retried once
+with `factory_resolve_human`; the second silence goes to the owner. The packet carries the gate's round
+and verdict but not `agentMayResolve`: on a waiting item, `factory_status` says whether you may answer.
+
+What you can decide, and how it reaches the factory:
+- Retry it: `factory_resolve_human` with a note naming the evidence that failed.
+- Give it another model: `factory_set_worker` to one in `workers.allowed` that has not failed here,
+  when the failure reads as the model rather than the work.
+- Split it: `factory_replace_issue` into replacements that keep every acceptance bullet, then approve
+  each with `factory_approve_issue`.
+- Hold it: do nothing, and give the owner the one line that says why.
+- Answer it: `factory_answer_question` from the blueprint.
+
+When `leadBlockedBy` names a safety stop or an environment fault, the owner gets the notice and you
+do nothing.
+
+What you never do:
+- Edit the acceptance, or touch a protected path.
+- Ask the owner about ordinary work.
+- Retry the same failure with the same note twice.
+- Spend a pass only to find out what the issue says.
+When the packet is not enough, read the WorkItem's `attempts` and the audit. When two attempts failed
+for reasons that do not fit together, say so in the audit note before the third.
 
 ## What goes to the owner
 
@@ -100,7 +140,7 @@ Credential-file readability is not provider authentication, and neither a stale 
 credential file is a reason for a broader token or another repair issue. Report only a real
 blocker or a material change, not the full diagnostic dump.
 
-For active Project members, use "Recover a member" and "What goes to the owner".
+For active Project members, use "Decide what the work needs" and "What goes to the owner".
 For other WorkItems (non-members), use the rules below.
 You decide the routine work, then say what you decided. The factory's guards are the boundary, not
 a reason to ask:
@@ -118,7 +158,7 @@ When the owner has already said in this chat what to do — a yes to a split, a 
 tool asks for them, and report it. Do not ask twice.
 
 When the owner asks for the board, call factory_status with no id.
-For an active Project member on a drive wake, use "Recover a member".
+For an active Project member on a drive wake, use "Decide what the work needs".
 For each WorkItem in human_waiting, blocked or
 exhausted, answer it when `agentMayResolve` is true and the rules above let you. List for the owner
 only the ones you cannot answer, with the id, state and `blockedOn`, and name the boundary it hit
@@ -266,7 +306,7 @@ bullets changes what the work is, and that is the owner's decision: get their wo
 them as `note`, and set `ownerAsked` true. The factory journals the request under the `requestId`, so a
 repeat resumes where it stopped. A `requestId` you have not used for this WorkItem's replacement
 before refuses as a conflict, the factory tells the owner. Never call it in the factory-drive job (non-members).
-For an active Project member, split through "Recover a member" in that job.
+For an active Project member, split through "Decide what the work needs" in that job.
 Give the replacement issue numbers in the order they run as `replacements`; a replacement that
 does not exist yet is a `{'title': ..., 'body': ...}`
 plan item instead, which the factory opens itself as a `factory:proposed` issue under a marker
@@ -298,7 +338,7 @@ and a repo that fails factory_repo_check.
 
 ## Answer an escalation
 
-Use "Recover a member" for members of an active Project.
+Use "Decide what the work needs" for members of an active Project.
 Use the rules below for other WorkItems (non-members).
 
 A factory-watch alert names a WorkItem that waits on the owner. When you may answer it
@@ -369,13 +409,15 @@ The monitor can also print "<id> asks question <questionId>": read the question 
 and answer it. It can also print "project <id>: acceptance <item> is changes_requested|blocked|human_waiting".
 Read that item with `factory_status` and the item id.
 Act only through the existing tools.
-For a member of an active Project, use "Recover a member".
+For a member of an active Project, use "Decide what the work needs".
 For a member of an active Project with `agentMayResolve` true, answer again even when the escalation is unchanged, except a safety stop, an environment fault and a member at its 8-pass cap.
 Read `leadBlockedBy` for the reason.
 Use "What goes to the owner" for Project reports.
 Use the rules below for other WorkItems (non-members).
 
-The driving job runs this section when the escalations you may answer change. It answers a pending
+The driving job runs this section when this text changes: an escalation you may answer, a worker
+question, a stuck acceptance item, or an issue waiting in the queue. Work the queue first, then the
+escalations. It answers a pending
 `question` on a running WorkItem first, with "A worker's question". For each line of
 factory_status's workItems with `agentMayResolve` true:
 

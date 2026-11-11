@@ -5,6 +5,7 @@ import unittest
 
 from factory_mcp import followups, mcp, tools
 from tests.test_safety import REPO, foreman
+from factory_mcp.repos import GATE_WRAPPER
 from tests.fakes import FakeGitHub, FakeRelay, ISSUE_BODY
 
 BOT = {"login": "github-actions[bot]", "id": 41898282}
@@ -41,7 +42,8 @@ class FollowupApprovalTest(unittest.TestCase):
                         "Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "a" * 40}]}
         self.github.workflow_run_list[(REPO, "head")] = [self.run]
         self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")] = (
-            "uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "a" * 40)
+            "uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "a" * 40
+            + "\ngatekeeper_ref: " + "a" * 40)
         self.args = {"repo": REPO, "issue": 60, "by": "o", "sourcePr": 58,
                      "issueDigest": followups.digest(self.issue)}
 
@@ -51,6 +53,55 @@ class FollowupApprovalTest(unittest.TestCase):
             tools.build(self.f.store, self.f, agent=agent))["result"]
         value = json.loads(result["content"][0]["text"])
         return result["isError"], value
+
+    def test_a_frozen_caller_binds_the_run_to_the_wrapper_commit_it_called(self):
+        """A caller can freeze two different commits: `uses: ...@<wrapper>` and `gatekeeper_ref:
+        <gate>`. A run's referenced_workflows names the wrapper, so that is the pin an approval
+        binds to; binding to the gate ref instead refuses every genuine approval (#526 review)."""
+        self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")] = (
+            "    uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@"
+            + "a" * 40 + "\n    with:\n      gatekeeper_ref: " + "b" * 40 + "\n")
+        self.github.tags[(GATE_WRAPPER, "v1")] = "c" * 40  # a frozen caller ignores the tag
+        failed, result = self.call()
+        self.assertFalse(failed, result)
+        self.assertEqual(result["workItem"]["id"], "o/r#60")
+        # the same caller, and a run that called another wrapper commit: refused
+        self.run["referenced_workflows"] = [{"sha": "c" * 40, "path":
+            "Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "c" * 40}]
+        self.assertTrue(self.call()[0])
+
+    def test_a_pin_kept_in_a_comment_is_not_a_pin(self):
+        """A commented `uses:` or `gatekeeper_ref:` line survives the edits that once rewrote pins, so
+        it must never read as one: it would bind an approval to a commit no run can match."""
+        self.github.tags[(GATE_WRAPPER, "v1")] = "a" * 40
+        self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")] = (
+            "# uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "c" * 40
+            + "\n    uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@v1\n")
+        failed, result = self.call()
+        self.assertFalse(failed, result)
+        self.assertEqual(result["workItem"]["id"], "o/r#60")
+
+    def test_a_caller_on_the_release_channel_approves_on_the_runs_own_record(self):
+        """ADR-0134: a caller names the channel and carries no pin, so the commit that ran is GitHub's
+        own referenced_workflows record of the run. Any other wrapper is still refused."""
+        self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")] = (
+            "    uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@v1\n")
+        self.github.tags[(GATE_WRAPPER, "v1")] = "a" * 40  # the tag the caller's v1 resolves to
+        failed, result = self.call()
+        self.assertFalse(failed, result)
+        self.assertEqual(result["workItem"]["id"], "o/r#60")
+        # a pull request head can write its own `uses:` line, so the run may name any wrapper commit:
+        # only the one the tag names may approve an issue
+        self.github.tags[(GATE_WRAPPER, "v1")] = "c" * 40
+        self.assertTrue(self.call()[0])  # the tag moved: the run is not the released gate
+        self.github.tags[(GATE_WRAPPER, "v1")] = "a" * 40
+        self.run["referenced_workflows"] = [{"sha": "b" * 40, "path":
+            "someone/other/.github/workflows/gatekeeper.yml@" + "b" * 40}]
+        self.assertTrue(self.call()[0])  # not this factory's wrapper: refused
+        self.run["referenced_workflows"] = [{"sha": "a" * 40, "path":
+            "Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "a" * 40}]
+        del self.github.tags[(GATE_WRAPPER, "v1")]
+        self.assertTrue(self.call()[0])  # a tag nobody can read refuses rather than trusts
 
     def test_owner_admits_original_and_repeated_approval_is_idempotent(self):
         for _ in range(2):
@@ -86,7 +137,9 @@ class FollowupApprovalTest(unittest.TestCase):
         for flaw in ("no link", "duplicate link", "wrong actor", "wrong issue", "human marker",
                      "wrong head", "not merged", "wrong merge actor", "no review", "duplicate review",
                      "unrelated body", "unrelated bot", "no workflow", "wrong workflow",
-                     "duplicate workflow", "outside run", "wrong reusable workflow", "base pin mismatch"):
+                     "duplicate workflow", "outside run", "wrong reusable workflow", "base pin mismatch",
+                     "duplicate base pin",
+                     "late link", "issue before merge", "head repo deleted", "base repo deleted"):
             with self.subTest(flaw=flaw):
                 self.setUp()
                 if flaw == "no link": self.github.timelines[(REPO, 58)] = []
@@ -106,10 +159,78 @@ class FollowupApprovalTest(unittest.TestCase):
                 if flaw == "base pin mismatch": self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")] = (
                     "uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "b" * 40)
                 if flaw == "wrong reusable workflow": self.run["referenced_workflows"][0]["path"] = "forged"
+                if flaw == "duplicate base pin": self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")] = (
+                    "uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "a" * 40
+                    + "\nuses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "a" * 40
+                    + "\ngatekeeper_ref: " + "a" * 40)
+                if flaw == "late link": self.link["created_at"] = "2026-10-17T08:52:40Z"
+                if flaw == "issue before merge": self.issue["created_at"] = "2026-10-17T08:52:20Z"
+                if flaw == "head repo deleted": self.pr["head"]["repo"] = None
+                if flaw == "base repo deleted": self.pr["base"]["repo"] = None
                 if flaw == "unrelated body": self.issue["body"] = ISSUE_BODY
                 if flaw == "unrelated bot": self.issue["user"] = {"login": "other[bot]", "id": 1}
                 failed, result = self.call(issueDigest=followups.digest(self.issue))
                 self.assertTrue(failed, result)
+                self.assertIn("provenance", result["error"])
+                self.assertEqual((self.github.labelled, self.f.store.all()), ([], []))
+
+    def test_a_refusal_names_its_cause_on_the_workitem_and_in_the_escalation(self):
+        """A provenance refusal is never a bare `human_waiting`: status and the escalation
+        comment both carry the cause."""
+        self.assertFalse(self.call()[0])  # the approved WorkItem exists, then its records vanish
+        self.github.timelines[(REPO, 58)] = []
+        self.f.tick("o/r#60")
+        wi = self.f.store.get("o/r#60")
+        self.assertEqual(wi["state"], "human_waiting")
+        self.assertIn("provenance", wi["blockedOn"])
+        from factory_mcp.foreman import Foreman
+        self.assertNotEqual(Foreman._reason(wi), "human_waiting")
+        escalation = [h["detail"] for h in self.f.store.history("o/r#60")
+                      if h["action"] == "approval_invalid"][-1]
+        self.assertIn("provenance", escalation["escalation"])
+
+    def test_the_canonical_indented_caller_still_approves(self):
+        """The caller `bootstrap_plan` installs indents its job-level `uses:` line; the anchored
+        `CALLER_USES` matches that indented line directly, so approval does not refuse it."""
+        self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")] = (
+            "  jobs:\n"
+            "    gatekeeper:\n"
+            "      uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@" + "a" * 40
+            + "\n      with:\n"
+            "        gatekeeper_ref: " + "a" * 40)
+        self.assertFalse(self.call()[0])
+
+    def test_a_commented_old_pin_in_the_caller_still_approves(self):
+        """Guard: only anchored `uses:` lines count as pins, so an upgrade that preserves an
+        indented commented-out pin (ADR-0080) leaves a caller with exactly one live revision approvable."""
+        self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")] = (
+            "  # upgrade kept the old pin: uses: Ami-Khokhar/pr-gatekeeper-workflow/.github/workflows/gatekeeper.yml@"
+            + "b" * 40 + "\n" + self.github.contents[(REPO, ".github/workflows/pr-gatekeeper.yml", "base0")])
+        self.assertFalse(self.call()[0])
+
+    def test_provenance_validates_once_per_approval_and_per_pass(self):
+        """A counting fake sees one validation per approval and one per dispatched pass."""
+        pulls = []
+        real_pull = self.github.pull
+        def counting_pull(repo, number):
+            pulls.append(number)
+            return real_pull(repo, number)
+        self.github.pull = counting_pull
+        self.assertFalse(self.call()[0])
+        self.assertEqual(pulls, [58])
+        pulls.clear()
+        self.f.tick("o/r#60")
+        self.assertIn(self.f.store.get("o/r#60")["state"], ("dispatching", "implementing"))
+        self.assertEqual(pulls, [58])
+
+    def test_a_deleted_head_or_base_repository_refuses_cleanly(self):
+        """`"repo": null` (a deleted head repository) is provenance missing, not an AttributeError."""
+        for where in ("head", "base"):
+            with self.subTest(where=where):
+                self.setUp()
+                self.pr[where]["repo"] = None
+                failed, result = self.call()
+                self.assertTrue(failed)
                 self.assertIn("provenance", result["error"])
                 self.assertEqual((self.github.labelled, self.f.store.all()), ([], []))
 
