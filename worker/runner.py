@@ -27,6 +27,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -270,14 +271,34 @@ _ERROR_LINE = re.compile(r"(?i)error")
 
 
 def tail_bytes(path, limit=DIAGNOSTIC_TAIL):
-    """The last `limit` bytes of a file, leniently decoded; "" when it is missing or unreadable."""
+    """The last `limit` bytes of a regular file, leniently decoded; "" when it is missing,
+    unreadable, or not a plain regular file. The untrusted harness may plant anything at its log
+    path: O_NOFOLLOW refuses a symlink instead of following it out of the sandbox, O_NONBLOCK
+    keeps a FIFO's open() from holding the pass forever, and fstat re-checks what was opened."""
     try:
-        with open(path, "rb") as handle:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return ""
+    with os.fdopen(fd, "rb") as handle:
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return ""
             handle.seek(0, os.SEEK_END)
             handle.seek(max(0, handle.tell() - limit))
             return handle.read().decode("utf-8", "replace")
-    except OSError:
-        return ""
+        except OSError:
+            return ""
+
+
+def inside_copy(path, copy):
+    """Whether a file the harness controls stays inside the credential copy `copy` once symlinks
+    resolve: a log or session linked out of the sandbox must not point this host read at a host
+    file, which the sandbox exists to prevent."""
+    try:
+        root = os.path.realpath(copy)
+        return os.path.commonpath((os.path.realpath(path), root)) == root
+    except (OSError, ValueError):
+        return False
 
 
 def last_error_line(log):
@@ -286,9 +307,10 @@ def last_error_line(log):
     return " ".join(lines[-1].split())[-HARNESS_ERROR_NOTE:] if lines else ""
 
 
-def newest_session(directory):
-    """The most recently modified .jsonl session file under a pi agent dir; None when it is
-    missing or holds none."""
+def newest_session(directory, copy):
+    """The most recently modified .jsonl session file under a pi agent dir that is a plain file
+    inside the copy; None when it is missing or holds none. A session symlink is skipped, not
+    followed."""
     newest = None
     for root, _, names in os.walk(directory or ""):
         for name in names:
@@ -296,18 +318,21 @@ def newest_session(directory):
                 continue
             path = os.path.join(root, name)
             try:
-                written = os.stat(path).st_mtime
+                status = os.lstat(path)
             except OSError:
                 continue
-            if newest is None or written > newest[0]:
-                newest = (written, path)
+            if not stat.S_ISREG(status.st_mode) or not inside_copy(path, copy):
+                continue
+            if newest is None or status.st_mtime > newest[0]:
+                newest = (status.st_mtime, path)
     return newest[1] if newest else None
 
 
 def harness_error_log(harness, harness_env, credentials):
     """The pinned harness's own log in the sandbox home, read from the host side of the credential
     mount that backs its state directory; "" when this harness has no known log or no mount backs
-    it. A missing or unreadable log is not an error."""
+    it. A missing or unreadable log is not an error, and a log the harness replaced with a symlink
+    or a FIFO reads as unreadable: the pass keeps today's text."""
     name = os.path.basename(harness[0]) if harness else ""
     if name == "opencode":
         state, relative = f"{CONTAINER_HOME}/.local/share/opencode", ("log", "opencode.log")
@@ -320,8 +345,10 @@ def harness_error_log(harness, harness_env, credentials):
     if copy is None:
         return ""
     if name == "opencode":
-        return tail_bytes(os.path.join(copy, *relative))
-    return tail_bytes(newest_session(os.path.join(copy, *relative)) or "")
+        path = os.path.join(copy, *relative)
+    else:
+        path = newest_session(os.path.join(copy, *relative), copy)
+    return tail_bytes(path) if path and inside_copy(path, copy) else ""
 
 
 def with_note(tail, note):

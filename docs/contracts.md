@@ -369,7 +369,9 @@ and direct the caller to the approved template. Credential mounts over container
   session file under `PI_CODING_AGENT_DIR` — from the credential mount that backs that directory
   (#560), and appends the log's last error line, redacted like every tail, after the harness
   execution phase's tail and the Result's `diagnostics.tail`; a tail that takes a note stays
-  within the 4000-character cap, and a missing or unreadable log, or a harness the runner cannot
+  within the 4000-character cap, and a missing or unreadable log, a log that is not a plain
+  regular file inside that mount (a symlink the harness planted is refused, not followed, and a
+  FIFO is never opened blocking), or a harness the runner cannot
   pin (neither opencode nor pi), changes nothing. The exit code rides where the command has one:
   a failing checkout
   names its git exit, a setup phase its docker exit, and patch collection the sandbox's exit.
