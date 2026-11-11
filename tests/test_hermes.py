@@ -121,14 +121,14 @@ class ProfileTest(unittest.TestCase):
         """A queued issue reaches no worker on its own (ADR-0135), so the skill carries the claim, the
         read before the decision, the approve, and the case that stays with the owner."""
         text = (PROFILE / "skills" / "software-factory" / "SKILL.md").read_text()
-        assert "## Work the queue" in text
+        self.assertIn("## Work the queue", text)
         queue = text[text.index("## Work the queue"):text.index("## Decide what the work needs")]
         self.assertLess(text.index("## Work the queue"), text.index("## Decide what the work needs"))
         for phrase in ("Drain the queue before you recover a member", "`factory_queue_next`",
                        '`by: "day-desk"`', "`factory:urgent` one first", "returns none when the queue is empty",
                        "`factory_status` and its id before you decide", "`factory_queue_approve`",
-                       "leaves the queue for `ready`", "every guard", "leave it queued, do not approve it",
-                       "tell the owner in one line why", "Never approve an issue you have not read"):
+                       "leave it queued, do not approve it", "Never edit the acceptance bullets",
+                       "approve\n   it in the same wake", "Never approve an issue you have not read"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, queue)
         self.assertLess(queue.index("`factory_queue_next`"), queue.index("`factory_queue_approve`"))

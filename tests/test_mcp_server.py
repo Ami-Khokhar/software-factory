@@ -1,6 +1,8 @@
 """Speak Streamable HTTP to a real factory-mcp server on an ephemeral port."""
 import json
 import threading
+import time
+from datetime import datetime, timedelta, timezone
 import unittest
 import urllib.error
 import urllib.request
@@ -295,6 +297,24 @@ class McpServerTest(unittest.TestCase):
         row = json.loads(result["content"][0]["text"])["workItems"][0]
         self.assertEqual((row["headSha"], row["prNumber"], row["gateRound"], row["worker"]),
                          ("c2", 15, 2, "codex"))
+
+    def test_a_queued_summary_carries_its_claim_and_whether_it_lapsed(self):
+        """The drive text is the only wake Day Desk gets (ADR-0135), and it can only report a lapsed
+        claim if the summary carries the claim: a live one, a lapsed one, and no claim at all."""
+        def stamp(seconds_ago):
+            return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)
+                    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.store.put(dict(workitem(id="o/r#1"), state="queued",
+                            queue={"at": stamp(10), "claimedBy": "day-desk", "claimedAt": stamp(10)}))
+        self.store.put(dict(workitem(id="o/r#2"), state="queued",
+                            queue={"at": stamp(3600), "claimedBy": "day-desk",
+                                   "claimedAt": stamp(3600)}))
+        self.store.put(dict(workitem(id="o/r#3"), state="queued"))
+        result = self.rpc("tools/call", {"name": "factory_status", "arguments": {}})["result"]
+        rows = {row["id"]: row for row in json.loads(result["content"][0]["text"])["workItems"]}
+        self.assertEqual(rows["o/r#1"]["queue"], {"by": "day-desk", "expired": False})
+        self.assertEqual(rows["o/r#2"]["queue"], {"by": "day-desk", "expired": True})
+        self.assertIsNone(rows["o/r#3"]["queue"])
 
     def test_protocol_errors(self):
         self.assertEqual(self.rpc("nope")["error"]["code"], -32601)

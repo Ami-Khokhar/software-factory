@@ -797,6 +797,26 @@ class WatchTest(unittest.TestCase):
         self.assertEqual(self.project_run([], dict(queued, state="ready"), command=cli.cmd_drive_queue), [])
         self.assertEqual(self.project_run([], dict(queued, state="dispatching"), command=cli.cmd_drive_queue), [])
 
+    def test_drive_queue_says_when_a_claim_lapsed_and_says_nothing_while_it_holds(self):
+        """Hermes wakes only when this text changes, so a live claim must leave it byte-identical (no
+        wake for the claim the agent just made) and a lapsed one must change it, or an agent that
+        claimed and then died is never woken to reclaim the entry (ADR-0135)."""
+        queued = {"id": "o/r#12", "state": "queued"}
+        live = dict(queued, queue={"by": "day-desk", "expired": False})
+        lapsed = dict(queued, queue={"by": "day-desk", "expired": True})
+        self.assertEqual(self.project_run([], live, command=cli.cmd_drive_queue), ["o/r#12 is queued"])
+        self.assertEqual(self.project_run([], lapsed, command=cli.cmd_drive_queue),
+                         ["o/r#12 is queued (the claim by day-desk lapsed)"])
+
+    def test_drive_queue_puts_the_queue_before_the_escalations(self):
+        """The skill drains the queue before it recovers a member, so the wake has to show the queue
+        first: a reorder that hides it behind an escalation would change what the agent reads first."""
+        lines = self.project_run([], {"id": "o/r#12", "state": "queued"},
+                                 {"id": "o/r#13", "state": "blocked", "agentMayResolve": True,
+                                  "blockedOn": "verify exited 1"}, command=cli.cmd_drive_queue)
+        self.assertEqual(lines[0], "o/r#12 is queued")
+        self.assertIn("o/r#13", lines[1])
+
     def test_drive_queue_lists_a_stuck_acceptance_item(self):
         for state in ("blocked", "human_waiting", "changes_requested", "implementing", "closed"):
             for project_state in ("active", "paused", "done", "stopped"):

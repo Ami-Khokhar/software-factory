@@ -104,6 +104,8 @@ def build(store, foreman, agent=False):
                         reason = reason or f"member used {projects.MAX_MEMBER_PASSES} passes"
                 if project["state"] == "active":
                     row["leadBlockedBy"] = reason
+        if wi["state"] == "queued":
+            row["queue"] = foreman.queue_state(wi)
         question = wi.get("question") or {}
         if (wi["state"] in ("dispatching", "implementing") and question.get("text")
                 and not question.get("answer")):

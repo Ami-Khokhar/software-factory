@@ -49,12 +49,15 @@ hand it on. Drain the queue before you recover a member, and go on until it is e
 1. Call `factory_queue_next` with `by: "day-desk"`.
    It claims one item, a `factory:urgent` one first, and returns none when the queue is empty.
 2. Read that one item with `factory_status` and its id before you decide.
-3. Ordinary work: approve it with `factory_queue_approve`.
+3. Ordinary work: approve it with `factory_queue_approve`, with the `id` the claim returned and
+   `by: "day-desk"`.
    It leaves the queue for `ready`, and the next tick dispatches it through every guard, as for any
    accepted issue.
 4. Not ordinary work, as "What goes to the owner" lists it: leave it queued, do not approve it, and
    tell the owner in one line why.
-   Edit the issue on GitHub when that is what it needs.
+   Never edit the acceptance bullets: those are the owner's.
+   When the worker only needs a clearer description, paths or notes, edit those on GitHub and approve
+   it in the same wake, so the entry does not wait for another wake to be read again.
 5. Never approve an issue you have not read, and never spend a worker pass to find out what it says.
 
 ## Decide what the work needs

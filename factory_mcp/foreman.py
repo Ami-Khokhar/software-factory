@@ -965,6 +965,15 @@ class Foreman:
                 "gateFixFirst": not member and not any(o.get("kind") == "fix" and o.get("round") == round_
                                                        for o in orders)}
 
+    def queue_state(self, wi):
+        """The claim on a queued entry as a reader sees it: who holds it, and whether that claim has
+        lapsed. The drive text changes exactly when a claim lapses, so an agent that claimed and died
+        is woken again to reclaim it (ADR-0135)."""
+        claim = wi.get("queue") or {}
+        if not claim.get("claimedBy"):
+            return None
+        return {"by": claim["claimedBy"], "expired": self._claim_expired(claim.get("claimedAt"))}
+
     def _queued_view(self, wi):
         """A claimed entry as its manager needs it: the work, what it must satisfy, what it may touch,
         what earlier attempts cost and why they failed, who may run it, and what it waits on. Facts
