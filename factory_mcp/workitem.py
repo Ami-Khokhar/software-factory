@@ -25,6 +25,14 @@ WORKER = re.compile(r"^\s*worker:\s*(\S+)\s*$", re.I | re.M)
 PATHS = re.compile(r"^\s*paths:\s*(.+?)\s*$", re.I | re.M)
 
 
+# A check the factory can run (ADR-0141): a command in backticks, a test id, or a file assertion.
+COMMAND = re.compile(r"`[^`\n]+`")
+TEST_ID = re.compile(r"\btests?\.[A-Za-z_][\w.]*\b|\btests?/[\w./-]+|\btest_[A-Za-z_]\w*\b")
+FILE_ASSERTION = re.compile(r"\b[A-Za-z0-9_][\w.-]*\.[A-Za-z][A-Za-z0-9]{0,4}\b")
+RUNNABLE_FORMS = ("a command in backticks like `python3 -m unittest tests.test_x`, a test id like "
+                  "tests.test_x or test_x, or a file assertion like 'README.md contains <path>'")
+
+
 def workitem_id(repo, number):
     return f"{repo}#{number}"
 
@@ -58,6 +66,59 @@ def parse_acceptance(body):
         else:
             missing.append(bullet.group(1).strip())
     return criteria, missing
+
+
+def claim_of(bullet):
+    """The claim a bullet's text carries, split from a `done when:` it may already name. The words
+    are the bullet's own: completing a check never rewrites them (ADR-0141)."""
+    parts = re.split(r"done when:?", bullet, maxsplit=1, flags=re.I)
+    claim = parts[0].strip().rstrip("—–-|;:(").strip()
+    return claim or bullet.strip()
+
+
+def runnable_check(check):
+    """Whether a doneWhen names something the factory can run (ADR-0141): a command in backticks, a
+    test id, or a file assertion. Prose like 'when it is done' proves nothing a worker can check."""
+    return bool(COMMAND.search(check) or TEST_ID.search(check) or FILE_ASSERTION.search(check))
+
+
+def with_check(body, claim, check):
+    """`body` with one Acceptance bullet's check completed (ADR-0141): the bullet whose claim is
+    `claim`, in the claim's own words, gets 'done when: <check>'; a bullet that already says
+    'done when:' with nothing after it takes the check there. Returns the new body, or None when no
+    bullet in the Acceptance section matches. Nothing else in the body moves."""
+    kept, inside, done = [], False, False
+    for line in (body or "").splitlines():
+        if HEADING.match(line):
+            inside = bool(ACCEPTANCE.match(line))
+            kept.append(line)
+            continue
+        bullet = re.match(r"\s*[-*]\s+(?:\[[ xX]\]\s+)?(.+)", line)
+        if not inside or not bullet or done:
+            kept.append(line)
+            continue
+        text = bullet.group(1)
+        parts = re.split(r"(done when:?)", text, maxsplit=1, flags=re.I)
+        if len(parts) == 3 and parts[2].strip().rstrip(")").strip():
+            kept.append(line)  # its check is already there: never a second one
+            continue
+        if claim_of(text) != claim:
+            kept.append(line)
+            continue
+        if len(parts) == 3:  # 'done when:' with nothing after it: the check completes it in place
+            closed = text.rstrip().endswith(")")
+            new_text = re.sub(r"done when:?\s*\)?\s*$",
+                              lambda match: "done when: " + check + (")" if closed else ""),
+                              text.rstrip(), flags=re.I)
+        else:
+            stem = text.rstrip()
+            new_text = stem + (" " if stem.endswith(("—", "–", "-", "|", ";", ":", "(")) else " — ") \
+                + "done when: " + check
+        kept.append(line[:bullet.start(1)] + new_text)
+        done = True
+    if not done:
+        return None
+    return "\n".join(kept) + ("\n" if (body or "").endswith("\n") else "")
 
 
 def description(body):
@@ -199,19 +260,27 @@ def owner_acted(entry, issue):
 
 
 def intake(repo, issue, queue=True):
-    """A new WorkItem (stateVersion 0) for an open issue, or a ValueError saying what is missing."""
+    """A new WorkItem (stateVersion 0) for an open issue, or a ValueError saying what is missing.
+    A queued issue whose bullets lack checks is taken in with the gap named on its queue entry
+    (ADR-0141), so the manager completes the checks instead of the issue being thrown away."""
     if "pull_request" in issue:
         raise ValueError(f"{repo}#{issue['number']} is a pull request, not an issue")
     if issue["state"] != "open":
         raise ValueError(f"{repo}#{issue['number']} is closed")
     criteria, missing = parse_acceptance(issue.get("body"))
-    if missing or not criteria:
+    if not criteria and not missing:
         raise ValueError("The issue needs an '## Acceptance' list of "
-                         "'- <claim> — done when: <check>' bullets. Without a check: "
-                         + ("; ".join(missing) or "no bullets found"))
+                         "'- <claim> — done when: <check>' bullets. No bullets found")
     names = labels(issue)
     state = entry_state(names, queue)
+    if missing and state != "queued":
+        raise ValueError("The issue needs an '## Acceptance' list of "
+                         "'- <claim> — done when: <check>' bullets. Without a check: "
+                         + "; ".join(missing))
     stamp = now()
+    entry = queue_entry(URGENT in names, stamp) if state == "queued" else None
+    if entry is not None and missing:
+        entry = dict(entry, acceptanceMissing=[claim_of(m) for m in missing])
     return {"schemaVersion": "factory.workitem/v1", "id": workitem_id(repo, issue["number"]),
             "repo": repo, "issueNumber": issue["number"], "goal": issue["title"],
             "description": description(issue.get("body")), "acceptance": criteria,
@@ -219,7 +288,7 @@ def intake(repo, issue, queue=True):
             "branch": branch_for(issue["number"]), "prNumber": None,
             "headSha": None, "reviewedSha": None, "gateRound": 0, "attempts": [], "blockers": [],
             "pendingRetry": None, "projectId": None, "state": state, "stateVersion": 0,
-            "queue": queue_entry(URGENT in names, stamp) if state == "queued" else None,
+            "queue": entry,
             "createdAt": stamp, "updatedAt": stamp}
 
 

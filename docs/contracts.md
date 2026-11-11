@@ -159,7 +159,8 @@ and direct the caller to the approved template. Credential mounts over container
   before saving a WorkOrder or spending a pass and concludes any open recovery. A transport
   failure instead leaves the item pending for the next tick. Existing orders and the global default stay fixed.
 - **A claim carries the facts the manager decides on (ADR-0136).** `factory_queue_next` returns, with
-  the entry it claimed: `acceptance` (the issue's bullets, parsed), `paths` (its fence), `attempts`
+  the entry it claimed: `acceptance` (the issue's bullets, parsed), `acceptanceMissing` (the claims
+  the issue names without a check, empty when there are none — ADR-0141), `paths` (its fence), `attempts`
   (`used`, `left`, the pass ceiling, and every failure with its worker, cause and reason), `workers`
   (`ran` with a pass count each, `failed`, `allowed`), `gate` (the round, or null) and `dependsOn`.
   Facts only, and read once: an agent deciding retry, split, hold or another worker needs no second
@@ -185,6 +186,21 @@ and direct the caller to the approved template. Credential mounts over container
   `why` (the one line the owner reads), `at`, and `issueUpdatedAt`, the issue's own stamp when it was
   left. A claim never takes an entry that carries it; the mark clears when the issue's `updatedAt`
   moves past `issueUpdatedAt`, so the wake uses GitHub's clock and not the factory's.
+- **A missing check is completed, never the claim (ADR-0141).** Intake takes a queued issue whose
+  bullets lack checks: each claim without one is stamped on the queue entry as
+  `queue.acceptanceMissing` (null or absent when every bullet carries a check, and while it is
+  non-empty the WorkItem's `acceptance` may be empty — the schema's `allOf` says so). The manager
+  completes each with `factory_complete_acceptance`, which writes `— done when: <check>` onto the
+  issue's own bullet — the claim in its own words, never rewritten; a check must name a command, a
+  test id or a file assertion — adds the criterion to `WorkItem.acceptance`, clears the claim from
+  `acceptanceMissing` (null once none is left), and posts one comment on the issue quoting the
+  claim, the check and why, so the owner can veto by editing the bullet back. The audit row is
+  `acceptance_completed` and carries the body before and after (a failed comment is logged as
+  `acceptance_comment_failed` and the completion stands). Refused: a claim that matches no bullet
+  lacking a check, an unrunnable check, a WorkItem with a WorkOrder (after a pass has started
+  nothing completes a check), or one that is not queued. `factory_queue_approve` refuses while
+  `acceptanceMissing` still names a claim. Intake outside the queue, and plans and proposals, keep
+  demanding full checks.
 - **`WorkItem.pendingRetry` is one durable Day Desk retry intent (ADR-0095).** Null or
   absent means none. `factory_queue_retry` writes it with its request-journal row in one
   transaction, sanitized and bounded, spending nothing and starting nothing: a replay of the

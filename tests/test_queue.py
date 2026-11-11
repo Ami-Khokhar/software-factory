@@ -15,6 +15,16 @@ from tests.fakes import FakeGitHub, FakeRelay, ISSUE_BODY
 
 REPO, ID = "o/r", "o/r#7"
 
+# A real bullet with a claim, and no check: what agent-relay#307 and #308 looked like.
+GAP_BODY = """Make the relay fail loud.
+
+## Acceptance
+- default_config_path() raises when the user registry is missing — done when: `python3 -m unittest tests.test_config` passes
+- README names the registry path
+"""
+CLAIM = "README names the registry path"
+CHECK = "README.md contains ~/.config/agent-relay/agents.json"
+
 
 class QueueTest(unittest.TestCase):
     def setUp(self):
@@ -373,6 +383,100 @@ class QueueTest(unittest.TestCase):
         self.assertEqual(built["factory_queue_next"].fn({"by": "day-desk"})["next"]["workItem"]["id"], ID)
         self.assertEqual(built["factory_queue_approve"].fn(
             {"id": ID, "by": "day-desk"})["workItem"]["state"], "ready")
+
+
+class CompleteAcceptanceTest(unittest.TestCase):
+    """The manager completes a missing check, never the claim (ADR-0141): an issue whose bullets
+    lack checks enters the queue with the gap named, the check is written onto the issue's own
+    bullet with the owner watching, and nothing happens after a pass has started."""
+
+    def setUp(self):
+        self.github, self.relay = FakeGitHub(), FakeRelay()
+        self.config = Config(mcp_token="t", repos=frozenset({REPO}), queue=True)
+        self.store = Store(":memory:")
+        self.addCleanup(self.store.close)
+        self.foreman = Foreman(self.store, self.github, self.config, self.relay)
+        self.github.add_issue(REPO, 8, labels=("factory:ready",), body=GAP_BODY)
+        self.foreman.intake(REPO, 8)
+
+    def gap(self):
+        return self.store.get("o/r#8")
+
+    def test_an_issue_whose_bullets_lack_checks_enters_the_queue_with_the_gap_named(self):
+        wi = self.gap()
+        self.assertEqual(wi["state"], "queued")
+        self.assertEqual(wi["queue"]["acceptanceMissing"], [CLAIM])
+        self.assertEqual([c["claim"] for c in wi["acceptance"]],
+                         ["default_config_path() raises when the user registry is missing"])
+        # an issue whose bullets already carry checks is intaked exactly as today: no gap on its entry
+        self.github.add_issue(REPO, 9, labels=("factory:ready",))
+        self.foreman.intake(REPO, 9)
+        self.assertIsNone(self.store.get("o/r#9")["queue"].get("acceptanceMissing"))
+
+    def test_the_claim_packet_names_the_missing_checks(self):
+        view = self.foreman.next_queued("day-desk")
+        self.assertEqual(view["workItem"]["id"], "o/r#8")
+        self.assertEqual(view["acceptanceMissing"], [CLAIM])
+        self.assertEqual(view["acceptance"],
+                         [{"claim": "default_config_path() raises when the user registry is missing",
+                           "doneWhen": "`python3 -m unittest tests.test_config` passes"}])
+
+    def test_completing_a_check_writes_it_onto_the_bullet_and_tells_the_owner(self):
+        wi = self.foreman.complete_acceptance("o/r#8", CLAIM, CHECK, "day-desk",
+                                              "the bullet names no check; this one reads the README")
+        self.assertEqual(wi["state"], "queued")
+        self.assertIsNone(wi["queue"]["acceptanceMissing"])  # the gap is closed
+        self.assertEqual(wi["acceptance"][-1], {"claim": CLAIM, "doneWhen": CHECK})
+        body = self.github.issues[(REPO, 8)]["body"]
+        self.assertIn(f"- {CLAIM} — done when: {CHECK}", body)  # the claim's own words untouched
+        self.assertEqual(len([c for c in self.github.posted if c[1] == 8]), 1)
+        comment = [c[2] for c in self.github.posted if c[1] == 8][0]
+        self.assertIn(f'Claim: "{CLAIM}"', comment)
+        self.assertIn(f'Check added: "{CHECK}"', comment)
+        self.assertIn("Why: the bullet names no check", comment)
+        row = [h for h in self.store.history("o/r#8") if h["action"] == "acceptance_completed"][-1]
+        self.assertEqual((row["detail"]["before"], row["detail"]["after"]), (GAP_BODY, body))
+        self.assertEqual(row["detail"]["by"], "day-desk")
+
+    def test_the_owner_tool_completes_the_check(self):
+        built = tools.build(self.store, self.foreman)
+        built["factory_complete_acceptance"].fn(
+            {"id": "o/r#8", "claim": CLAIM, "check": CHECK, "by": "day-desk", "why": "it read the README"})
+        self.assertIsNone(self.gap()["queue"]["acceptanceMissing"])
+
+    def test_a_rewritten_claim_is_refused_and_the_body_is_unchanged(self):
+        with self.assertRaisesRegex(ToolError, "in its own words"):
+            self.foreman.complete_acceptance("o/r#8", "README names the registry path!",
+                                             CHECK, "day-desk", "why")
+        self.assertEqual(self.github.issues[(REPO, 8)]["body"], GAP_BODY)
+        self.assertEqual(self.github.posted, [])
+
+    def test_a_check_nothing_can_run_is_refused(self):
+        with self.assertRaisesRegex(ToolError, "a command in backticks"):
+            self.foreman.complete_acceptance("o/r#8", CLAIM, "when it is done", "day-desk", "why")
+        self.assertEqual(self.github.issues[(REPO, 8)]["body"], GAP_BODY)
+        self.assertEqual([c["claim"] for c in self.gap()["acceptance"] if c["claim"] == CLAIM], [])
+
+    def test_nothing_happens_once_a_pass_has_started(self):
+        self.store.save_workorder({"id": "wo1", "workItemId": "o/r#8", "kind": "implement", "round": 0})
+        with self.assertRaisesRegex(ToolError, "has a WorkOrder"):
+            self.foreman.complete_acceptance("o/r#8", CLAIM, CHECK, "day-desk", "why")
+        self.assertEqual(self.github.issues[(REPO, 8)]["body"], GAP_BODY)
+
+    def test_only_a_queued_workitems_checks_are_completed(self):
+        self.store.put(dict(self.gap(), state="ready", queue=None))  # approved, no pass yet
+        with self.assertRaisesRegex(ToolError, "only a queued"):
+            self.foreman.complete_acceptance("o/r#8", CLAIM, CHECK, "day-desk", "why")
+        self.assertEqual(self.github.issues[(REPO, 8)]["body"], GAP_BODY)
+
+    def test_the_approval_refuses_until_the_checks_are_completed(self):
+        with self.assertRaisesRegex(ToolError, "factory_complete_acceptance"):
+            self.foreman.approve_queued("o/r#8", "day-desk")
+        self.assertEqual(self.gap()["state"], "queued")
+        self.foreman.complete_acceptance("o/r#8", CLAIM, CHECK, "day-desk", "why")
+        self.foreman.approve_queued("o/r#8", "day-desk")
+        self.assertEqual(self.gap()["state"], "ready")
+        self.assertIsNone(self.gap()["queue"])
 
 
 if __name__ == "__main__":

@@ -29,9 +29,8 @@
     },
     "acceptance": {
       "type": "array",
-      "minItems": 1,
       "items": { "$ref": "#/$defs/criterion" },
-      "description": "Frozen at intake. A merge is not completion until each doneWhen is checked."
+      "description": "Frozen at intake: the bullets whose checks the issue named. A bullet named without a check is not here until factory_complete_acceptance writes the check onto it (ADR-0141); while any is missing, the queue entry carries acceptanceMissing and this may be empty (see allOf). A merge is not completion until each doneWhen is checked."
     },
     "paths": {
       "type": ["array", "null"],
@@ -173,6 +172,11 @@
       "additionalProperties": false,
       "description": "Set while the state is `queued` (ADR-0135): the orchestrator's queue entry. `urgent` puts it first and comes from factory:urgent, `at` is when it entered and is its place in the order, and a claim writes who took it and when. A claim past its lease is free again. Null in every other state.",
       "properties": {
+        "acceptanceMissing": {
+          "type": ["array", "null"],
+          "items": { "type": "string", "minLength": 1 },
+          "description": "The Acceptance bullets the issue names without a check (ADR-0141), as their claims in their own words. The manager completes each with factory_complete_acceptance, which removes it here and adds the criterion to acceptance, before the entry is approved. Null or absent when every bullet carries a check."
+        },
         "leftForOwner": {
           "type": ["object", "null"],
           "additionalProperties": false,
@@ -238,6 +242,20 @@
     "updatedAt": { "type": "string", "format": "date-time" }
   },
   "allOf": [
+    {
+      "if": {
+        "properties": {
+          "queue": {
+            "type": "object",
+            "properties": { "acceptanceMissing": { "type": "array", "minItems": 1 } },
+            "required": ["acceptanceMissing"]
+          }
+        },
+        "required": ["queue"]
+      },
+      "then": { "properties": { "acceptance": { "minItems": 0 } } },
+      "else": { "properties": { "acceptance": { "minItems": 1 } } }
+    },
     {
       "if": { "properties": { "state": { "const": "blocked" } }, "required": ["state"] },
       "then": {

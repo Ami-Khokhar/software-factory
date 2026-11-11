@@ -56,20 +56,28 @@ ones you left for the owner.
    It claims one item, a `factory:urgent` one first, and returns none when the queue is empty.
    Stop when the only line left is one you left for the owner: the drain ends there.
 2. Read that one item with `factory_status` and its id before you decide.
-3. Ordinary work: approve it with `factory_queue_approve`, with the `id` the claim returned and
+3. A claim in `acceptanceMissing` has no check on the issue. Complete each one with
+   `factory_complete_acceptance`, before you approve: the claim in its own words, a check that names
+   a command, a test or a file, `by: "day-desk"`, and one line for the owner as `why`. The tool
+   writes the check onto the issue's own bullet and one comment on the issue quotes it, so the owner
+   can veto. The claim's words are never rewritten: a claim that reads wrong is a change to
+   acceptance, and that goes to the owner. The approval refuses while any check is still missing.
+4. Ordinary work: approve it with `factory_queue_approve`, with the `id` the claim returned and
    `by: "day-desk"`.
    It leaves the queue for `ready`, and the next tick dispatches it through every guard, as for any
    accepted issue.
-4. Not ordinary work, as "What goes to the owner" lists it: leave it with `factory_queue_leave`, with
+5. Not ordinary work, as "What goes to the owner" lists it: leave it with `factory_queue_leave`, with
    the one line the owner reads as `why`.
    That is a record in the store, not a note to yourself: it survives a restart, it stops the drive
    text from waking you again, and the owner acting on the issue takes it back.
-   You do not edit issues: no tool re-writes them, and the shell is no way in.
-5. Never approve an issue you have not read, and never spend a worker pass to find out what it says.
+   You do not edit issues yourself: `factory_complete_acceptance` is the one write to an issue, and
+   only to complete a missing check in the claim's own words; the shell is no way in.
+6. Never approve an issue you have not read, and never spend a worker pass to find out what it says.
 
 ## Decide what the work needs
 
-The claim hands you the facts: `acceptance`, `paths`, `attempts` (used, left, and every failure with
+The claim hands you the facts: `acceptance` and `acceptanceMissing` (the bullets that lack a check —
+complete them in the queue before the approval), `paths`, `attempts` (used, left, and every failure with
 its cause), `workers` (who ran it, which failed, who may run it), `gate` and `dependsOn`.
 Decide from those facts.
 Nothing in this section is a row to look up: a case it does not name is still yours, and the audit
@@ -104,7 +112,8 @@ When `leadBlockedBy` names a safety stop or an environment fault, the owner gets
 do nothing.
 
 What you never do:
-- Edit the acceptance, or touch a protected path.
+- Edit the acceptance, or touch a protected path. Completing a missing check with
+  `factory_complete_acceptance` is the one edit, and it never rewrites a claim's words.
 - Ask the owner about ordinary work.
 - Retry the same failure with the same note twice.
 - Spend a pass only to find out what the issue says.
