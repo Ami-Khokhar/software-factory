@@ -43,6 +43,7 @@ class FakeGitHub:
         self.label_names = {}  # repo -> names of the labels the Foreman created
         self.labelled = []  # (repo, number, labels) of every label the Foreman added to an issue
         self.logs, self.deleted = {}, []  # run id -> failed job log; (repo, branch) of each branch deleted
+        self.created_pulls = []  # (repo, head, base) of every create_pull call
         self.commits = {}  # (repo, sha) -> GitHub's commit; any other commit is a person's push
         self.blocked = False  # when True, merge_pull refuses as branch protection does
 
@@ -238,6 +239,7 @@ class FakeGitHub:
         return dict(self.issues[(repo, number)], html_url=f"https://github.com/{repo}/issues/{number}")
 
     def create_pull(self, repo, head, base, title, body):
+        self.created_pulls.append((repo, head, base))
         number = 100 + len(self.pulls)
         self.add_pr(repo, number, head, self.branches[(repo, head)])
         self.pulls[-1].update(title=title, body=body)

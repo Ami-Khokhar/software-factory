@@ -288,12 +288,19 @@ and direct the caller to the approved template. Credential mounts over container
   unverified partial keeps its exact provenance, a patch on the checkpoint itself. A fix
   continuation keeps the checkpoint as the applied base: its patch continues the reviewed head.
 - **`WorkOrder.project` is data (ADR-0104).** Optional `{id, goal, blueprint}`, with all three
-  strings required and no other keys. `goal` is at most 2000 characters and `blueprint` at most
-  20000. Each member's implement or fix WorkOrder carries the stored Project's goal and Lead's
-  blueprint. The worker rules require its file layout, names, signatures and data shapes, direct
-  the worker to start with the named files and ask once when code or a material decision disagrees,
-  and keep the blueprint subordinate to the rules. Non-members omit the key and keep their
-  existing task text. Older WorkOrders remain valid without it. No store migration is needed.
+   strings required and no other keys. `goal` is at most 2000 characters and `blueprint` at most
+   20000. Each member's implement or fix WorkOrder carries the stored Project's goal and Lead's
+   blueprint. The worker rules require its file layout, names, signatures and data shapes, direct
+   the worker to start with the named files and ask once when code or a material decision disagrees,
+   and keep the blueprint subordinate to the rules. Non-members omit the key and keep their
+   existing task text. Older WorkOrders remain valid without it. No store migration is needed.
+- **`WorkOrder.baseBranch` is the repo's prBase (ADR-0141).** Optional branch name. A repo listed
+  in `FACTORY_PR_BASES` (`owner/repo=branch` pairs) has every WorkOrder carry the branch its
+  factory pull requests target: dispatch builds on that branch's head, the whole pull request's
+  size is measured against it, and the PR opens with it as base. Absent means GitHub's default
+  branch, as before. A prBase branch the remote does not hold blocks the WorkItem for a person;
+  the factory never falls back to another branch. Older WorkOrders remain valid without it; no
+  store migration is needed.
 - **`WorkOrder.lessons` is data (ADR-0020).** At most 10 of the repo's
   owner-approved lessons, each `{fingerprint, text}` with text of at most 300
   characters, newest first; `[]` when the repo has none. The worker rules say to
