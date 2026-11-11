@@ -357,6 +357,25 @@ class WorkerFailoverTest(ForemanCase):
                                            "toWorker": "pi-deepseek-factory",
                                            "succeeded": False, "escalationAvoided": False}])
 
+    def test_an_answer_to_a_held_worker_fault_concludes_the_open_recovery_record(self):
+        """A dispatch that parks on a worker fault keeps the recovery it chose (#522), so the pass it
+        chose can still conclude it. A person's answer ends that attempt instead, and then the
+        decision row must still find its outcome rather than being cleared unread."""
+        self.foreman.store.put(dict(self.foreman.store.get(ID), state="human_waiting",
+                                    blockedOn="worker is disabled; repair it, then enable it again",
+                                    activeWorkOrderId="wo-held",
+                                    incident={"id": 1, "action": "worker_unavailable",
+                                              "reason": "worker is disabled", "since": "2026-10-16T00:00:00Z",
+                                              "agentAnswered": False}, recovery={
+            "id": "r-held", "action": "worker_swap", "category": "timeout (unknown cause)",
+            "fromWorker": "pi-glm-factory", "toWorker": "pi-deepseek-factory", "at": "2026-10-16T00:00:00Z"}))
+        wi = self.foreman.resolve_human(ID, "retry", "the worker is repaired", "owner")
+        self.assertEqual((wi["state"], wi["recovery"]), ("ready", None))
+        self.assertEqual([(r["recoveryId"], r["succeeded"]) for r in self.results()], [("r-held", False)])
+        # the answer buys a new order, so the held pointer does not make the item look busy
+        self.assertIsNone(wi["activeWorkOrderId"])
+        self.foreman.set_timeout(ID, None, "owner")
+
     def test_the_pass_budget_still_stops_the_recovery_attempt(self):
         """G: recovery never buys passes; the budget writes exhausted and the record concludes."""
         self.foreman.config = Config(mcp_token="t", repos=frozenset({REPO}), workers=POOL, max_passes=2)

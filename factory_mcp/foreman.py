@@ -697,7 +697,7 @@ class Foreman:
             return self.dispatch(wi, "implement", self._human_findings(wi) + self._attempt_findings(wi),
                                  facts["issue"]["workers"])
         if wi["state"] == "human_waiting":
-            return self._recheck_dependency(wi)
+            return self._recheck_worker(self._recheck_dependency(wi))
         # GitHub runs no workflow on a PR that conflicts with its base, so the gate would never answer;
         # an accepted MERGE never happens there either, so merge_pending takes the same redo (ADR-0114)
         conflict = (wi["state"] in ("pr_open", "reviewing", "changes_requested", "merge_pending")
@@ -1162,17 +1162,68 @@ class Foreman:
             self.store.log("submit_paused", {"order": order["id"],
                                              "pausedBy": [row["requestId"] for row in paused]}, wi["id"])
             return wi
-        if any(row["worker"] == wi["worker"] for row in self.store.worker_activations()):
-            # Reload before a controlled worker runs, then recheck disk/image/credential drift.
-            self.relay.reload()
-            if (wi["worker"] not in dict(worker_ops.effective_workers(self.store, self.config))
-                    or routing.family(wi["worker"]) in self._reviewer_families(wi["repo"])):
-                raise ToolError("worker activation changed or drifted; recheck health and activation")
+        fault = self._worker_fault(wi, wi.get("worker"))
+        if fault:  # the worker cannot run this pass, so no raise out of the tick (#522)
+            return self._hold_worker(wi, fault)
         task = self.relay.submit(wi["worker"], documents.worker_input(order, wi["branch"]),
                                  order["idempotencyKey"], order["budget"]["wallMs"],
                                  cwd=self.config.checkout(wi["repo"]))
         return self._write(wi, dict(wi, state="implementing", providerTaskId=task["id"]),
                            "submitted", task=task["id"])
+
+    def _worker_fault(self, wi, worker):
+        """Why `worker` may not run this pass now, or None (ADR-0085, ADR-0094). An activated worker is
+        revalidated against the live registry, image and credential immediately before the relay call;
+        a worker the configuration pins has no activation that can drift."""
+        if not any(row["worker"] == worker for row in self.store.worker_activations()):
+            return None
+        self.relay.reload()  # the registry may have changed since the WorkOrder was built
+        excluded = self._reviewer_families(wi["repo"])
+        if routing.family(worker) in excluded:
+            return (f"{worker} names the gate reviewer's model family "
+                    f"({', '.join(sorted(excluded))}), so a pass there would answer its own reviewer")
+        return worker_ops.unusable_reason(self.store, self.config, worker)
+
+    def _hold_worker(self, wi, reason):
+        """Hold the WorkItem on the worker's own fault instead of raising out of the tick (#522). The
+        order and its idempotency key stay on record with the pointer to them, so the resume submits
+        that order rather than buying a second one, and no attempt has concluded, so an open recovery
+        waits for the pass that runs instead of being closed here: `_recheck_worker` resumes it, the
+        pass's outcome concludes it, and an answer by a person concludes it in `resolve_human`. The
+        reason is stable, so an unchanged fault writes once and the next tick does nothing."""
+        return self._write(wi, dict(wi, state="human_waiting", blockedOn=reason,
+                                    question=None),
+                           "worker_unavailable", worker=wi.get("worker"))
+
+    def _recheck_worker(self, wi):
+        """A held worker fault is re-read each tick, the way `_recheck_dependency` re-reads a
+        dependency (ADR-0081): one that has cleared resumes the WorkOrder already on record, under its
+        own idempotency key, so the relay can hold at most one task for it; one that has not cleared
+        writes nothing. A relay that cannot answer leaves the hold as it is: the WorkItem already waits
+        on this exact subject, so a second environment fault must not become a row per tick. A rebuilt
+        image changes the binding an activation pins, so that repair still needs a re-enable
+        (ADR-0094, ADR-0133)."""
+        incident = wi.get("incident") or {}
+        if incident.get("action") != "worker_unavailable" or not wi.get("activeWorkOrderId"):
+            return wi
+        order = next((o for o in self.store.workorders(wi["id"])
+                      if o["id"] == wi["activeWorkOrderId"]), None)
+        if order is None:
+            return wi
+        try:
+            fault = self._worker_fault(wi, wi.get("worker"))
+        except RelayError:
+            return wi
+        if fault:  # still unusable: the same incident, unchanged
+            return wi
+        refused = self._guard_followup(wi)  # the issue may have changed while this waited
+        if refused is not None:
+            return refused
+        resumed = dict(incident, id=incident.get("id", 0) + 1, action="worker_resumed",
+                       reason=self._norm_reason(wi), since=now(), agentAnswered=True)
+        wi = self._write(wi, dict(wi, state="dispatching", blockedOn=None, incident=resumed),
+                         "worker_resumed", worker=wi.get("worker"))
+        return self.submit(wi, order, guarded=True)
 
     def worker_memory(self, token, args):
         found = self.store.order_by_ask_token(token)
@@ -1813,6 +1864,10 @@ class Foreman:
             if resolution == "retry":
                 new = dict(wi, state="changes_requested" if wi.get("prNumber") else "ready", terminalReason=None,
                            passesBefore=wi.get("passesBefore") if agent and not owner_asked else passes)
+                if (wi.get("incident") or {}).get("action") == "worker_unavailable":
+                    # the held order was never submitted, and a retry builds a new one (ADR-0133), so
+                    # the pointer must not make the WorkItem look like a running pass
+                    new = dict(new, activeWorkOrderId=None, providerTaskId=None)
             elif resolution == "regate" and wi.get("prNumber"):
                 regated_at = now()  # before the edit, so the run the edit starts begins after it
                 rerun = {"gateRerun": self._rerun_gate(wi)}
@@ -1824,6 +1879,7 @@ class Foreman:
             if agent and not owner_asked and not lead_ok and wi.get("incident") is not None:
                 # Day Desk's answer is spent on this incident; the next one it may answer is a new record
                 new = dict(new, incident=dict(wi["incident"], agentAnswered=True))
+            self._finish_recovery(wi, False)  # an answer ends the attempt a recovery chose before it ran
             return self._write(wi, dict(new, blockedOn=None, attempts=[], recovery=None, pendingRetry=None,
                                         infraRetries=0), "human_resolved",
                                resolution=resolution, note=note, by=by, **rerun, **({"agent": True} if agent else {}),
@@ -2843,7 +2899,13 @@ class Foreman:
         """A worker pass may still be running on the WorkItem: an active WorkOrder, a live relay
         task, or a state whose next step dispatches or polls one. The per-WorkItem lease in
         replace_issue already excludes a concurrent tick. Past attempts that failed or were
-        exhausted and wrote no live marker are history, not a live worker."""
+        exhausted and wrote no live marker are history, not a live worker. A WorkItem held on a
+        worker fault is the exception: it keeps `activeWorkOrderId` so its resume submits that same
+        order instead of buying a second one (#522), and nothing runs while it waits, so the repairs
+        its escalation asks for are not refused as live work."""
+        if (wi["state"] == "human_waiting"
+                and (wi.get("incident") or {}).get("action") == "worker_unavailable"):
+            return False
         return bool(wi.get("activeWorkOrderId") or wi.get("providerTaskId")) or wi["state"] in WORKING
 
     def _check_dependency(self, wi, number):

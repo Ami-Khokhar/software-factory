@@ -435,5 +435,20 @@ def unusable_reasons(store, config):
     return membership(store, config)[1]
 
 
+def unusable_reason(store, config, worker_id):
+    """Why `worker_id` may not run now, or None when the store holds no activation row for it.
+
+    `membership` answers this for every row at once, which is what a routing decision needs. A
+    WorkItem that already holds a WorkOrder needs the same fact for one worker, and needs it
+    without the drift row `membership` writes: the WorkItem's own escalation is the incident
+    (#522). A disabled row is a reason too, because only a person or Day Desk puts a worker back."""
+    row = next((row for row in store.worker_activations() if row["worker"] == worker_id), None)
+    if row is None:
+        return None
+    if not row["enabled"]:
+        return f"{worker_id} is disabled; repair it and enable it again"
+    return _honour(store, config, worker_id, row)[1]
+
+
 def effective_workers(store, config):
     return membership(store, config)[0]
