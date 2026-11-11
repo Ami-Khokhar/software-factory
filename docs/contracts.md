@@ -36,8 +36,8 @@ dreaming is enabled by this tool.
 
 ## Worker health operations
 
-`factory_check_worker` accepts only a registered worker id and the caller name. It reads the relay
-registry, and admits only a Python 3 invocation of this deployment's exact `worker/runner.py`, one
+`factory_check_worker` accepts only a registered worker id, the caller name, and an optional
+`repo` that must be in `FACTORY_REPOS` or `repos.json`. It reads the relay registry, and admits only a Python 3 invocation of this deployment's exact `worker/runner.py`, one
 of the `pi`, `codex` or `opencode` harnesses, a pinned model, existing supported runner flags and
 copied credential files. Secret-bearing `--env` keys are refused before a child starts. The
 operation runs one synthetic probe through `scripts/provider_health.py`, closes child stdin, uses
@@ -52,6 +52,23 @@ configuration change yields a different binding. A successful probe creates no W
 does not add or change the worker in `FACTORY_WORKERS`.
 Credential-file readability is not provider authentication; only a returned `factory.health/v1`
 status of `ok` proves the synthetic response was received.
+
+The check also carries one launch step (`factory.health/v1` event type `launch`) when the probe
+returned `ok` and it runs for a repo whose configured checkout folder is a cloned checkout (a `git`
+folder present, which `factory_add_repo` clones): one tiny relay task to the agent itself, with the
+same task cwd (`Config.checkout(repo)`) a real WorkOrder submit sends and a one-off request id,
+because the step is never retried. The input is `worker/runner.py`'s fixed launch marker, which it
+answers with its own `factory.launch/v1` document — a `status` of `completed` or `failed`, never a
+`factory.result/v1` Result, which would need a WorkOrder id and, when completed, a patch. The
+reply is judged by that document and not by its text; it is an internal health-check reply, not
+one of the four contracts below. This is the launch path the sandboxed probe cannot see: the
+interpreter the agent entry names, the task cwd, and macOS privacy denials on the checkout
+folder. A refused submit, a lost or timed-out task, a task that reports failure, or a reply that
+is not a completed launch quarantines the worker with a reason that names the launch step,
+recorded in the store's audit log. The probe's own status stays the stored report's status. With
+no relay, no repo, no checkout folder, or a probe that did not return `ok`, the check stays the
+synthetic provider steps alone. The step is one attempt, never a WorkOrder, never retried, and its
+input and reply shape are fixed — no transcript is stored.
 
 `factory_reload_workers` accepts only the caller name and invokes agent-relay's fixed
 `POST /v1/admin/reload` operation. It does not edit the relay registry, change `FACTORY_WORKERS`,

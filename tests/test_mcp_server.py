@@ -232,7 +232,12 @@ class McpServerTest(unittest.TestCase):
                 "worker": "opencode-mimo-factory", "by": "Day Desk"}}, token=AGENT)["result"]
         self.assertFalse(result["isError"])
         check.assert_called_once_with(self.store, self.server.foreman.config,
-                                      "opencode-mimo-factory", "Day Desk", agent=True)
+                                      "opencode-mimo-factory", "Day Desk",
+                                      self.server.foreman.relay, None, agent=True)
+        with mock.patch.object(factory_tools.worker_ops, "check", return_value={"status": "ok"}) as check:
+            self.rpc("tools/call", {"name": "factory_check_worker", "arguments": {
+                "worker": "opencode-mimo-factory", "by": "Day Desk", "repo": "o/r"}}, token=AGENT)
+        self.assertEqual(check.call_args.args[5], "o/r")  # the tool passes the repo through
         result = self.rpc("tools/call", {"name": "factory_reload_workers", "arguments": {
             "by": "Day Desk"}}, token=AGENT)["result"]
         self.assertFalse(result["isError"])
