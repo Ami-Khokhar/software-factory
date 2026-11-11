@@ -12,7 +12,7 @@ import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from . import routing
+from . import registry, routing
 from .mcp import ToolError
 from .relay import RelayError
 
@@ -89,7 +89,7 @@ def _candidate(config, worker_id):
     args = agent.get("args")
     if (agent.get("command") != "python3" or not isinstance(args, list)
             or not all(isinstance(arg, str) for arg in args)
-            or not args or args[0] != str(RUNNER)):
+            or not registry.runs_this_runner(args, RUNNER)):
         raise ToolError("worker does not run this deployment's worker/runner.py")
     if any("\0" in arg for arg in args):
         raise ToolError("worker configuration contains an invalid argument")

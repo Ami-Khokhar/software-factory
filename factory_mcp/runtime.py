@@ -9,7 +9,7 @@ from pathlib import Path
 import subprocess
 
 from .github import GitHubError
-from . import worker_ops
+from . import registry, worker_ops
 from .mcp import ToolError
 from .relay import RelayError
 from .verdict import verdicts
@@ -34,14 +34,14 @@ def _arg(args, flag, default=None):
 
 
 def _factory_runner(command, args):
-    """Only label the standard Python runner invocation as sandboxed."""
+    """Only label the standard Python runner invocation as sandboxed: the runner-path answer is
+    the registry's own (ADR-0138), so a label and a refused template can never disagree. It
+    reports and never refuses — a malformed entry is a False, not an exception."""
     if (command != 'python3' or not isinstance(args, list) or not args
             or not all(isinstance(arg, str) for arg in args)):
         return False
-    script = Path(args[0])
-    return (script.is_absolute() and '..' not in script.parts and
-            script.parts[-2:] == ('worker', 'runner.py') and
-            '--' in args and args.index('--') < len(args) - 1)
+    return (registry.runs_the_runner(args)
+            and '--' in args and args.index('--') < len(args) - 1)
 
 
 def _credential_paths(args):
