@@ -531,7 +531,7 @@ def build(store, foreman, agent=False):
                                       "Which repo's checkout folder the launch task runs in; omit "
                                       "for the single configured repo."}}}, "write",
              lambda args: worker_ops.check(store, foreman.config, args["worker"], args["by"],
-                                           foreman.relay, args.get("repo"), agent=agent)), 
+                                           foreman.relay, args.get("repo"), agent=agent)),
         Tool("factory_reload_workers",
              "Ask the running relay to reload its existing worker registry through its fixed local "
              "reload endpoint. Does not edit the registry, change FACTORY_WORKERS, start a task or "

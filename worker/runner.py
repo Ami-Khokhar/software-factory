@@ -147,6 +147,12 @@ def ask_channel_from(text):
     return text[:at] + text[end:], ask if isinstance(ask, dict) else {}
 
 
+# The health check's launch step (#430) sends this instead of a WorkOrder: the relay has started
+# this interpreter in the checkout folder, so one reply proves the launch path. It runs no harness
+# and copies no checkout (ADR-0096).
+LAUNCH_INPUT = "factory-launch-probe"
+
+
 def workorder_from(text):
     marker = "WorkOrder:\n"
     at = text.rfind(marker)
@@ -631,6 +637,24 @@ def main(argv=None):
     scratch = None
     started = time.monotonic()
     phases, secrets, echoed = [], set(), ""
+
+    if text.strip() == LAUNCH_INPUT:
+        # The launch step: nothing to run, but the task cwd must be readable, which is what a
+        # macOS privacy denial takes away from the worker.
+        try:
+            os.stat(os.getcwd())
+        except OSError as exc:
+            result["error"] = (f"launch probe could not read the task cwd: "
+                              f"{type(exc).__name__}; errno={exc.errno}")
+        else:
+            result["status"] = "completed"
+        result["diagnostics"] = {
+            "elapsedMs": max(0, int((time.monotonic() - started) * 1000)),
+            "phases": [{"phase": "launch",
+                         "elapsedMs": max(0, int((time.monotonic() - started) * 1000))}]}
+        result["finishedAt"] = now()
+        print(json.dumps(result), flush=True)
+        return 0
 
     def record(name, begin, code=None, output=""):
         """One phase's diagnostics: elapsed milliseconds, the exit code where there is one, and a

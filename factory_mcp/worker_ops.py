@@ -7,13 +7,13 @@ import re
 import shutil
 import signal
 import subprocess
-import time
 import sys
 import tempfile
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from . import routing
+from . import documents, repos, routing
 from .mcp import ToolError
 from .relay import RelayError
 
@@ -28,7 +28,9 @@ HEALTH_EVENTS = {"preflight", "probe", "launch"}
 # The launch step: one tiny relay task whose cwd is the configured checkout folder, so the check
 # proves the whole launch path the probe cannot see (#430): the interpreter the agent entry names,
 # the task cwd and macOS privacy denials on that folder. One attempt, no retries, never a WorkOrder.
-LAUNCH_PROMPT = "Health probe: reply with exactly: ok"
+# The input is worker/runner.py's LAUNCH_INPUT, which it answers with a completed Result instead of
+# asking for a WorkOrder (ADR-0096).
+LAUNCH_PROMPT = "factory-launch-probe"
 LAUNCH_SECONDS = 120
 HEALTH_FIELDS = {"ts", "event", "tool", "status", "exitCode", "retries", "latencyMs",
                  "promptBytes", "responseBytes", "diagnosticBytes"}
@@ -315,7 +317,9 @@ def _launch(relay, config, repo, worker_id):
     Returns (event, reason); (None, None) when this check carries no launch step (no relay, or
     no checkout folder for the repo), which keeps the check to the synthetic provider steps."""
     cwd = config.checkout(repo) if repo else None
-    if not cwd:
+    if relay is None or not cwd or not os.path.isdir(os.path.join(cwd, ".git")):
+        # A repo is listed before it is ever enabled, and the checkout is cloned at enable time;
+        # a submit against that missing folder would quarantine a healthy worker.
         return None, None
 
     def failed(status, exit_code, reason, started):
@@ -350,10 +354,12 @@ def _launch(relay, config, repo, worker_id):
     if task_status != "completed":
         return failed("provider_error", 1, f"the launch step failed: task {task_status}", started)
     latency = max(0, int((_now() - started).total_seconds() * 1000))
-    if (task.get("output") or "").strip() != LAUNCH_PROMPT.rsplit(": ", 1)[-1]:
+    reply = documents.parse_result(task.get("output"))
+    if reply is None or reply.get("status") != "completed" or reply.get("workOrderId") is not None:
         return ({"ts": _stamp(_now()), "event": "launch", "tool": "relay",
                  "status": "unexpected_response", "exitCode": 0, "retries": 0,
-                 "latencyMs": latency}, "the launch step ran but the worker did not reply `ok`")
+                 "latencyMs": latency},
+                "the launch step ran but the worker did not report a completed launch")
     return ({"ts": _stamp(_now()), "event": "launch", "tool": "relay", "status": "ok",
              "exitCode": 0, "retries": 0, "latencyMs": latency}, None)
 
@@ -361,6 +367,13 @@ def _launch(relay, config, repo, worker_id):
 def check(store, config, worker_id, by, relay=None, repo=None, *, agent=False):
     if not isinstance(by, str) or not by.strip():
         raise ToolError("checking a worker needs the name of the person who asked")
+    if repo is not None:
+        # mcp.handle never enforces an inputSchema, so the pattern in tools.py is decoration and
+        # the value reaches the relay as the task cwd (config.checkout just joins the segments).
+        listed = config.listed(repo) if isinstance(repo, str) and repos.NAME.match(repo) else None
+        if listed is None:
+            raise ToolError(f"{repo} is not in FACTORY_REPOS or repos.json")
+        repo = listed
     candidate = _candidate(config, worker_id)
     credential_metadata = _credential_metadata(candidate["credentials"])
     image_id = _image_id(candidate["image"])
@@ -371,10 +384,12 @@ def check(store, config, worker_id, by, relay=None, repo=None, *, agent=False):
     else:
         report, cleanup_ok = _run(candidate)
     launch_event, launch_reason = _launch(relay, config, repo or (
-        next(iter(config.repos), None) if len(config.repos) == 1 else None), worker_id)
+        next(iter(config.repos), None) if len(config.repos) == 1 else None), worker_id) \
+        if report["status"] == "ok" else (None, None)
     if launch_event is not None:
-        report = {**report, "events": [*report.get("events", []), launch_event],
-                  "status": "unavailable" if launch_reason else report["status"]}
+        # The probe's own status stays the report's: it names the failing provider step, which the
+        # launch event beside it cannot.
+        report = {**report, "events": [*report.get("events", []), launch_event]}
     status = "healthy" if report["status"] == "ok" and cleanup_ok and not launch_reason \
         else "quarantined"
     checked = _now()

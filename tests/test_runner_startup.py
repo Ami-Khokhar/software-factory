@@ -34,6 +34,34 @@ class RunnerStartupTest(unittest.TestCase):
         self.assertEqual(documents.check_result(result, self.order), [])
         return result
 
+    def test_the_launch_probe_answers_with_a_completed_result_and_runs_nothing(self):
+        """The health check's launch step: no WorkOrder, no harness, no git (#430)."""
+        args = ["--env", "TEST_SECRET=secret-env-value", "--", "sentinel-harness",
+                runner.LAUNCH_INPUT]
+        output = io.StringIO()
+        with mock.patch.object(runner.subprocess, "run") as process, \
+                mock.patch.object(runner, "prepare") as prepare, \
+                redirect_stdout(output):
+            self.assertEqual(runner.main(args), 0)
+        lines = output.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        result = json.loads(lines[0])
+        self.assertEqual((result["status"], result["workOrderId"]), ("completed", None))
+        self.assertEqual(documents.parse_result(lines[0])["status"], "completed")
+        process.assert_not_called()
+        prepare.assert_not_called()
+
+    def test_the_launch_probe_fails_when_the_task_cwd_is_unreadable(self):
+        args = ["--", "sentinel-harness", runner.LAUNCH_INPUT]
+        output = io.StringIO()
+        with mock.patch.object(runner.os, "getcwd",
+                               side_effect=PermissionError(errno.EPERM, "denied")), \
+                redirect_stdout(output):
+            self.assertEqual(runner.main(args), 0)
+        result = json.loads(output.getvalue().splitlines()[-1])
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("errno=1", result["error"])
+
     def test_accessible_directory_reaches_checkout_setup(self):
         """Guard: a valid launch directory continues to the git setup boundary."""
         with tempfile.TemporaryDirectory() as directory:

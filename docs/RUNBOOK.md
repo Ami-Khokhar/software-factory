@@ -416,14 +416,20 @@ Day Desk steers worker and timeout decisions within the same allowlist and crede
   real pilot line proves execution; the tests use fixture registries and claim no live pass. Worker-management tools are write tools
   on Day Desk's driving token. Authorization is enforced by factory-mcp.
 
-- `factory_check_worker` (`worker`, `by`) runs one fresh synthetic probe for a registered agent.
-  It accepts only Python 3 on this deployment's exact `worker/runner.py`, a pinned model, a
-  supported harness, existing credential mounts and non-secret environment keys. The check has
-  fixed deadlines, starts no WorkOrder, and stores only the sanitized `factory.health/v1` report
-  plus a binding to the worker config, credential-file metadata and image id. Success is valid for
-  15 minutes; any later configuration or file metadata change needs another check. A failed check
-  is recorded as quarantined. File readability alone is not authentication; only an `ok` probe
-  confirms the synthetic response. The probe does not start OrbStack when Docker is stopped.
+- `factory_check_worker` (`worker`, `by`, optional `repo`) runs one fresh synthetic probe for a
+  registered agent. It accepts only Python 3 on this deployment's exact `worker/runner.py`, a
+  pinned model, a supported harness, existing credential mounts and non-secret environment keys.
+  `repo` must be in `FACTORY_REPOS` or `repos.json`; it is refused in code before any relay call.
+  The check has fixed deadlines, starts no WorkOrder, and stores only the sanitized
+  `factory.health/v1` report plus a binding to the worker config, credential-file metadata and
+  image id. Success is valid for 15 minutes; any later configuration or file metadata change
+  needs another check. When the probe returned `ok` and `repo`'s checkout folder is a cloned
+  checkout, one bounded launch task also runs on the worker itself in that folder (ADR-0131): it
+  costs one tiny model task, has a 120 second deadline, is never retried, and quarantines the
+  worker if the launch fails. With no relay, no repo, no checkout folder, or a failing probe, the
+  check is the synthetic provider steps alone. A failed check is recorded as quarantined. File
+  readability alone is not authentication; only an `ok` probe confirms the synthetic response.
+  The probe does not start OrbStack when Docker is stopped.
 - `factory_reload_workers` (`by`) calls agent-relay's fixed registry reload endpoint. It edits no
   file and does not change `FACTORY_WORKERS`, start a task or retry an issue. These two driving
   writes let Day Desk check and reload a registered worker.

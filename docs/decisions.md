@@ -2328,7 +2328,9 @@ the probe uses a unique label so timeout cleanup targets only its own process gr
 Only the sanitized `factory.health/v1` status and allowlisted event fields are stored and returned.
 SQLite binds the latest success or quarantine record to a digest of the worker configuration,
 model, credential-file metadata and image identity; records expire after 15 minutes. A health
-check never dispatches or activates a worker. `factory_reload_workers` calls only the relay's
+check never dispatches or activates a worker. (Superseded for the launch step by ADR-0131: the
+check now submits one bounded launch task to the worker itself when a cloned checkout folder
+exists. A health check still never dispatches a WorkOrder or activates a worker.) `factory_reload_workers` calls only the relay's
 fixed registry-reload endpoint and never writes its registry or the factory worker order.
 
 **Consequence.** The owner can distinguish a healthy registered candidate from an unavailable one
@@ -3096,3 +3098,29 @@ checkpoint still fails with the history-rewrite error rather than completing wit
 misses the retained work. Rollout is evidence-bound: merged source is not a deployed
 runner, so the relay item that triggered this stays blocked until the running revision and a
 representative guarded continuation are verified.
+
+## ADR-0131 — A worker health check runs one bounded launch task in the checkout folder
+
+**Context.** ADR-0094 decided that a health check never dispatches a worker, because the check had
+to stay inside the deployed sandbox and could not see the launch path: the interpreter the relay
+agent entry names, the task cwd, and macOS privacy denials on the checkout folder. Issue #430 was
+a real worker that the synthetic probe called healthy and that then failed every launch. A probe
+that cannot see the launch path cannot tell the owner which of the two is broken.
+
+**Decision.** `factory_check_worker` accepts an optional `repo`, validated against
+`FACTORY_REPOS`/`repos.json` in code, and, when the probe returned `ok` and that repo has a cloned
+checkout folder, submits exactly one relay task to the worker itself: cwd
+`Config.checkout(repo)`, a fixed `launch` input `worker/runner.py` answers with a completed
+`factory.result/v1` Result and no WorkOrder, one attempt, a 120 second deadline, never retried.
+The reply is judged by parsing that Result, not by comparing text, because a runner agent always
+prints a Result. A refused submit, a lost or timed-out task, a non-`completed` task, or a reply
+that is not a completed launch quarantines the worker with a reason naming the step. With no
+relay, no repo, no checkout folder, or a probe that did not return `ok`, the check stays the
+synthetic provider steps alone. This supersedes the sentence "A health check never dispatches or
+activates a worker" in ADR-0094; the rest of ADR-0094 stands.
+
+**Consequence.** A health check can now spend one tiny model task and can quarantine a worker that
+the probe called healthy, which is the point. The probe's own status stays the stored report's
+status, so a `provider_auth` failure still names the provider rather than being flattened into
+`unavailable`. The launch input is a marker `worker/runner.py` answers before it looks for a
+WorkOrder, so a deployment whose runner predates this ADR quarantines itself instead of passing.
