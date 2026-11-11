@@ -687,17 +687,17 @@ class UpdateTest(unittest.TestCase):
 
 
 class AddRepoTest(unittest.TestCase):
-    def add_repo(self, ready):
+    def add_repo(self, ready, labels_missing=False):
         """The tools add-repo called, and how it exited. It must run no command of its own."""
         calls = []
 
         def call(tool, arguments=None, timeout=60):
             calls.append((tool, timeout))
-            if tool == "factory_add_repo" and not ready:
-                # the tool heals the labels and then refuses, carrying the checks in its message
-                raise RuntimeError("o/r is not ready: o/r has no .github/workflows/pr-gatekeeper.yml")
-            return {"repo": "o/r", "ready": ready, "added": True,
-                    "checks": [{"id": "gate_workflow", "ok": ready, "detail": "d", "fix": "f"}]}
+            checks = [{"id": "gate_workflow", "ok": ready, "detail": "d", "fix": "f"}]
+            if labels_missing:
+                checks.append({"id": "labels", "ok": False, "detail": "missing factory:urgent",
+                               "fix": "Call factory_add_repo <repo>: it creates the labels it finds missing."})
+            return {"repo": "o/r", "ready": ready and not labels_missing, "added": True, "checks": checks}
 
         with mock.patch.object(cli, "call", call), mock.patch("builtins.print"), \
                 mock.patch.object(cli, "run", side_effect=AssertionError("add-repo ran a command")):
@@ -707,16 +707,21 @@ class AddRepoTest(unittest.TestCase):
                 return calls, str(stopped)
         return calls, None
 
-    def test_a_ready_repo_is_enabled_through_the_tool_that_heals_it(self):
-        """The tool runs first, because it creates the factory labels a repo is missing and the labels
-        check refuses a repo without them: checking first would send the owner in a circle (ADR-0136).
-        Enabling clones the worker checkout, which may take up to 900s."""
-        self.assertEqual(self.add_repo(ready=True), ([("factory_add_repo", 960)], None))
+    def test_a_ready_repo_is_checked_then_enabled(self):
+        """It shows the table, then enables. Enabling clones the worker checkout, which may take 900s."""
+        self.assertEqual(self.add_repo(ready=True),
+                         ([("factory_repo_check", 60), ("factory_add_repo", 960)], None))
 
-    def test_a_refusal_still_shows_every_check_and_how_to_fix_it(self):
-        """A refused repo must still see the check table, or the owner learns nothing from the CLI."""
+    def test_a_repo_missing_only_the_labels_is_enabled_because_this_command_heals_them(self):
+        """The circle the review found: refusing on the labels check told the owner to call the tool that
+        creates them. The labels gap is the one gap this command fixes (ADR-0136)."""
+        calls, stopped = self.add_repo(ready=True, labels_missing=True)
+        self.assertEqual((calls, stopped), ([("factory_repo_check", 60), ("factory_add_repo", 960)], None))
+
+    def test_another_gap_still_refuses_with_the_table_shown(self):
+        """Any other gap refuses, and it must be refused here: `factory_add_repo` would only say so."""
         calls, stopped = self.add_repo(ready=False)
-        self.assertEqual(calls, [("factory_add_repo", 960), ("factory_repo_check", 60)])
+        self.assertEqual(calls, [("factory_repo_check", 60)])
         self.assertIn("o/r is not ready", stopped)
 
 

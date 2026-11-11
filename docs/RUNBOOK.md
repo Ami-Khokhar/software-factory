@@ -785,6 +785,8 @@ and that the `factory-update` job names: `/usr/bin/python3 -m pip install -r req
 
 An upgrade can add a factory label, as `factory:urgent` was added for the queued issue that wakes
 Day Desk: a repo enabled before that label existed never gets it, and a restart does not create it.
+A repo the check refuses for a missing factory label is still enabled by `factory add-repo`: that one
+gap is what this command heals, and every other gap still refuses with the table shown.
 After such an upgrade, re-run `factory_add_repo` once on each enabled repo (`factory add-repo
 <owner>/<repo>` in the CLI, or the tool from Day Desk): it creates the labels it finds missing and
 adds nothing else, leaving `repos.json` with the one entry it already had. `factory_repo_check`

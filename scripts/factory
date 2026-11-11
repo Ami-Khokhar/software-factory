@@ -424,18 +424,18 @@ def cmd_add_repo(args):
     if len(args) != 1 or args[0].count("/") != 1:
         die("usage: factory add-repo <owner/repo>")
     repo = args[0]
-    by = SETTINGS.get("FACTORY_OWNER") or os.environ.get("USER", "")
-    # The tool first, not the check: `factory_add_repo` creates the factory labels a repo is missing, and
-    # the labels check refuses a repo without them, so checking first would send the owner in a circle
-    # (ADR-0136). A refusal carries the same check table, with its fixes, in the error.
-    try:
-        added = call("factory_add_repo", {"repo": repo, "by": by}, timeout=960)  # the checkout is cloned
-    except Exception as exc:  # the tool's refusal names every check that failed, and how to fix it
-        checked = call("factory_repo_check", {"repo": repo})
-        for check in checked["checks"]:
-            print(f"{'ok  ' if check['ok'] else 'FAIL'} {check['id']}: {check['detail']}"
-                  + ("" if check["ok"] else f"\n     fix: {check['fix']}"))
-        die(f"{repo} is not ready: {exc}")
+    checked = call("factory_repo_check", {"repo": repo})
+    for check in checked["checks"]:
+        print(f"{'ok  ' if check['ok'] else 'FAIL'} {check['id']}: {check['detail']}"
+              + ("" if check["ok"] else f"\n     fix: {check['fix']}"))
+    # The labels check is the one gap this command fixes, so it is the one gap that does not stop it:
+    # `factory_add_repo` creates the labels and then runs the same checks again. Checking, refusing and
+    # telling the owner to call the tool that heals was a circle (ADR-0136).
+    blocking = [c for c in checked["checks"] if not c["ok"] and c["id"] != "labels"]
+    if blocking:
+        die(f"{repo} is not ready; fix the checks above and run this again")
+    added = call("factory_add_repo", {"repo": repo, "by": SETTINGS.get("FACTORY_OWNER") or os.environ.get("USER", "")},
+                 timeout=960)  # the worker checkout is cloned first
     print(f"{repo} is {'enabled' if added['added'] else 'already enabled'}. Label an issue factory:ready, "
           f"or run: factory new {repo} ...")
 
