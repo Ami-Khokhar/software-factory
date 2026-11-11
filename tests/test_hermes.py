@@ -127,11 +127,14 @@ class ProfileTest(unittest.TestCase):
         for phrase in ("Drain the queue before you recover a member", "`factory_queue_next`",
                        "`factory_queue_leave`", "left for the owner", '`by: "day-desk"`', "`factory:urgent` one first", "returns none when the queue is empty",
                        "`factory_status` and its id before you decide", "`factory_queue_approve`",
+                       "`factory_complete_acceptance`", "The claim's words are never rewritten",
                        "Leave it. It comes back to you", "a record in the store, not a note to yourself",
                        "You do not edit issues", "Never approve an issue you have not read"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, queue)
         self.assertLess(queue.index("`factory_queue_next`"), queue.index("`factory_queue_approve`"))
+        self.assertLess(queue.index("`factory_complete_acceptance`"),
+                        queue.index("`factory_queue_approve`"))  # the checks are completed first
 
     def test_the_skill_names_only_project_tools_that_exist(self):
         folder = PROFILE / "skills" / "software-factory"

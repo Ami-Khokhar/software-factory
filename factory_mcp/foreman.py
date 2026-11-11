@@ -1055,6 +1055,9 @@ class Foreman:
                 "queued": sum(1 for other in self.store.all() if other["state"] == "queued"),
                 **({"issueError": unreadable} if unreadable else {}),
                 "acceptance": criteria,
+                # the bullets the issue names without a check (ADR-0142): the manager completes
+                # each one before the entry is approved
+                "acceptanceMissing": (wi.get("queue") or {}).get("acceptanceMissing") or [],
                 "paths": workitem.paths_listed(body),
                 "attempts": {**spent, "failures": failures},
                 "workers": {"ran": [{"worker": agent, "passes": count} for agent, count in ran.items()],
@@ -1149,11 +1152,96 @@ class Foreman:
                 raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
             if wi["state"] != "queued":
                 raise ToolError(f"{workitem_id} is {wi['state']}; only a queued WorkItem is approved")
+            entry = wi.get("queue") if isinstance(wi.get("queue"), dict) \
+                else workitem.queue_entry(False, wi["updatedAt"])
+            # The issue is the authority on its own gap: the owner may have completed a check or
+            # reworded a claim on GitHub since intake, and a stored list nobody re-derives would then
+            # name a claim no bullet carries and refuse this approval for ever (ADR-0142).
+            body = self._issue(wi["repo"], wi["issueNumber"]).get("body") or ""
+            criteria, missing = workitem.parse_acceptance(body)
+            missing = [workitem.claim_of(bullet) for bullet in missing]
+            if not criteria and not missing:
+                raise ToolError(f"the issue behind {workitem_id} carries no acceptance bullets, so "
+                                "nothing proves the work; its Acceptance section is restored first")
+            # The criteria are refreshed with the gap: intake stores `acceptance: []` when no bullet
+            # carried a check, so an owner who completes every check on GitHub would otherwise be
+            # approved to a WorkItem with no criterion to dispatch or review against (ADR-0142).
+            if criteria != wi["acceptance"] or missing != (entry.get("acceptanceMissing") or []):
+                entry = dict(entry, acceptanceMissing=missing or None)
+                wi = self._write(wi, dict(wi, acceptance=criteria or wi["acceptance"], queue=entry),
+                                 "queue_gap_refreshed", acceptanceMissing=missing or None)
+            if missing:  # the issue's own bullets must each name how a check proves them (ADR-0142)
+                raise ToolError(f"{workitem_id} still has acceptance bullets without a check: "
+                                + "; ".join(missing) + ". factory_complete_acceptance completes "
+                                "them in the claims' own words, or leave the entry for the owner")
             chosen = self._choosable(wi, worker) if worker is not None else None
             return self._write(wi, dict(wi, state="ready", queue=None,
                                         **({"chosenWorker": chosen["worker"]} if chosen else {})),
                                "queue_approved", by=by, **({"note": note} if note else {}),
                                **({"worker": chosen["worker"]} if chosen else {}))
+        finally:
+            self.store.release(workitem_id, self.holder)
+
+    def complete_acceptance(self, workitem_id, claim, check, by, why):
+        """The manager completes one missing acceptance check (ADR-0142): the check is written onto
+        the issue's own bullet, the claim's words untouched, and a comment on the issue quotes the
+        claim, the check and why, so the owner sees it and can veto by editing the bullet back; the
+        audit keeps the body before and after. Refused once a WorkOrder exists: after a pass has
+        started, nothing completes a check."""
+        if not isinstance(by, str) or not by.strip():
+            raise ToolError("completing a check needs the name of the agent that completed it")
+        if not isinstance(why, str) or not why.strip():
+            raise ToolError("completing a check needs the one line the owner reads on the issue")
+        if not isinstance(claim, str) or not isinstance(check, str) \
+                or not claim.strip() or not check.strip():
+            raise ToolError("completing a check needs the claim in its own words and the check to write")
+        if any(ord(char) < 32 or ord(char) == 127 for char in check):  # one line, so it stays a check
+            raise ToolError("a check is one line: a command, a test id or a file assertion")
+        if not self.store.acquire(workitem_id, self.holder):
+            raise ToolError(f"{workitem_id} is being ticked; try again")
+        try:
+            wi = self.store.get(workitem_id)
+            if wi is None:
+                raise ToolError(f"{workitem_id} is not a WorkItem the factory knows")
+            if self.store.workorders(workitem_id):
+                raise ToolError(f"{workitem_id} has a WorkOrder: a pass has started, so nothing "
+                                "completes its checks")
+            if wi["state"] != "queued":
+                raise ToolError(f"{workitem_id} is {wi['state']}; only a queued WorkItem's missing "
+                                "checks are completed")
+            body = self._issue(wi["repo"], wi["issueNumber"]).get("body") or ""
+            _, missing = workitem.parse_acceptance(body)
+            if claim not in {workitem.claim_of(m) for m in missing}:
+                raise ToolError(f"no bullet of {workitem_id}'s Acceptance carries the claim {claim!r} "
+                                "without a check; the claim is completed in its own words, never "
+                                "redefined")
+            if not workitem.runnable_check(check):
+                raise ToolError("a check names something the factory can run: " + workitem.RUNNABLE_FORMS)
+            new_body = workitem.with_check(body, claim, check)
+            if new_body is None:  # no bullet took the check, so nothing is written or stored
+                raise ToolError(f"no bullet of {workitem_id}'s Acceptance carries the claim {claim!r} "
+                                "to write a check onto; the body is unchanged")
+            self.github.edit_issue(wi["repo"], wi["issueNumber"], new_body)
+            entry = wi.get("queue") if isinstance(wi.get("queue"), dict) \
+                else workitem.queue_entry(False, wi["updatedAt"])
+            left = [c for c in (entry.get("acceptanceMissing") or []) if c != claim]
+            new = dict(wi, acceptance=list(wi["acceptance"]) + [{"claim": claim, "doneWhen": check}],
+                       queue=dict(entry, acceptanceMissing=left or None))
+            stored = self._write(wi, new, "acceptance_completed", by=by, claim=claim, check=check,
+                                 why=why, before=body, after=new_body)
+            try:
+                self.github.comment(wi["repo"], wi["issueNumber"], "\n".join([
+                    "### factory: acceptance check completed",
+                    "",
+                    f'Claim: "{claim}"',
+                    f'Check added: "{check}"',
+                    f"Why: {why}",
+                    "",
+                    "The claim's own words are unchanged; the manager completed only the check it "
+                    "names. The owner can veto this by editing the bullet back."]))
+            except GitHubError as exc:  # the completion stands: the audit keeps what was written
+                self.store.log("acceptance_comment_failed", {"error": str(exc)}, wi["id"])
+            return stored
         finally:
             self.store.release(workitem_id, self.holder)
 

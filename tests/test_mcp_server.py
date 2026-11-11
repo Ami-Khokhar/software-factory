@@ -165,7 +165,7 @@ class McpServerTest(unittest.TestCase):
                                  "factory_report", "factory_memory_events", "factory_memory_search", "factory_dream_status", "factory_improvement_status", "factory_docker_status", "factory_project_status"})
         self.assertEqual(writes, {"factory_improvement_validate", "factory_dream_run", "factory_memory_put", "factory_intake", "factory_tick", "factory_resolve_human",
                                   "factory_queue_next", "factory_queue_approve",
-                                  "factory_queue_leave",
+                                  "factory_queue_leave", "factory_complete_acceptance",
                                   "factory_answer_question",
                                   "factory_propose_issue", "factory_add_repo", "factory_approve_issue",
                                   "factory_bootstrap_repo", "factory_approve_lesson",

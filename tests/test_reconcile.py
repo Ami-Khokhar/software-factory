@@ -1,4 +1,5 @@
 """Intake, verdict parsing, the fact-driven reconcile table, and rebuild after store loss."""
+import json
 import unittest
 
 from factory_mcp.config import Config
@@ -29,7 +30,30 @@ class AcceptanceTest(unittest.TestCase):
                            "Why and how.\n\nDepends on #2\n## Acceptance\n- A — done when: x\n## Notes\nMore."})
         self.assertEqual(wi["description"], "Why and how.\n\nDepends on #2\n## Notes\nMore.")
 
-    def test_intake_refuses_uncheckable_issue(self):
+    def test_a_bullet_without_a_check_is_queued_with_the_gap_named(self):
+        """A missing check no longer throws the issue away (ADR-0142): a factory:ready issue whose
+        bullets lack checks enters the queue, and its entry names each claim that has no check."""
+        from jsonschema import Draft202012Validator
+        from pathlib import Path
+        wi = intake(REPO, {"number": 1, "title": "t", "state": "open",
+                           "labels": [{"name": "factory:ready"}],
+                           "body": "## Acceptance\n- C has no check\n- A — done when: `make test` passes"})
+        self.assertEqual(wi["state"], "queued")
+        self.assertEqual(wi["queue"]["acceptanceMissing"], ["C has no check"])
+        self.assertEqual([c["claim"] for c in wi["acceptance"]], ["A"])
+        schema = json.loads((Path(__file__).resolve().parent.parent
+                             / "schemas" / "workitem.schema.json").read_text())
+        self.assertEqual(list(Draft202012Validator(schema).iter_errors(wi)), [])
+
+    def test_an_issue_with_no_acceptance_bullets_is_still_refused(self):
+        with self.assertRaisesRegex(ValueError, "No bullets found"):
+            intake(REPO, {"number": 1, "title": "t", "state": "open",
+                          "labels": [{"name": "factory:ready"}],
+                          "body": "## Acceptance\nprose only, no bullets"})
+
+    def test_an_uncheckable_issue_outside_the_queue_is_refused(self):
+        """Only a queued issue gets the gap completed by a manager: anywhere else the factory would
+        run work whose bullets name no check, so the refusal stands (ADR-0142)."""
         with self.assertRaisesRegex(ValueError, "C has no check"):
             intake(REPO, {"number": 1, "title": "t", "state": "open", "labels": [],
                           "body": "## Acceptance\n- C has no check"})

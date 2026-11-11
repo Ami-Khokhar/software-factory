@@ -348,9 +348,31 @@ def build(store, foreman, agent=False):
                                      "description": "the one line the owner reads"}}},
              "write", lambda args: {"workItem": foreman.leave_for_owner(
                  args["id"], args["by"], args["why"])}),
+        Tool("factory_complete_acceptance",
+             "Complete one missing acceptance check on a queued issue (ADR-0142): writes "
+             "'— done when: <check>' onto the bullet whose claim is given, in the claim's own words, "
+             "and nothing else. The check must name something the factory can run: a command in "
+             "backticks, a test id, or a file assertion. One comment on the issue quotes the claim, "
+             "the check and why, so the owner can veto; the audit keeps the body before and after. "
+             "Refused once the WorkItem has a WorkOrder: after a pass has started, nothing completes "
+             "a check.",
+             {"type": "object", "required": ["id", "claim", "check", "by", "why"],
+              "additionalProperties": False,
+              "properties": {"id": {"type": "string", "description": "owner/repo#issue"},
+                             "claim": {"type": "string", "minLength": 1,
+                                       "description": "the bullet's claim, in its own words"},
+                             "check": {"type": "string", "minLength": 1,
+                                       "description": "the check that proves the claim"},
+                             "by": {"type": "string", "minLength": 1},
+                             "why": {"type": "string", "minLength": 1,
+                                     "description": "the one line the owner reads on the issue"}}},
+             "write", lambda args: {"workItem": foreman.complete_acceptance(
+                 args["id"], args["claim"], args["check"], args["by"], args["why"])}),
         Tool("factory_intake",
              "Create a WorkItem from an open GitHub issue in an allowlisted repo. The issue needs an "
-             "'## Acceptance' list of '- <claim> — done when: <check>' bullets. Idempotent.",
+             "'## Acceptance' list of '- <claim> — done when: <check>' bullets; a queued issue whose "
+             "bullets lack checks is taken in with the gap named, and the manager completes the "
+             "checks before approving. Idempotent.",
              {"type": "object", "required": ["repo", "issue"], "additionalProperties": False,
               "properties": {"repo": {"type": "string", "description": "owner/repo"},
                              "issue": {"type": "integer", "minimum": 1}}},
@@ -359,7 +381,9 @@ def build(store, foreman, agent=False):
              "A person's go on an issue: label it factory:ready and take it in, so the factory starts "
              "work on it. A gate follow-up instead needs owner-token sourcePr and issueDigest approval. "
              "The issue must be open and have an "
-             "'## Acceptance' list of '- <claim> — done when: <check>' bullets. Idempotent.",
+             "'## Acceptance' list of '- <claim> — done when: <check>' bullets; a queued issue whose "
+             "bullets lack checks is taken in with the gap named, and the manager completes the "
+             "checks before approving. Idempotent.",
              {"type": "object", "required": ["repo", "issue", "by"], "additionalProperties": False,
               "properties": {"repo": {"type": "string", "description": "owner/repo"},
                              "issue": {"type": "integer", "minimum": 1},
