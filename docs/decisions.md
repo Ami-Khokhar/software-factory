@@ -3548,7 +3548,8 @@ Routing and membership are unchanged.
 
 **Consequence.** A person reads the one action that recovers the item in the escalation itself:
 swap, then retry, and a second identical retry is refused, so a recovery buys one WorkOrder, not
-two; the held order keeps its key unused (ADR-0133). The reason varies with the alternatives, so a
-materially changed set re-arms the incident once (ADR-0081), and an unchanged one writes nothing.
-A healthy binding's reason text is untouched: a worker that can be honoured produces no reason at
-all.
+two; the held order keeps its key unused (ADR-0133). The reason is composed once per hold write:
+`Foreman._recheck_worker` returns the WorkItem untouched while the same fault persists, so the
+sentence keeps naming what it named when the hold was written and an unchanged fault writes
+nothing (ADR-0081). A healthy binding's reason text is untouched: a worker that can be honoured
+produces no reason at all.
