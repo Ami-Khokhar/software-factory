@@ -3540,8 +3540,11 @@ same sentence into its reason, so a local-only escalation with no local worker s
 rather than naming a hosted one. That path also drops a hosted row's own problem text on a
 local-only repo — the text that ends in "repair it and rerun factory_check_worker" — because
 routing refuses every hosted worker there, so no check of one can make the item run; a local row
-whose image is broken keeps its advice, because repairing it can. The per-tick re-check and
-`membership` cost no extra image inspects (ADR-0131). Routing and membership are unchanged.
+whose image is broken keeps its advice, because repairing it can. That no-worker path composes the
+sentence from the dispatch's own `membership` pair rather than walking the activation rows again,
+so the swap list costs no second image inspect and one dispatch decision still inspects each
+enabled worker's image once (ADR-0131). The per-tick re-check costs no extra image inspects either.
+Routing and membership are unchanged.
 
 **Consequence.** A person reads the one action that recovers the item in the escalation itself:
 swap, then retry, and a second identical retry is refused, so a recovery buys one WorkOrder, not

@@ -492,36 +492,53 @@ def _honour(store, config, worker_id, row):
 _REPROBE_ADVICE = ("; run factory_check_worker", "; repair it and rerun factory_check_worker")
 
 
-def _current_workers(store, config, exclude=None, *, local_only=False, excluded_families=()):
+def eligible(workers, local_only, excluded_families=()):
+    """The (agent, place) pairs a dispatch of this WorkItem could take, in the order given: a
+    hosted worker cannot run a local-only repo, and no pass runs in the gate reviewer's model
+    family (ADR-0085). One copy of that filter for the routing report, the named-worker check, the
+    no-worker candidates and the swap list a hold shows (#545)."""
+    return [(agent, place) for agent, place in workers
+            if (place == "local" or not local_only)
+            and routing.family(agent) not in excluded_families]
+
+
+def _current_workers(store, config, exclude=None, *, local_only=False, excluded_families=(),
+                     honoured=None):
     """The enabled activation rows whose health record is current (#545) and that a dispatch of
     this WorkItem could take: each one's stored binding still matches this config and image and
     its fresh check for that binding is healthy — the `_honour` test, read without the drift row
     `membership` writes — and, as `_choosable` filters a named worker, its locality survives a
     local-only repo and its model family is not the gate reviewer's. These are the healthy
     alternatives a person can swap a held WorkItem to; naming one a dispatch would refuse strands
-    the item on an action that cannot work (#545 round 1)."""
-    names = []
-    for row in store.worker_activations():
-        worker_id = row["worker"]
-        if not row["enabled"] or worker_id == exclude:
-            continue
-        if _honour(store, config, worker_id, row)[1] is not None:
-            continue
-        place = dict(config.workers).get(worker_id, "hosted")
-        if ((place == "local" or not local_only)
-                and routing.family(worker_id) not in excluded_families):
-            names.append(worker_id)
-    return names
+    the item on an action that cannot work (#545 round 1).
+
+    `honoured` is the effective workers a `membership` walk already computed, which is the same
+    `_honour` test: the no-worker path passes its own pair instead of walking the rows again, so
+    one dispatch decision inspects each enabled worker's image once (ADR-0131, ADR-0144,
+    docs/contracts.md). A configured worker with no enabled activation row is dropped from it,
+    because only an activation row carries the health record this function's answer claims."""
+    if honoured is None:
+        honoured = [(row["worker"], dict(config.workers).get(row["worker"], "hosted"))
+                    for row in store.worker_activations()
+                    if row["enabled"] and _honour(store, config, row["worker"], row)[1] is None]
+    else:
+        activated = {row["worker"] for row in store.worker_activations() if row["enabled"]}
+        honoured = [(worker_id, place) for worker_id, place in honoured if worker_id in activated]
+    return [worker_id for worker_id, _ in eligible(honoured, local_only, excluded_families)
+            if worker_id != exclude]
 
 
-def swap_reason(store, config, worker_id, reason, *, local_only=False, excluded_families=()):
+def swap_reason(store, config, worker_id, reason, *, local_only=False, excluded_families=(),
+                honoured=None):
     """The reason an enabled worker cannot be used, with the healthy swap beside it (#545): while
     an enabled worker whose health record is current and whose locality and model family a
     dispatch of this WorkItem could take exists, the reason names it and offers the swap, and the
     re-probe advice goes — re-probing the broken worker cannot make this item run while the
-    healthy one waits. With no alternative, the reason says so and its own advice stands."""
+    healthy one waits. With no alternative, the reason says so and its own advice stands.
+    `honoured` is a `membership` walk the caller already made (the no-worker path), so composing
+    the reason costs no second image inspect."""
     names = _current_workers(store, config, exclude=worker_id, local_only=local_only,
-                             excluded_families=excluded_families)
+                             excluded_families=excluded_families, honoured=honoured)
     if names:
         for advice in _REPROBE_ADVICE:
             reason = reason.replace(advice, "")

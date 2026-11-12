@@ -401,6 +401,37 @@ class WorkerTest(unittest.TestCase):
         self.assertNotIn("factory_check_worker", wi["blockedOn"])
         self.assertNotIn("hosted-glm is enabled but cannot be used", wi["blockedOn"])
 
+    def test_a_no_worker_escalation_inspects_each_enabled_image_once(self):
+        """#545 round 4: the no-worker path reads the dispatch's own membership pair instead of
+        walking the activation rows a second time, so one dispatch decision inspects each enabled
+        worker's Docker image once (ADR-0131, ADR-0144, docs/contracts.md)."""
+        credential = os.path.join(self.tmp.name, "auth.json")
+        with open(credential, "w") as handle:
+            handle.write("auth")
+        registry = os.path.join(self.tmp.name, "agents.json")
+        names = ("hosted-glm", "hosted-mimo")
+        with open(registry, "w") as handle:
+            json.dump({"agents": [{"id": name, "command": "python3", "args": [
+                str(worker_ops.RUNNER), "--image", "factory-worker:latest",
+                "--credential", f"{credential}:/tmp/auth",
+                "--", "opencode", "run", "--model", "pi/glm"], "timeoutMs": 1000}
+                for name in names]}, handle)
+        foreman = self.foreman(workers=((names[0], "hosted"), (names[1], "hosted")),
+                               local_only_repos=frozenset({REPO}), agents_file=registry)
+        for name in names:
+            foreman.store.set_worker_activation(name, 1, "any stored binding",
+                                                {"worker": name, "enabled": True,
+                                                 "binding": "any stored binding", "by": "Day Desk",
+                                                 "note": "enabled for the test", "agent": True})
+        inspects = []
+        with mock.patch.object(worker_ops, "_image_id", side_effect=lambda image: (
+                inspects.append(image), None)[1]):
+            wi = foreman.tick(ID)["workItem"]
+        self.assertEqual(wi["state"], "human_waiting")
+        self.assertEqual(len(inspects), len(names))  # one docker inspect per enabled row, not two
+        self.assertIn("; no enabled worker with current health can run this WorkItem",
+                      wi["blockedOn"])
+
     def test_local_only_repo(self):
         # FACTORY_LOCAL_ONLY_REPOS may spell the repo in another case: GitHub repo names ignore case
         wi = self.foreman(workers=WORKERS, local_only_repos=frozenset({REPO.upper()})).tick(ID)["workItem"]
