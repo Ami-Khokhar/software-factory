@@ -2,6 +2,7 @@
 worker, an urgent entry is returned first and is found without waiting for a tick, a claim is
 exclusive and expires, and an approval hands the work back to the ordinary dispatch path."""
 import dataclasses
+import json
 import unittest
 from unittest import mock
 
@@ -555,6 +556,125 @@ class CompleteAcceptanceTest(unittest.TestCase):
         self.foreman.complete_acceptance("o/r#8", reworded, CHECK, "day-desk", "why")
         self.foreman.approve_queued("o/r#8", "day-desk")
         self.assertEqual(self.gap()["state"], "ready")
+
+
+HEALTH = {"schemaVersion": "factory.health/v1", "status": "ok",
+          "finishedAt": "2026-11-11T10:00:00Z", "events": [
+              {"ts": "2026-11-11T10:00:00Z", "event": "preflight", "tool": "opencode",
+               "status": "ok", "exitCode": 0, "retries": 0},
+              {"ts": "2026-11-11T10:00:01Z", "event": "probe", "tool": "opencode",
+               "status": "ok", "exitCode": 0, "retries": 0}]}
+
+
+class WorkerSwapTest(unittest.TestCase):
+    """A held WorkItem whose bound worker cannot run (#545): the hold names the enabled workers
+    whose health record is current instead of a check that cannot work, and one factory_set_worker
+    to the healthy worker plus one factory_resolve_human retry dispatches the pass."""
+
+    def setUp(self):
+        import tempfile
+        from contextlib import ExitStack
+        from pathlib import Path
+        from factory_mcp import worker_ops
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        credential = Path(tmp.name) / "auth.json"
+        credential.write_text("auth")
+        self.registry = Path(tmp.name) / "agents.json"
+        runner = str(worker_ops.RUNNER)
+        self.mimo = {"id": "opencode-mimo-factory", "command": "python3", "args": [
+            runner, "--credential", f"{credential}:/tmp/auth",
+            "--", "opencode", "run", "--model", "opencode/mimo-free"], "timeoutMs": 1500000}
+        self.pluto = {"id": "opencode-pluto-factory", "command": "python3", "args": [
+            runner, "--credential", f"{credential}:/tmp/auth",
+            "--", "opencode", "run", "--model", "opencode/pluto-free"], "timeoutMs": 1500000}
+        self.registry.write_text(json.dumps({"agents": [self.mimo, self.pluto]}))
+        self.github, self.relay = FakeGitHub(), FakeRelay()
+        self.config = Config(mcp_token="t", repos=frozenset({REPO}), queue=True,
+                             agents_file=str(self.registry))
+        self.store = Store(":memory:")
+        self.addCleanup(self.store.close)
+        self.foreman = Foreman(self.store, self.github, self.config, self.relay)
+        self.github.add_issue(REPO, 7, labels=("factory:ready",))
+        self.foreman.intake(REPO, 7)
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(mock.patch.object(worker_ops.subprocess, "run", return_value=
+            mock.Mock(returncode=0, stdout="sha256:" + "a" * 64)))
+        probe = mock.Mock(returncode=0)
+        probe.communicate.return_value = (json.dumps(HEALTH), "")
+        stack.enter_context(mock.patch.object(worker_ops.subprocess, "Popen", return_value=probe))
+        for worker in (self.mimo, self.pluto):
+            tools.build(self.store, self.foreman)["factory_check_worker"].fn(
+                {"worker": worker["id"], "by": "owner"})
+            tools.build(self.store, self.foreman)["factory_set_worker_enabled"].fn(
+                {"worker": worker["id"], "enabled": True, "by": "owner", "note": "Enable it"})
+
+    def test_a_hold_names_the_healthy_worker_and_one_set_worker_plus_retry_dispatches_it(self):
+        self.foreman.next_queued("day-desk")
+        self.foreman.set_worker(ID, [self.pluto["id"]], "owner")
+        self.foreman.approve_queued(ID, "day-desk")
+        self.relay.down = True  # the intent is written, the relay call is not
+        self.assertEqual(self.foreman.tick(ID)["workItem"]["state"], "dispatching")
+        self.relay.down = False
+        self.pluto["args"][-1] = "opencode/pluto-other"  # the binding this config computes drifts
+        self.registry.write_text(json.dumps({"agents": [self.mimo, self.pluto]}))
+        held = self.foreman.tick(ID)["workItem"]
+        self.assertEqual(held["state"], "human_waiting")
+        self.assertIn("workers with current health: opencode-mimo-factory", held["blockedOn"])
+        self.assertNotIn("factory_check_worker", held["blockedOn"])  # it cannot make the item run
+        self.foreman.set_worker(ID, [self.mimo["id"]], "owner")
+        self.foreman.resolve_human(ID, "retry", "swap to the healthy worker", "owner")
+        with self.assertRaisesRegex(ToolError, "not waiting on a person"):
+            self.foreman.resolve_human(ID, "retry", "the same retry again", "owner")
+        wi = self.foreman.tick(ID)["workItem"]
+        self.assertEqual((wi["state"], wi["worker"]), ("implementing", self.mimo["id"]))
+        self.assertEqual(len(self.relay.tasks), 1)  # one WorkOrder ran, not two
+
+    def test_a_hold_names_no_worker_the_gate_reviewers_family_would_refuse(self):
+        """#545: no pass runs in the gate reviewer's model family (ADR-0085), so the hold's swap
+        list drops the healthy worker whose family a dispatch of this WorkItem would refuse: the
+        reason offers no swap that factory_set_worker would accept and the dispatch would strand."""
+        self.github.contents[(REPO, ".github/pr-gatekeeper.json")] = \
+            '{"reviewer_model": "mimo-v2.6-flash"}'
+        self.foreman.next_queued("day-desk")
+        self.foreman.set_worker(ID, [self.pluto["id"]], "owner")
+        self.foreman.approve_queued(ID, "day-desk")
+        self.relay.down = True  # the intent is written, the relay call is not
+        self.assertEqual(self.foreman.tick(ID)["workItem"]["state"], "dispatching")
+        self.relay.down = False
+        self.pluto["args"][-1] = "opencode/pluto-other"  # the binding this config computes drifts
+        self.registry.write_text(json.dumps({"agents": [self.mimo, self.pluto]}))
+        held = self.foreman.tick(ID)["workItem"]
+        self.assertEqual(held["state"], "human_waiting")
+        self.assertIn("no enabled worker with current health can run this WorkItem",
+                      held["blockedOn"])
+        self.assertNotIn("opencode-mimo-factory", held["blockedOn"])
+        self.assertNotIn("factory_set_worker", held["blockedOn"])
+
+    def test_a_local_only_hold_names_no_hosted_worker_a_dispatch_would_refuse(self):
+        """#545 round 2: the hold path itself applies the repo's locality to the swap list, not only
+        worker_ops.swap_reason called on its own. A hosted worker a dispatch of a local-only repo
+        refuses is not offered, and the reason says no worker with current health can run the item."""
+        config = Config(mcp_token="t", repos=frozenset({REPO}), queue=True,
+                        agents_file=str(self.registry), local_only_repos=frozenset({REPO}),
+                        workers=(("opencode-pluto-factory", "local"),))
+        foreman = Foreman(self.store, self.github, config, self.relay)
+        foreman.next_queued("day-desk")
+        foreman.set_worker(ID, [self.pluto["id"]], "owner")
+        foreman.approve_queued(ID, "day-desk")
+        self.relay.down = True  # the intent is written, the relay call is not
+        self.assertEqual(foreman.tick(ID)["workItem"]["state"], "dispatching")
+        self.relay.down = False
+        self.pluto["args"][-1] = "opencode/pluto-other"  # the binding this config computes drifts
+        self.registry.write_text(json.dumps({"agents": [self.mimo, self.pluto]}))
+        held = foreman.tick(ID)["workItem"]
+        self.assertEqual(held["state"], "human_waiting")
+        self.assertIn("no enabled worker with current health can run this WorkItem",
+                      held["blockedOn"])
+        self.assertNotIn("opencode-mimo-factory", held["blockedOn"])
+        # The bound worker is local, so repairing it is a real path: its advice stands.
+        self.assertIn("run factory_check_worker", held["blockedOn"])
 
 
 if __name__ == "__main__":

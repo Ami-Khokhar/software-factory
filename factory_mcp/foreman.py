@@ -1346,10 +1346,20 @@ class Foreman:
                     + ", ".join(sorted(excluded)) + dropped)), "no_worker", **audit)
             # An enabled row that could not be honoured says why, so a person never chases
             # FACTORY_WORKERS when the real cause is Docker, a drifted binding or bad registry data.
+            # A hosted row is dropped from that text on a local-only repo: routing refuses it there
+            # (routing.route), so no check of it can make this item run and the reason must not send
+            # the person to factory_check_worker for it (#545 round 2). A local row whose image is
+            # broken keeps its advice, because repairing it can make the item run. The reason ends
+            # in the same healthy-alternative sentence a hold composes (#545).
+            places = dict(self.config.workers)
+            problems = [reason for worker_id, reason in problems
+                        if not (local_only and places.get(worker_id, "hosted") != "local")]
             no_worker = (f"{wi['repo']} is local-only and FACTORY_WORKERS has no local worker"
                          + dropped
                          + ("; " + "; ".join(problems) if problems else ""))
-            return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=no_worker),
+            return self._write(wi, dict(wi, state="human_waiting", recovery=None, blockedOn=(
+                worker_ops.swap_reason(self.store, self.config, None, no_worker,
+                                       local_only=local_only, excluded_families=excluded))),
                                "no_worker", **audit)
         if wi.get("wallMsOverride") is not None:
             try:
@@ -1469,8 +1479,16 @@ class Foreman:
         that order rather than buying a second one, and no attempt has concluded, so an open recovery
         waits for the pass that runs instead of being closed here: `_recheck_worker` resumes it, the
         pass's outcome concludes it, and an answer by a person concludes it in `resolve_human`. The
-        reason is stable, so an unchanged fault writes once and the next tick does nothing."""
-        return self._write(wi, dict(wi, state="human_waiting", blockedOn=reason,
+        reason is stable, so an unchanged fault writes once and the next tick does nothing. It names
+        the enabled workers whose health record is current and that a dispatch of this WorkItem
+        could take — its locality and the gate reviewer's model family (ADR-0085) exclude the rest —
+        so the person can swap to one of them instead of re-probing a worker that cannot run
+        (#545)."""
+        return self._write(wi, dict(wi, state="human_waiting",
+                                    blockedOn=worker_ops.swap_reason(
+                                        self.store, self.config, wi.get("worker"), reason,
+                                        local_only=self.config.local_only(wi["repo"]),
+                                        excluded_families=self._reviewer_families(wi["repo"])),
                                     question=None),
                            "worker_unavailable", worker=wi.get("worker"))
 
