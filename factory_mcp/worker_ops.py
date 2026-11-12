@@ -486,11 +486,75 @@ def _honour(store, config, worker_id, row):
     return binding, None
 
 
+# The re-probe advice the honour reasons end with. When a healthy alternative exists, the swap
+# replaces it (#545): re-probing the broken worker cannot make this item run while the healthy
+# one waits, so the reason must not name it as the path.
+_REPROBE_ADVICE = ("; run factory_check_worker", "; repair it and rerun factory_check_worker")
+
+
+def eligible(workers, local_only, excluded_families=()):
+    """The (agent, place) pairs a dispatch of this WorkItem could take, in the order given: a
+    hosted worker cannot run a local-only repo, and no pass runs in the gate reviewer's model
+    family (ADR-0085). One copy of that filter for the routing report, the named-worker check, the
+    no-worker candidates and the swap list a hold shows (#545)."""
+    return [(agent, place) for agent, place in workers
+            if (place == "local" or not local_only)
+            and routing.family(agent) not in excluded_families]
+
+
+def _current_workers(store, config, exclude=None, *, local_only=False, excluded_families=(),
+                     honoured=None):
+    """The enabled activation rows whose health record is current (#545) and that a dispatch of
+    this WorkItem could take: each one's stored binding still matches this config and image and
+    its fresh check for that binding is healthy — the `_honour` test, read without the drift row
+    `membership` writes — and, as `_choosable` filters a named worker, its locality survives a
+    local-only repo and its model family is not the gate reviewer's. These are the healthy
+    alternatives a person can swap a held WorkItem to; naming one a dispatch would refuse strands
+    the item on an action that cannot work (#545 round 1).
+
+    `honoured` is the effective workers a `membership` walk already computed, which is the same
+    `_honour` test: the no-worker path passes its own pair instead of walking the rows again, so
+    one dispatch decision inspects each enabled worker's image once (ADR-0131, ADR-0144,
+    docs/contracts.md). A configured worker with no enabled activation row is dropped from it,
+    because only an activation row carries the health record this function's answer claims."""
+    if honoured is None:
+        honoured = [(row["worker"], dict(config.workers).get(row["worker"], "hosted"))
+                    for row in store.worker_activations()
+                    if row["enabled"] and _honour(store, config, row["worker"], row)[1] is None]
+    else:
+        activated = {row["worker"] for row in store.worker_activations() if row["enabled"]}
+        honoured = [(worker_id, place) for worker_id, place in honoured if worker_id in activated]
+    return [worker_id for worker_id, _ in eligible(honoured, local_only, excluded_families)
+            if worker_id != exclude]
+
+
+def swap_reason(store, config, worker_id, reason, *, local_only=False, excluded_families=(),
+                honoured=None):
+    """The reason an enabled worker cannot be used, with the healthy swap beside it (#545): while
+    an enabled worker whose health record is current and whose locality and model family a
+    dispatch of this WorkItem could take exists, the reason names it and offers the swap, and the
+    re-probe advice goes — re-probing the broken worker cannot make this item run while the
+    healthy one waits. With no alternative, the reason says so and its own advice stands.
+    `honoured` is a `membership` walk the caller already made (the no-worker path), so composing
+    the reason costs no second image inspect."""
+    names = _current_workers(store, config, exclude=worker_id, local_only=local_only,
+                             excluded_families=excluded_families, honoured=honoured)
+    if names:
+        for advice in _REPROBE_ADVICE:
+            reason = reason.replace(advice, "")
+        return (f"{reason}; workers with current health: {', '.join(names)}"
+                " (factory_set_worker the WorkItem to one of them, then factory_resolve_human retry)")
+    if local_only or excluded_families:
+        return f"{reason}; no enabled worker with current health can run this WorkItem"
+    return f"{reason}; no enabled worker has current health"
+
+
 def membership(store, config):
     """One walk over the activation rows that a routing decision uses (#437): the effective
-    `workers` in the configured preference order, and the reasons an enabled row is missing
-    (ADR-0129). Routing order and thresholds are unchanged; a host with no enabled rows routes
-    exactly as before."""
+    `workers` in the configured preference order, and the reasons an enabled row is missing, each
+    paired with the worker it is about so an escalation can drop a row a dispatch would refuse
+    (#545). Routing order and thresholds are unchanged; a host with no enabled rows routes exactly
+    as before."""
     workers = dict(config.workers)
     reasons = []
     for row in store.worker_activations():
@@ -502,7 +566,7 @@ def membership(store, config):
                 workers[worker_id] = dict(config.workers).get(worker_id, "hosted")
             else:
                 _membership_drift(store, worker_id, reason)
-                reasons.append(reason)
+                reasons.append((worker_id, reason))
     # Retain the configured preference order, appending newly activated hosted workers.
     order = dict.fromkeys([*(name for name, _ in config.workers), *workers])
     return (tuple((name, workers[name]) for name in order if name in workers), reasons)
@@ -519,7 +583,7 @@ def _membership_drift(store, worker_id, reason):
 
 def unusable_reasons(store, config):
     """Why each enabled activation row is missing from effective workers; [] when none fails."""
-    return membership(store, config)[1]
+    return [reason for _, reason in membership(store, config)[1]]
 
 
 def unusable_reason(store, config, worker_id):
@@ -528,7 +592,9 @@ def unusable_reason(store, config, worker_id):
     `membership` answers this for every row at once, which is what a routing decision needs. A
     WorkItem that already holds a WorkOrder needs the same fact for one worker, and needs it
     without the drift row `membership` writes: the WorkItem's own escalation is the incident
-    (#522). A disabled row is a reason too, because only a person or Day Desk puts a worker back."""
+    (#522). A disabled row is a reason too, because only a person or Day Desk puts a worker back.
+    The reason a hold shows a person is `swap_reason`'s, which names the workers whose health
+    record is current (#545); this one stays bare, because the re-check reads it every tick."""
     row = next((row for row in store.worker_activations() if row["worker"] == worker_id), None)
     if row is None:
         return None

@@ -347,7 +347,9 @@ class WorkerTest(unittest.TestCase):
 
     def test_local_only_fallback_names_an_enabled_worker_it_cannot_honour(self):
         """An enabled activation row that routing drops keeps its reason in the escalation:
-        a person reads the real cause, never "no local worker" when FACTORY_WORKERS is fine."""
+        a person reads the real cause, never "no local worker" when FACTORY_WORKERS is fine, and
+        the reason names no healthy alternative a dispatch of a local-only repo would refuse
+        (#545): there is none, and it says so instead of offering a stranded swap."""
         credential = os.path.join(self.tmp.name, "auth.json")
         open(credential, "w").write("auth")
         registry = os.path.join(self.tmp.name, "agents.json")
@@ -368,6 +370,67 @@ class WorkerTest(unittest.TestCase):
                          ["no_worker"])
         self.assertIn("pi-glm is enabled but cannot be used: worker image is unavailable; "
                       "repair it and rerun factory_check_worker", wi["blockedOn"])
+        self.assertIn("; no enabled worker with current health can run this WorkItem",
+                      wi["blockedOn"])
+        self.assertNotIn("factory_set_worker", wi["blockedOn"])
+        self.assertNotIn("workers with current health:", wi["blockedOn"])
+
+    def test_a_local_only_escalation_drops_a_hosted_rows_advice_a_dispatch_would_refuse(self):
+        """#545 round 2: routing refuses every hosted worker on a local-only repo, so a hosted row's
+        problem is not a path either. The escalation says no worker with current health can run the
+        item and never sends the person to factory_check_worker for a worker that cannot run it."""
+        credential = os.path.join(self.tmp.name, "auth.json")
+        open(credential, "w").write("auth")
+        registry = os.path.join(self.tmp.name, "agents.json")
+        with open(registry, "w") as handle:
+            json.dump({"agents": [{"id": "hosted-glm", "command": "python3", "args": [
+                str(worker_ops.RUNNER), "--image", "factory-worker:latest",
+                "--credential", f"{credential}:/tmp/auth",
+                "--", "opencode", "run", "--model", "pi/glm"], "timeoutMs": 1000}]}, handle)
+        foreman = self.foreman(workers=(("hosted-glm", "hosted"),),
+                               local_only_repos=frozenset({REPO}), agents_file=registry)
+        foreman.store.set_worker_activation("hosted-glm", 1, "any stored binding",
+                                            {"worker": "hosted-glm", "enabled": True,
+                                             "binding": "any stored binding", "by": "Day Desk",
+                                             "note": "enabled for the test", "agent": True})
+        with mock.patch.object(worker_ops, "_image_id", return_value=None):
+            wi = foreman.tick(ID)["workItem"]
+        self.assertEqual(wi["state"], "human_waiting")
+        self.assertIn("; no enabled worker with current health can run this WorkItem",
+                      wi["blockedOn"])
+        self.assertNotIn("factory_check_worker", wi["blockedOn"])
+        self.assertNotIn("hosted-glm is enabled but cannot be used", wi["blockedOn"])
+
+    def test_a_no_worker_escalation_inspects_each_enabled_image_once(self):
+        """#545 round 4: the no-worker path reads the dispatch's own membership pair instead of
+        walking the activation rows a second time, so one dispatch decision inspects each enabled
+        worker's Docker image once (ADR-0131, ADR-0144, docs/contracts.md)."""
+        credential = os.path.join(self.tmp.name, "auth.json")
+        with open(credential, "w") as handle:
+            handle.write("auth")
+        registry = os.path.join(self.tmp.name, "agents.json")
+        names = ("hosted-glm", "hosted-mimo")
+        with open(registry, "w") as handle:
+            json.dump({"agents": [{"id": name, "command": "python3", "args": [
+                str(worker_ops.RUNNER), "--image", "factory-worker:latest",
+                "--credential", f"{credential}:/tmp/auth",
+                "--", "opencode", "run", "--model", "pi/glm"], "timeoutMs": 1000}
+                for name in names]}, handle)
+        foreman = self.foreman(workers=((names[0], "hosted"), (names[1], "hosted")),
+                               local_only_repos=frozenset({REPO}), agents_file=registry)
+        for name in names:
+            foreman.store.set_worker_activation(name, 1, "any stored binding",
+                                                {"worker": name, "enabled": True,
+                                                 "binding": "any stored binding", "by": "Day Desk",
+                                                 "note": "enabled for the test", "agent": True})
+        inspects = []
+        with mock.patch.object(worker_ops, "_image_id", side_effect=lambda image: (
+                inspects.append(image), None)[1]):
+            wi = foreman.tick(ID)["workItem"]
+        self.assertEqual(wi["state"], "human_waiting")
+        self.assertEqual(len(inspects), len(names))  # one docker inspect per enabled row, not two
+        self.assertIn("; no enabled worker with current health can run this WorkItem",
+                      wi["blockedOn"])
 
     def test_local_only_repo(self):
         # FACTORY_LOCAL_ONLY_REPOS may spell the repo in another case: GitHub repo names ignore case

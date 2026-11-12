@@ -3512,3 +3512,44 @@ directory by default), and the interval lives in the heartbeat the job writes, n
 stale heartbeat and a dead `factory-mcp` are different failures and stay distinguishable: the
 heartbeat is written before the job's first tool call. The two-interval threshold trades one
 missed tick of silence for not crying wolf over a slow tick.
+
+## ADR-0144 — A hold on an unusable worker names the healthy alternative, never a check that cannot work
+
+**Context.** Five WorkItems sat `human_waiting` or `blocked` behind `pi-glm-factory`, whose stored
+binding no longer matched the deployment, while `opencode-mimo-factory` probed healthy and enabled
+at the same moment. Every reason the hold showed — an unavailable worker image, a drifted stored
+binding, a missing healthy check — named `factory_check_worker` on the worker that was broken, and
+that was the only action the message offered. Re-probing the broken worker cannot make a held item
+run: the check at best re-records the fault, and a drifted binding keeps the activation row stale
+until it is re-enabled, so the person was sent to an action that cannot work while a healthy
+alternative waited.
+
+**Decision.** `worker_ops.unusable_reason` stays the bare per-worker reason the per-tick re-check
+reads. The reason a hold shows is `worker_ops.swap_reason`'s: it lists the enabled activation rows
+whose health record is current — the `_honour` test read without the drift row `membership`
+writes — and that a dispatch of this WorkItem could take, because a swap the next dispatch would
+refuse strands the item on an action that cannot work: a hosted worker cannot run a local-only
+repo, and no pass runs in the gate reviewer's model family (ADR-0085), the same filter
+`_choosable` applies to a named worker. While an eligible worker exists, the reason offers the
+swap (`factory_set_worker` the WorkItem to one of them, then `factory_resolve_human` retry) in
+place of the re-probe advice; with none, it says so — "no enabled worker has current health", or,
+when the repo's locality or the reviewer's family excludes every healthy worker, "no enabled
+worker with current health can run this WorkItem" — and its own advice stands as the only path.
+`Foreman._hold_worker` composes this once per hold write, and the no-worker path composes the
+same sentence into its reason, so a local-only escalation with no local worker says there is none
+rather than naming a hosted one. That path also drops a hosted row's own problem text on a
+local-only repo — the text that ends in "repair it and rerun factory_check_worker" — because
+routing refuses every hosted worker there, so no check of one can make the item run; a local row
+whose image is broken keeps its advice, because repairing it can. That no-worker path composes the
+sentence from the dispatch's own `membership` pair rather than walking the activation rows again,
+so the swap list costs no second image inspect and one dispatch decision still inspects each
+enabled worker's image once (ADR-0131). The per-tick re-check costs no extra image inspects either.
+Routing and membership are unchanged.
+
+**Consequence.** A person reads the one action that recovers the item in the escalation itself:
+swap, then retry, and a second identical retry is refused, so a recovery buys one WorkOrder, not
+two; the held order keeps its key unused (ADR-0133). The reason is composed once per hold write:
+`Foreman._recheck_worker` returns the WorkItem untouched while the same fault persists, so the
+sentence keeps naming what it named when the hold was written and an unchanged fault writes
+nothing (ADR-0081). A healthy binding's reason text is untouched: a worker that can be honoured
+produces no reason at all.

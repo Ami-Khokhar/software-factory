@@ -75,6 +75,73 @@ class WorkerOpsTest(unittest.TestCase):
                 "opencode-mimo-factory is enabled but its stored binding no longer matches this "
                 "config or image; run factory_check_worker"])
 
+    def second_agent(self):
+        return {"id": "opencode-pluto-factory", "command": "python3", "args": [
+            str(worker_ops.RUNNER), "--credential", f"{self.credential}:/tmp/auth",
+            "--", "opencode", "run", "--model", "opencode/pluto-free"], "timeoutMs": 1500000}
+
+    def enable_both(self, second):
+        """Both registered workers probed healthy and enabled, each with a current health record."""
+        self.probe_processes()
+        self.registry.write_text(json.dumps({"agents": [self.agent, second]}))
+        for worker_id in (self.agent["id"], second["id"]):
+            worker_ops.check(self.store, self.config, worker_id, "Day Desk", agent=True)
+            worker_ops.set_enabled(self.store, self.config, worker_id, True, "Day Desk",
+                                   "Enable the worker", agent=True)
+
+    def test_a_held_reason_names_the_workers_with_current_health_and_never_the_dead_check(self):
+        """#545: a hold whose worker cannot be used offers the enabled workers whose health record
+        is current, and does not send the person back to re-probe the broken one: that check cannot
+        make the item run while the healthy one waits."""
+        second = self.second_agent()
+        self.enable_both(second)
+        self.agent["args"][-1] = "opencode/mimo-other"  # the binding this config computes drifts
+        self.registry.write_text(json.dumps({"agents": [self.agent, second]}))
+        reason = worker_ops.swap_reason(
+            self.store, self.config, self.agent["id"],
+            worker_ops.unusable_reason(self.store, self.config, self.agent["id"]))
+        self.assertEqual(reason, (
+            "opencode-mimo-factory is enabled but its stored binding no longer matches this "
+            "config or image; workers with current health: opencode-pluto-factory "
+            "(factory_set_worker the WorkItem to one of them, then factory_resolve_human retry)"))
+        self.assertNotIn("factory_check_worker", reason)
+
+    def test_a_held_reason_without_a_current_health_alternative_says_so(self):
+        """#545: with no enabled worker whose health record is current, the reason says so, and its
+        own advice stands as the only path."""
+        self.probe_processes()
+        worker_ops.check(self.store, self.config, self.agent["id"], "Day Desk", agent=True)
+        worker_ops.set_enabled(self.store, self.config, self.agent["id"], True, "Day Desk",
+                               "Enable the worker", agent=True)
+        self.agent["args"][-1] = "opencode/mimo-other"
+        self.registry.write_text(json.dumps({"agents": [self.agent]}))
+        reason = worker_ops.swap_reason(
+            self.store, self.config, self.agent["id"],
+            worker_ops.unusable_reason(self.store, self.config, self.agent["id"]))
+        self.assertTrue(reason.endswith(
+            "; run factory_check_worker; no enabled worker has current health"), reason)
+        self.assertNotIn("workers with current health:", reason)
+
+    def test_a_held_reason_for_a_local_only_repo_names_no_hosted_worker_a_dispatch_would_refuse(self):
+        """#545: a dispatch of a local-only repo refuses a hosted worker, so the hold's swap list
+        holds only the workers a dispatch could take: the healthy hosted alternative is not one,
+        and the reason says there is none instead of offering a swap that strands the item."""
+        second = self.second_agent()
+        self.enable_both(second)
+        second["args"][-1] = "opencode/pluto-other"  # the binding this config computes drifts
+        self.registry.write_text(json.dumps({"agents": [self.agent, second]}))
+        config = Config(mcp_token="owner", repos=frozenset(), agents_file=str(self.registry),
+                        workers=(("opencode-pluto-factory", "local"),))
+        reason = worker_ops.swap_reason(
+            self.store, config, second["id"],
+            worker_ops.unusable_reason(self.store, config, second["id"]), local_only=True)
+        self.assertEqual(reason, (
+            "opencode-pluto-factory is enabled but its stored binding no longer matches this "
+            "config or image; run factory_check_worker; no enabled worker with current health "
+            "can run this WorkItem"))
+        self.assertNotIn("factory_set_worker", reason)
+        self.assertNotIn("opencode-mimo-factory", reason)
+
     def test_a_dropped_enabled_worker_logs_a_drift_row_naming_itself_and_its_cause(self):
         self.enable()
         self.agent["args"][-1] = "opencode/mimo-other"
@@ -178,8 +245,9 @@ class WorkerOpsTest(unittest.TestCase):
             workers, problems = worker_ops.membership(self.store, self.config)
             self.assertEqual(len(inspects), 2)
             self.assertEqual(problems, [
-                "opencode-mimo-factory is enabled but its stored binding no longer matches this "
-                "config or image; run factory_check_worker"])
+                ("opencode-mimo-factory",
+                 "opencode-mimo-factory is enabled but its stored binding no longer matches this "
+                 "config or image; run factory_check_worker")])
             self.assertEqual(workers, (*self.config.workers, (second["id"], "hosted")))
 
     def test_an_enabled_row_with_malformed_registry_data_says_so(self):
@@ -760,6 +828,39 @@ class WorkerOpsTest(unittest.TestCase):
         self.assertEqual(len(self.store.workorders("o/r#7")), 1)
         self.assertEqual(self.store.workorders("o/r#7")[0]["idempotencyKey"], order["idempotencyKey"])
         self.assertEqual(len(self.relay.tasks), 1)
+
+    def test_a_held_items_reason_offers_the_swap_and_one_retry_dispatches_it(self):
+        """#545: a hold on a worker whose stored binding no longer matches names the enabled worker
+        whose health record is current and never sends the person back to re-probe the broken one;
+        factory_set_worker to the healthy worker and one factory_resolve_human retry dispatches the
+        pass, and a second identical retry buys no second WorkOrder."""
+        from dataclasses import replace
+        from factory_mcp.foreman import Foreman
+        from tests.fakes import FakeGitHub
+        second = self.second_agent()
+        self.enable_both(second)
+        github = FakeGitHub()
+        github.add_issue("o/r", 7)
+        foreman = Foreman(self.store, github, replace(self.config, repos=frozenset({"o/r"})),
+                          self.relay)
+        foreman.intake("o/r", 7)
+        foreman.set_worker("o/r#7", [second["id"]], "owner")
+        self.relay.down = True  # the intent is written, the relay call is not
+        self.assertEqual(foreman.tick("o/r#7")["workItem"]["state"], "dispatching")
+        self.relay.down = False
+        second["args"][-1] = "opencode/pluto-other"  # the binding this config computes drifts
+        self.registry.write_text(json.dumps({"agents": [self.agent, second]}))
+        held = foreman.tick("o/r#7")["workItem"]
+        self.assertEqual(held["state"], "human_waiting")
+        self.assertIn("workers with current health: opencode-mimo-factory", held["blockedOn"])
+        self.assertNotIn("factory_check_worker", held["blockedOn"])  # it cannot make the item run
+        foreman.set_worker("o/r#7", [self.agent["id"]], "owner")
+        foreman.resolve_human("o/r#7", "retry", "swap to the healthy worker", "owner")
+        with self.assertRaisesRegex(ToolError, "not waiting on a person"):
+            foreman.resolve_human("o/r#7", "retry", "again", "owner")  # the same retry, twice
+        wi = foreman.tick("o/r#7")["workItem"]
+        self.assertEqual((wi["state"], wi["worker"]), ("implementing", self.agent["id"]))
+        self.assertEqual(len(self.relay.tasks), 1)  # one WorkOrder ran, not two
 
 
 if __name__ == "__main__":
