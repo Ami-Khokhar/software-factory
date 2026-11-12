@@ -27,6 +27,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -258,6 +259,107 @@ def verification_summary(output, limit=DIAGNOSTIC_TAIL):
     if omitted > 0:
         shown.append(f"<truncated: {omitted} more failures/errors omitted>")
     return " | ".join(shown)[:limit]
+
+
+# A harness that dies on its own (a terminal provider error, an auth failure) says so only in its
+# own log in the sandbox home, never on stdout or stderr, so the pass would end as a bare exit
+# code (#560). opencode writes it under its state directory, pi in its newest session file under
+# its agent dir, and those directories are exactly the pass's credential mounts: the log survives
+# the throwaway container on the host side of the mount, where the runner reads it.
+HARNESS_ERROR_NOTE = 320  # a bounded note, so a tail it joins stays under the Result's cap
+_ERROR_LINE = re.compile(r"(?i)error")
+
+
+def tail_bytes(path, limit=DIAGNOSTIC_TAIL):
+    """The last `limit` bytes of a regular file, leniently decoded; "" when it is missing,
+    unreadable, or not a plain regular file. The untrusted harness may plant anything at its log
+    path: O_NOFOLLOW refuses a symlink instead of following it out of the sandbox, O_NONBLOCK
+    keeps a FIFO's open() from holding the pass forever, and fstat re-checks what was opened."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return ""
+    with os.fdopen(fd, "rb") as handle:
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return ""
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - limit))
+            return handle.read().decode("utf-8", "replace")
+        except OSError:
+            return ""
+
+
+def inside_copy(path, copy):
+    """Whether a file the harness controls stays inside the credential copy `copy` once symlinks
+    resolve: a log or session linked out of the sandbox must not point this host read at a host
+    file, which the sandbox exists to prevent."""
+    try:
+        root = os.path.realpath(copy)
+        return os.path.commonpath((os.path.realpath(path), root)) == root
+    except (OSError, ValueError):
+        return False
+
+
+def last_error_line(log):
+    """The last line of a harness log that names an error, whitespace-collapsed and bounded."""
+    lines = [line for line in (log or "").splitlines() if _ERROR_LINE.search(line)]
+    return " ".join(lines[-1].split())[-HARNESS_ERROR_NOTE:] if lines else ""
+
+
+def newest_session(directory, copy):
+    """The most recently modified .jsonl session file under a pi agent dir that is a plain file
+    inside the copy; None when it is missing or holds none. A session symlink is skipped, not
+    followed."""
+    newest = None
+    for root, _, names in os.walk(directory or ""):
+        for name in names:
+            if not name.endswith(".jsonl"):
+                continue
+            path = os.path.join(root, name)
+            try:
+                status = os.lstat(path)
+            except OSError:
+                continue
+            if not stat.S_ISREG(status.st_mode) or not inside_copy(path, copy):
+                continue
+            if newest is None or status.st_mtime > newest[0]:
+                newest = (status.st_mtime, path)
+    return newest[1] if newest else None
+
+
+def harness_error_log(harness, harness_env, credentials):
+    """The pinned harness's own log in the sandbox home, read from the host side of the credential
+    mount that backs its state directory; "" when this harness has no known log or no mount backs
+    it. A missing or unreadable log is not an error, and a log the harness replaced with a symlink
+    or a FIFO reads as unreadable: the pass keeps today's text."""
+    name = os.path.basename(harness[0]) if harness else ""
+    if name == "opencode":
+        state, relative = f"{CONTAINER_HOME}/.local/share/opencode", ("log", "opencode.log")
+    elif name == "pi":
+        state = harness_env.get("PI_CODING_AGENT_DIR") or f"{CONTAINER_HOME}/.pi/agent"
+        relative = ("sessions",)
+    else:
+        return ""
+    copy = next((scratch for scratch, target in credentials if target == state), None)
+    if copy is None:
+        return ""
+    if name == "opencode":
+        path = os.path.join(copy, *relative)
+    else:
+        path = newest_session(os.path.join(copy, *relative), copy)
+    return tail_bytes(path) if path and inside_copy(path, copy) else ""
+
+
+def with_note(tail, note):
+    """A diagnostic tail with the harness's own error line after it, still within the Result's cap:
+    the note stays whole and the pass's own tail keeps its end."""
+    if not tail:
+        return note
+    room = DIAGNOSTIC_TAIL - len(note) - 1
+    if room <= 0:
+        return note[-DIAGNOSTIC_TAIL:]
+    return f"{note} {tail[-room:]}"
 
 
 def origin_repo(cwd):
@@ -644,7 +746,7 @@ def main(argv=None):
               "evidence": [], "startedAt": now()}
     scratch = None
     started = time.monotonic()
-    phases, secrets, echoed = [], set(), ""
+    phases, secrets, echoed, note = [], set(), "", ""
 
     if text.strip() == LAUNCH_INPUT:
         # The launch step: nothing to run, but the task cwd must be readable, which is what a
@@ -752,9 +854,15 @@ def main(argv=None):
                                      harness=True,
                                      env=ask_env)
         echoed = out + err
-        record("harness execution", harness_start, code, echoed)
+        harness_phase = record("harness execution", harness_start, code, echoed)
         # for the relay log; the Result line comes last. Redacted by the same rules as the tail.
         print(redact(echoed[-4000:], secrets), flush=True)
+        note = ""
+        if code != 0:
+            line = last_error_line(harness_error_log(harness, harness_env, credentials))
+            if line:
+                note = redact(f"harness log: {line}", secrets, limit=HARNESS_ERROR_NOTE)
+                harness_phase["tail"] = with_note(harness_phase.get("tail", ""), note)
         if code == 124:
             # Salvage (ADR-0086): the harness's clock ran out, but the checkout may hold its work.
             # Collect it without verify as a partial patch on this failed Result; collect() commits
@@ -813,6 +921,8 @@ def main(argv=None):
     if phases:
         diagnostics["phases"] = phases
     tail = redact(echoed, secrets)
+    if note:
+        tail = with_note(tail, note)
     if tail:
         diagnostics["tail"] = tail
     result["diagnostics"] = diagnostics

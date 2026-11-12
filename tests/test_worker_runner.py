@@ -6,6 +6,7 @@ import json
 import os
 import zipfile
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -73,6 +74,51 @@ if mode == "salvage":  # a partial fix left uncommitted, then the harness runs o
     sys.exit(124)
 if mode == "salvage-nomod":  # the clock runs out with the checkout unchanged
     sys.exit(124)
+if mode in ("harness-log-opencode", "harness-log-opencode-secret", "harness-log-ok"):
+    # The pinned harness wrote its terminal error into its own log in the sandbox home, which the
+    # pass mounted as its credential copy; the fake sandbox points the harness at the host copy.
+    directory = os.environ["FACTORY_TEST_STATE_DIRS"].split(":")[0]
+    os.makedirs(os.path.join(directory, "log"), exist_ok=True)
+    error = 'error.error="AI_APICallError: Free usage limit reached"'
+    if mode == "harness-log-opencode-secret":
+        error = open(os.path.join(directory, "auth.json")).read().strip() + " " + error
+    with open(os.path.join(directory, "log", "opencode.log"), "w") as log:
+        log.write('timestamp=2026-11-11T20:17:29Z level=INFO message="stream started"\n')
+        log.write('timestamp=2026-11-11T20:17:35Z level=ERROR message="stream error" ' + error + "\n")
+    if mode == "harness-log-ok":
+        open("app.txt", "w").write("fixed\n")
+        git("add", "-A")
+        git("-c", "user.name=h", "-c", "user.email=h@h", "commit", "-qm", "harness work")
+        sys.exit(0)
+    sys.exit(124)
+if mode == "harness-log-pi":  # pi's own error lands in its newest session file under its agent dir
+    directory = os.path.join(os.environ["FACTORY_TEST_STATE_DIRS"].split(":")[0], "sessions")
+    os.makedirs(directory, exist_ok=True)
+    open(os.path.join(directory, "2026-11-11T20-17-29-000Z_ses_1.jsonl"), "w").write(
+        '{"type":"message","message":{"role":"assistant","stopReason":"error",'
+        '"errorMessage":"AI_APICallError: Free usage limit reached"}}\n')
+    sys.exit(17)
+if mode in ("harness-log-escape", "harness-log-pi-escape", "harness-log-fifo"):
+    # A hostile harness plants its log path: a symlink out of the sandbox copy at a host file that
+    # names an error, or a FIFO in its place, which must neither be followed nor block the pass.
+    directory = os.environ["FACTORY_TEST_STATE_DIRS"].split(":")[0]
+    host = os.path.join(os.path.dirname(directory), "host-secret.log")
+    if mode == "harness-log-fifo":
+        os.makedirs(os.path.join(directory, "log"), exist_ok=True)
+        os.mkfifo(os.path.join(directory, "log", "opencode.log"))
+        sys.exit(124)
+    if mode == "harness-log-escape":  # the whole log directory links out of the sandbox copy
+        hostdir = os.path.join(os.path.dirname(directory), "host-log")
+        os.makedirs(hostdir, exist_ok=True)
+        open(os.path.join(hostdir, "opencode.log"), "w").write(
+            'error.error="AI_host_secret_leaked out of the sandbox"\n')
+        os.symlink(hostdir, os.path.join(directory, "log"))
+    else:
+        open(host, "w").write('error.error="AI_host_secret_leaked out of the sandbox"\n')
+        sessions = os.path.join(directory, "sessions")
+        os.makedirs(sessions, exist_ok=True)
+        os.symlink(host, os.path.join(sessions, "2026-11-11T20-17-29-000Z_ses_1.jsonl"))
+    sys.exit(17)
 if mode == "rewind-salvage":  # rewrite history below the checkpoint, then run out of clock
     git("reset", "--hard", "source/main")
     open("app.txt", "w").write("partial fix\n")
@@ -219,7 +265,7 @@ class RunnerTest(unittest.TestCase):
 
     def run_order(self, mode, kind="implement", repo="o/r", head=None, remote_verify=False,
                   max_lines=600, ceiling=None, omit_ceiling=False, continuation=None, wall_ms=None,
-                  ask=None):
+                  ask=None, harness_argv=None):
         wi = workitem(id="o/r#7", repo=repo, issueNumber=7, goal="Fix the app", headSha=head,
                       wallMsOverride=wall_ms)
         config = Config(mcp_token="t", repos=frozenset(),
@@ -240,10 +286,42 @@ class RunnerTest(unittest.TestCase):
         os.chdir(self.checkout)
         try:
             with redirect_stdout(out):
-                runner.main([*self.flags, "--", sys.executable, str(self.harness), mode, text])
+                runner.main([*self.flags, "--",
+                             *(harness_argv if harness_argv is not None
+                               else [sys.executable, str(self.harness), mode]), text])
         finally:
             os.chdir(cwd)
         return json.loads(out.getvalue().strip().splitlines()[-1]), order
+
+    def wrapped(self, name, flag, mode):
+        """A harness the runner sees by the relay's own name, so the pinned harness's log layout
+        is the one it reads; the wrapper drops the runner's extra args and runs the script."""
+        wrapper = Path(self.tmp.name) / name
+        wrapper.write_text(f'#!{sys.executable}\nimport os, sys\nos.execv(sys.executable, '
+                           f'[sys.executable, {str(self.harness)!r}, {mode!r}])\n')
+        os.chmod(wrapper, 0o755)
+        return [str(wrapper), flag]
+
+    def run_with_state_dirs(self, mode, harness_argv, flags):
+        """A pass whose harness writes into the credential copy it is mounted with: the fake
+        sandbox hands the harness the host copy's path, where the container path it writes lands
+        in production."""
+        original = runner.Sandbox.run
+
+        def with_state_dirs(sandbox, argv, seconds, mount, harness=False, env=None):
+            extra = dict(env or {})
+            if harness:
+                extra["FACTORY_TEST_STATE_DIRS"] = ":".join(
+                    scratch for scratch, _ in sandbox.credentials)
+            return original(sandbox, argv, seconds, mount, harness=harness, env=extra)
+
+        saved = self.flags
+        self.flags = flags
+        try:
+            with mock.patch.object(runner.Sandbox, "run", with_state_dirs):
+                return self.run_order(mode, harness_argv=harness_argv)
+        finally:
+            self.flags = saved
 
     def apply_on(self, commit, diff):
         fresh = Path(self.tmp.name) / f"fresh-{commit[:7]}"
@@ -1147,6 +1225,132 @@ class RunnerTest(unittest.TestCase):
         self.assertNotIn("nested-canary-should-not-leak", tail)
         self.assertNotIn("factory.workorder/v1", tail)
         self.assertNotIn("Fix the app", tail)
+
+    def test_an_opencode_harness_log_error_reaches_the_diagnostics(self):
+        """#560: a harness that dies on a terminal provider error says so only in its own log in
+        the sandbox home; the Result's diagnostics carry that line when the pass's credential
+        mount backs the harness's state directory, and the error text stays today's."""
+        result, order = self.run_with_state_dirs(
+            "harness-log-opencode", self.wrapped("opencode", "run", "harness-log-opencode"),
+            ["--credential", f"{self.auth}:/tmp/factory-home/.local/share/opencode"])
+        self.assertEqual((result["status"], result["error"]), ("failed", "the harness timed out"))
+        for tail in (result["diagnostics"]["tail"],
+                     self.phases_of(result)["harness execution"]["tail"]):
+            self.assertIn("harness log:", tail)
+            self.assertIn("AI_APICallError: Free usage limit reached", tail)
+        self.assertLessEqual(len(result["diagnostics"]["tail"]), runner.DIAGNOSTIC_TAIL)
+        self.assertEqual(documents.check_result(result, order), [], result["diagnostics"])
+
+    def test_a_pi_harness_session_error_reaches_the_diagnostics(self):
+        """pi's own error lands in its newest session file under PI_CODING_AGENT_DIR, which the
+        pass's credential mount backs; the diagnostics carry it, bounded like every tail."""
+        result, order = self.run_with_state_dirs(
+            "harness-log-pi", self.wrapped("pi", "--print", "harness-log-pi"),
+            ["--credential", f"{self.auth}:/home/node/.pi/agent",
+             "--env", "PI_CODING_AGENT_DIR=/home/node/.pi/agent"])
+        self.assertEqual((result["status"], result["error"]), ("failed", "the harness exited 17"))
+        tail = result["diagnostics"]["tail"]
+        self.assertIn("harness log:", tail)
+        self.assertIn("AI_APICallError: Free usage limit reached", tail)
+        self.assertLessEqual(len(tail), runner.DIAGNOSTIC_TAIL)
+        self.assertEqual(documents.check_result(result, order), [], result["diagnostics"])
+
+    def test_a_secret_in_the_harness_log_is_redacted(self):
+        """The harness log's note rides the same redaction as every diagnostic tail: the copied
+        credential's content the log quotes never reaches the Result."""
+        self.auth.write_text("hunter-agent=opendoor")
+        result, order = self.run_with_state_dirs(
+            "harness-log-opencode-secret", self.wrapped("opencode", "run", "harness-log-opencode-secret"),
+            ["--credential", f"{self.auth}:/tmp/factory-home/.local/share/opencode"])
+        self.assertEqual(result["status"], "failed", result.get("error"))
+        for tail in (result["diagnostics"]["tail"],
+                     self.phases_of(result)["harness execution"]["tail"]):
+            self.assertIn("AI_APICallError: Free usage limit reached", tail)
+            self.assertNotIn("opendoor", tail)
+        self.assertEqual(documents.check_result(result, order), [], result["diagnostics"])
+
+    def test_a_harness_without_a_log_keeps_todays_failure_text(self):
+        """Guard: the same failing harness with no log file yields exactly today's Result text and
+        tail, whether or not the pass mounts a credential where a log could have been."""
+        result, _ = self.run_order("salvage-nomod")
+        self.assertEqual((result["status"], result["error"]), ("failed", "the harness timed out"))
+        self.assertNotIn("tail", result["diagnostics"])
+        result, _ = self.run_with_state_dirs(
+            "salvage-nomod", self.wrapped("opencode", "run", "salvage-nomod"),
+            ["--credential", f"{self.auth}:/tmp/factory-home/.local/share/opencode"])
+        self.assertEqual((result["status"], result["error"]), ("failed", "the harness timed out"))
+        self.assertNotIn("tail", result["diagnostics"])
+
+    def test_a_successful_pass_carries_no_harness_log_note(self):
+        """Guard: the harness's own log is read only after a non-zero exit; a completed pass's
+        Result is unchanged even when the pass could have read one."""
+        result, order = self.run_with_state_dirs(
+            "harness-log-ok", self.wrapped("opencode", "run", "harness-log-ok"),
+            ["--credential", f"{self.auth}:/tmp/factory-home/.local/share/opencode"])
+        self.assertEqual(result["status"], "completed", result.get("error"))
+        self.assertIn("+fixed", result["patch"]["diff"])
+        self.assertNotIn("harness log", result["diagnostics"].get("tail", ""))
+        self.assertEqual(documents.check_result(result, order), [], result["diagnostics"])
+
+    def test_a_harness_log_symlinked_out_of_the_copy_is_never_followed(self):
+        """The harness's log path is the untrusted harness's to plant: a symlink out of the
+        credential copy at a host file must not be followed, so no host error text reaches the
+        Result and the note stays absent."""
+        result, _ = self.run_with_state_dirs(
+            "harness-log-escape", self.wrapped("opencode", "run", "harness-log-escape"),
+            ["--credential", f"{self.auth}:/tmp/factory-home/.local/share/opencode"])
+        self.assertEqual((result["status"], result["error"]), ("failed", "the harness exited 17"))
+        self.assertNotIn("harness log", result["diagnostics"].get("tail", ""))
+        self.assertNotIn("AI_host_secret_leaked", json.dumps(result))
+        for phase in self.phases_of(result).values():
+            self.assertNotIn("harness log", phase.get("tail", ""))
+
+    def test_a_pi_session_symlinked_out_of_the_copy_is_never_followed(self):
+        """The same rule under pi: a session file symlinked to a host file yields no note and no
+        host text, where the pass keeps today's failure text."""
+        result, order = self.run_with_state_dirs(
+            "harness-log-pi-escape", self.wrapped("pi", "--print", "harness-log-pi-escape"),
+            ["--credential", f"{self.auth}:/home/node/.pi/agent",
+             "--env", "PI_CODING_AGENT_DIR=/home/node/.pi/agent"])
+        self.assertEqual((result["status"], result["error"]), ("failed", "the harness exited 17"))
+        self.assertNotIn("harness log", result["diagnostics"].get("tail", ""))
+        self.assertNotIn("AI_host_secret_leaked", json.dumps(result))
+        self.assertEqual(documents.check_result(result, order), [], result["diagnostics"])
+
+    def test_a_fifo_in_the_harness_log_path_does_not_block_the_pass(self):
+        """A FIFO planted at the log path must never hold the host's open(): the pass finishes with
+        today's failure text and no note, instead of hanging until the relay kills it. The alarm
+        raises a plain RuntimeError, so an old tail_bytes cannot swallow it as an OSError."""
+        def interrupt(signum, frame):
+            raise RuntimeError("the pass hung on the harness's FIFO log")
+
+        previous = signal.signal(signal.SIGALRM, interrupt)
+        signal.setitimer(signal.ITIMER_REAL, 30)
+        try:
+            result, order = self.run_with_state_dirs(
+                "harness-log-fifo", self.wrapped("opencode", "run", "harness-log-fifo"),
+                ["--credential", f"{self.auth}:/tmp/factory-home/.local/share/opencode"])
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous)
+        self.assertEqual((result["status"], result["error"]), ("failed", "the harness timed out"))
+        self.assertNotIn("harness log", result["diagnostics"].get("tail", ""))
+        self.assertEqual(documents.check_result(result, order), [], result["diagnostics"])
+
+    def test_tail_bytes_never_follows_a_symlink_or_blocks_on_a_fifo(self):
+        """tail_bytes reads only a plain regular file at the path itself: a symlink is refused, a
+        FIFO neither blocks nor reads, and a missing file stays empty."""
+        with tempfile.TemporaryDirectory() as directory:
+            host = os.path.join(directory, "real.txt")
+            open(host, "w").write("error host secret")
+            pipe = os.path.join(directory, "pipe")
+            os.mkfifo(pipe)
+            link = os.path.join(directory, "log")
+            os.symlink(host, link)
+            self.assertEqual(runner.tail_bytes(pipe), "")
+            self.assertEqual(runner.tail_bytes(link), "")
+            self.assertEqual(runner.tail_bytes(os.path.join(directory, "missing.log")), "")
+            self.assertTrue(runner.tail_bytes(host).endswith("error host secret"))
 
     def test_hooks_and_filters_the_harness_plants_never_run_on_the_host(self):
         result, _ = self.run_order("plant")
